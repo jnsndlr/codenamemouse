@@ -1,7 +1,7 @@
 # Codename: Mouse — Implementation Plan
 
-> The **how**. Tech decisions, architecture, and a milestone path that front-loads
-> the risky questions and defers everything else.
+> The **how**. Tech decisions, architecture, and a milestone path that front-loads the
+> risky questions and defers everything else.
 >
 > Read [`00-intent.md`](00-intent.md) and [`01-gdd.md`](01-gdd.md) first.
 
@@ -12,13 +12,11 @@
 **Every milestone must answer a question we can't answer by thinking.**
 
 The failure mode for a project like this is building infrastructure for a game that
-turns out not to be fun. So the order is: prove the loop with capsules → prove the
-classes → prove multiplayer → prove PvE → *then* build anything that looks like
-production tech.
+turns out not to be fun. Order accordingly: prove movement → prove digging is *legible*
+→ prove the loop → prove digging is *fun* → then everything else.
 
-Corollary: **grey boxes and capsules are correct, not a compromise.** We are not
-"making do until we get art." We are deliberately removing every variable except
-whether the systems are good.
+Corollary: **grey boxes and capsules are correct, not a compromise.** We are not making
+do until art arrives. We are removing every variable except whether the systems are good.
 
 ---
 
@@ -26,45 +24,72 @@ whether the systems are good.
 
 | Decision | Choice | Why |
 |---|---|---|
-| Engine | **Godot 4.x** | Full engine: navmesh, animation state machines, physics, headless server export, and an editor a designer can build maps in. See conversation rationale. |
-| Language | **GDScript** first | Fastest iteration by far. C# or a C++ GDExtension is the escape hatch if simulation gets hot — we will know, and it will be contained. |
-| Camera | `Camera3D`, `projection = ORTHOGONAL` | "Isometric" is a camera setting in 3D, not a feature. ~45° yaw, ~40° pitch. |
-| Target (dev) | **Desktop** | Fast iteration, real UDP, no browser constraints while the game is being designed. |
-| Target (eventual) | **Web export, decided later** | Same Godot project either way. This is an export target, not an architecture. |
-| Netcode (v1) | **Listen server** | One client hosts and is authoritative. Zero infrastructure, real multiplayer. |
-| Netcode (v2) | **Headless dedicated server** | Same codebase, `--headless` export. ~$5/mo VPS when needed. |
-| Transport | **Behind an interface from day one** | The one piece of architecture worth doing early. See below. |
+| Engine | **Godot 4.x** | Full engine: navmesh, physics, animation, headless server export, editor |
+| Language | **GDScript** first | Fastest iteration. C#/GDExtension is the escape hatch if sim gets hot. |
+| Camera | `Camera3D`, `projection = ORTHOGONAL` | ~45° yaw, ~40° pitch. "Isometric" is a camera setting, not a feature. |
+| **Tunnel storage** | **One `GridMap` per plane** | See below — this is the key technical insight |
+| **Tunnel pathing** | **`AStar3D` over dug cells** | Graph traversal, not dynamic navmesh |
+| Surface pathing | `NavigationServer3D` navmesh | Standard, baked once per map |
+| Target (dev) | **Desktop** | Fast iteration, real UDP, no browser constraints during design |
+| Target (later) | **Web export, decided at M9** | Same project either way. An export target, not an architecture. |
+| Netcode (v1) | **Listen server** | One client hosts, authoritative. Zero infrastructure. |
+| Netcode (v2) | **Headless dedicated** | Same codebase, `--headless` export, ~$5/mo VPS when needed |
+| Transport | **Behind an interface from day one** | The one piece of early architecture worth building |
 
-### The transport interface (do this early, it's cheap)
+### The tunnel system is a GridMap problem, not a geometry problem
 
-Browsers can't do raw UDP, so a future web build needs WebSocket or WebRTC while
-desktop uses ENet. Rather than deciding now, wrap it:
+This is the most important technical decision in the project, and it's what makes the
+GDD's dig system tractable:
+
+- Each of the **4 planes is a `GridMap`** — Godot's built-in 3D tile grid.
+- A **MeshLibrary** holds the tunnel chunk pieces (straight, corner, T, ramp, entrance).
+- **Digging = setting a cell.** Godot handles instancing, batching, and culling for free.
+- **Collapse = clearing cells.** No mesh surgery.
+- **Intersection detection is trivial** — check whether the target cell is already set
+  by the other team, which gives you the GDD's "networks join" rule for free.
+- **Pathing is `AStar3D` over set cells**, with ramp cells linking planes. Godot ships
+  `AStar3D`; no custom graph code needed.
+- **Bots traverse the same graph players do**, so there's one source of truth.
+
+No runtime mesh deformation. No dynamic navmesh rebaking. No Red Faction engineering.
+The chunk-based, plane-limited design isn't a compromise — it's what makes a solo
+project able to build this at all.
+
+### Rendering the planes
+
+- Each plane is a `Node3D` at a fixed Y offset, containing its GridMap.
+- The surface uses a material whose **alpha is driven by the local player's depth** —
+  descend, and the surface ghosts out.
+- The **active plane renders solid with an emissive edge material**; other planes dim
+  or hide entirely.
+- Two visibility masks: **your network** (fully mapped) and **enemy segments** (only
+  what's been revealed by sonar or line of sight). This is a per-team visibility set on
+  the client, driven by server state.
+
+### Design decisions that are secretly netcode decisions
+
+Already in the GDD, worth naming so they don't get casually reversed:
+
+- **Projectiles, never hitscan** — tolerates latency; hitscan demands server rewind
+- **No random damage, no crits** — deterministic sim is far easier to reconcile
+- **Displacement over damage** — knockback forgives small desyncs that HP thresholds don't
+- **4v4** — 8 entities is a trivial state payload
+- **Tunnels are discrete cells** — replicating "cell (3,7) on plane 2 is now dug" is a
+  tiny message. Free-form digging would have been a replication nightmare.
+
+### The transport interface (cheap now, valuable later)
+
+Browsers can't do raw UDP. Rather than deciding the web question now, wrap it:
 
 ```
 NetTransport (interface)
   ├── ENetTransport       # desktop, UDP, ships first
-  ├── WebSocketTransport  # web, TCP, adequate for prototype
+  ├── WebSocketTransport  # web, TCP, adequate for a prototype
   └── WebRTCTransport     # web, UDP-ish, only if competitive play demands it
 ```
 
-Game code talks to `NetTransport` and never touches a peer class directly. This costs
-maybe a day now and preserves the browser option indefinitely. **This is the only
-piece of speculative architecture worth building before it's needed.**
-
-### Design decisions that are secretly netcode decisions
-
-Worth naming explicitly, because they're already in the GDD and they're load-bearing:
-
-- **Projectiles, never hitscan** (GDD §6) — projectiles tolerate latency gracefully;
-  hitscan demands lag compensation and server-side rewind.
-- **No random damage, no crits** — deterministic simulation is dramatically easier to
-  reconcile between client and server.
-- **Displacement over damage** — knockback is forgiving of small desyncs in a way that
-  precise HP thresholds are not.
-- **4v4** — 8 entities is a trivially small state payload.
-
-These weren't chosen *for* netcode, but they make the hard part much easier, and we
-should avoid casually reversing them later.
+Game code talks to `NetTransport` and never touches a peer class. Costs a day now,
+preserves the browser option indefinitely.
 
 ---
 
@@ -72,60 +97,67 @@ should avoid casually reversing them later.
 
 ### Server-authoritative from the start
 
-Even in listen-server mode, the host runs the authoritative simulation and clients send
-*inputs*, not positions. This is more work in week one and saves a rewrite later. It
-also means the leap to a dedicated server is a deployment change, not a redesign.
+Even in listen-server mode, the host runs the authoritative sim and clients send
+**inputs**, not positions. More work in week one, saves a rewrite later, and makes the
+move to a dedicated server a deployment change rather than a redesign.
 
 ```
 Client                          Server (authoritative)
   ├── input capture       ──▶     simulation tick (30Hz)
   ├── local prediction              ├── movement + collision
   ├── interpolation       ◀──       ├── combat resolution
-  └── presentation                  ├── objective state
-                                    └── PvE AI
+  ├── per-team visibility           ├── tunnel graph state
+  └── presentation                  ├── objective + cheese
+                                    └── world faction AI
 ```
 
-Prediction and reconciliation are **deferred**. Start with naive
-send-input/receive-state and see how it feels on LAN. Add prediction when it actually
-hurts, not before.
+Prediction and reconciliation are **deferred**. Start naive, add prediction when it
+actually hurts.
+
+**Tunnel visibility must be server-filtered.** If the client receives the full tunnel
+graph and just doesn't draw the enemy's, that's trivially cheatable — and the entire
+hidden-information pillar dies. The server sends each client only what their team has
+revealed. Build it this way from the start; retrofitting it is painful.
 
 ### Data-driven from the start
 
-Classes, abilities, and PvE behaviors live in **resource files, not code**. Godot's
-custom `Resource` types are ideal — they're editable in the inspector and hot-reloadable.
+Classes, abilities, world creatures, and tunnel chunk types live in **Godot `Resource`
+files, not code** — inspector-editable and hot-reloadable.
 
 ```
 ClassDefinition (Resource)
-  health, speed, carry_capacity
+  health, speed, tunnel_speed_mult, carry_capacity
+  can_enter_tunnels: bool
   abilities: Array[AbilityDefinition]
-  unique_capability: enum
 
 AbilityDefinition (Resource)
-  cooldown, cast_time, range, damage, knockback, effect
+  cooldown, cast_time, range, damage, knockback, cheese_cost, effect
 ```
 
-Rationale: you have fifteen years of ideas and you'll want to try them fast. Tuning
-should be an inspector edit, not a code change and recompile.
+You have fifteen years of ideas and will want to try them fast. Tuning should be an
+inspector edit, not a recompile.
 
 ### Project structure
 
 ```
 codenamemouse/
-├── docs/                   # these documents
+├── docs/
 ├── scenes/
-│   ├── game/               # match, spawn, objective managers
-│   ├── entities/           # mouse, flag, cheese, PvE creatures
-│   ├── maps/               # backyard.tscn + greybox
-│   └── ui/                 # HUD, minimap, feed
+│   ├── game/               # match, spawn, objective, economy managers
+│   ├── entities/           # mouse, flag, cheese, world creatures
+│   ├── tunnels/            # GridMaps, chunk MeshLibrary, dig controller
+│   ├── maps/               # backyard_bbq.tscn + greybox
+│   └── ui/                 # HUD, minimap, depth indicator
 ├── scripts/
 │   ├── net/                # NetTransport + implementations
 │   ├── sim/                # authoritative simulation
+│   ├── tunnels/            # graph, pathing, visibility, collapse
 │   ├── classes/            # class + ability logic
-│   └── ai/                 # bots and Backyard faction
+│   └── ai/                 # bots and world faction
 ├── resources/
-│   ├── classes/            # ClassDefinition .tres files
-│   ├── abilities/          # AbilityDefinition .tres files
-│   └── pve/                # Backyard faction definitions
+│   ├── classes/            # ClassDefinition .tres
+│   ├── abilities/          # AbilityDefinition .tres
+│   └── world/              # PvE creature definitions
 └── assets/                 # placeholder now, real later
 ```
 
@@ -133,7 +165,7 @@ codenamemouse/
 
 ## Milestones
 
-Each has an explicit **question**, a **done-when**, and a hard scope boundary.
+Each has a **question**, a **done-when**, and a hard scope boundary.
 
 ### M0 — Spike (½ day)
 
@@ -141,10 +173,9 @@ Each has an explicit **question**, a **done-when**, and a hard scope boundary.
 
 - Godot 4 installed, project created, git initialized
 - A cube on a plane under an orthographic iso camera
-- **Web export smoke test** — deploy the cube to Cloudflare Pages, confirm it loads
+- **Web export smoke test** — deploy to Cloudflare Pages, confirm it loads
 
-**Done when:** you've seen your cube in a browser tab. Then forget about web entirely
-until M5.
+**Done when:** you've seen your cube in a browser tab. Then ignore web until M9.
 
 ---
 
@@ -152,58 +183,102 @@ until M5.
 
 **Question:** does isometric movement feel good?
 
-- Capsule with a `CharacterBody3D`, WASD movement, cursor aim (GDD §7 Option A)
-- Camera follows with slight lookahead
-- Grey-box arena: a flat plane, some boxes, a ramp
-- Spend one hour trying click-to-move, then commit to one
+- `CharacterBody3D` capsule, WASD movement, cursor aim
+- Camera follow with slight lookahead
+- Grey-box arena: flat plane, boxes, a ramp
 
-**Done when:** moving the capsule around is *pleasant*. This is a real bar. If
+**Done when:** moving the capsule around is *pleasant*. This is a real bar — if
 movement is unsatisfying, nothing built on it will be fun.
 
-**Not in scope:** combat, classes, networking, animation.
+**Not in scope:** combat, classes, digging, networking.
 
 ---
 
-### M2 — The core loop (1 week) ← **the most important milestone**
+### M2 — Dig spike (3–5 evenings) ← **first real risk**
+
+**Question:** can a player see and understand a tunnel from a top-down view?
+
+Deliberately **no game around it** — this is a legibility experiment, not a feature.
+
+- 4 planes as GridMaps, one chunk MeshLibrary (straight, corner, ramp, entrance)
+- Dig a segment, pivot off the end, build a ramp, descend a plane
+- Surface ghosting, emissive tunnel edges, depth indicator
+- Move a capsule through the result
+
+**Done when:** you can dig a three-plane network, look at it, and **immediately
+understand its shape.** If you can't, iterate here until you can — or discover that the
+depth count needs to drop from 3 to 2.
+
+**This milestone can save you a year.** The GDD's signature system lives or dies on
+this question, and it's answerable in under a week.
+
+---
+
+### M3 — The core loop (1 week)
 
 **Question:** is the flag run tense?
 
+Surface only — tunnels are switched off for this milestone.
+
 - Two nests, two banners, pickup / carry / drop / capture / return
-- Basic melee, health, scruffed state, 6s respawn
-- Score, match timer, win condition
-- **Two bots** that will chase you and take your flag — dumb bots, navmesh + state machine
+- Melee combat, health, scruffed state, respawn
+- Score, timer, win condition
+- **Two bots** using navmesh + a simple state machine
 
-**Done when:** you can play a full match against bots, alone, and it produces a
-moment you want to describe to someone.
+**Done when:** you can play a full match against bots and it produces a moment worth
+describing to someone.
 
-**This is the milestone that decides whether the project continues.** Everything
-before it is setup; everything after it is elaboration. Be honest here.
-
-**Not in scope:** cheese, real classes, multiplayer, PvE faction, art.
+**Not in scope:** cheese, tunnels, real classes, multiplayer, art.
 
 ---
 
-### M3 — Two classes (1 week)
+### M4 — Digging in the game (1–2 weeks)
 
-**Question:** do capability gates create real role identity?
+**Question:** is digging *fun*, not just legible?
 
-- Scurry and Bruiser from GDD §4, built on the `ClassDefinition` resource system
-- Implement the **unique capabilities**, not just the stats: mouse holes that only
-  Scurry fits through; Bruiser body-blocking and Slam knocking the flag loose
-- Class select before match
+- Engineer class: dig, ramp, barricade
+- Tunnels integrated with the flag map
+- **Bots path through tunnels** via `AStar3D` over dug cells
+- Dig controls pass (GDD §9 open question)
+- Bedrock zones
 
-**Done when:** playing Scurry and playing Bruiser make you want *different things from
-the same map.* If they're just fast-squishy and slow-tanky, the capability gates
-aren't strong enough — fix that before adding a third class.
+**Done when:** you'd rather take the tunnel than the surface route — and the choice
+feels like a real decision rather than an obvious one.
 
 ---
 
-### M4 — Real multiplayer (1–2 weeks)
+### M5 — Hidden information (1 week)
+
+**Question:** does the vision asymmetry create the tension we're betting on?
+
+- Server-filtered per-team tunnel visibility
+- Own-tunnel wide awareness vs. enemy-tunnel line-of-sight + fog
+- Scout class with sonar
+- Minimap layer rendering
+
+**Done when:** crawling into an enemy tunnel is *frightening*.
+
+---
+
+### M6 — Cheese is lives (1 week)
+
+**Question:** does the economy create real decisions?
+
+- Caches, carrying, team stores, respawn cost
+- Zero-cheese slow-respawn state
+- Sprint drain
+- **Watch specifically for the bankruptcy play** (GDD §2) — does anyone ever choose to
+  concede a capture to go refill? If nobody does, the economy isn't tuned right.
+
+**Done when:** you've agonized over a cheese decision at least once.
+
+---
+
+### M7 — Real multiplayer (1–2 weeks)
 
 **Question:** does it survive contact with a second human?
 
-- `NetTransport` interface + `ENetTransport`
-- Listen server, server-authoritative movement and combat
+- `NetTransport` + `ENetTransport`, listen server, server-authoritative
 - Client interpolation; prediction only if it feels bad without
 - Bots fill empty slots
 
@@ -212,46 +287,42 @@ Not perfect — playable.
 
 ---
 
-### M5 — Cheese and the Backyard (2 weeks)
+### M8 — Bruiser and the world (2 weeks)
 
-**Question:** do the two big design bets pay off?
+**Question:** do the counterplay web and the PvE faction pay off?
 
-Two experiments, added **separately** so you can tell which one did what:
+Two experiments, added **separately** so you can tell which did what:
 
-**5a — Cheese economy.** Caches, carrying, stores, and *one* spend (respawn skip).
-Play five matches. Did decisions get richer or just noisier? **Be genuinely willing to
-cut this.**
+**8a — Bruiser:** collapse (planes 1–2), corking, Slam. Completes the counterplay web.
+Does the Engineer actually start digging deeper in response? That behavioral change is
+the proof the web works.
 
-**5b — The Backyard faction.** The cat only, on a fixed schedule. Play five matches.
-Did the match get better when it showed up?
+**8b — The world:** the Cat first, on a fixed schedule. Then the Crow. Does the match
+get better when they show up — as threat *and* as respite?
 
-**Done when:** you have an honest verdict on each. "We cut cheese" is a completely
-successful outcome for this milestone.
+**Done when:** you have an honest verdict on each.
 
 ---
 
-### M6 — Decide what this is (open)
+### M9 — Decide what this is (open)
 
-With M2–M5 answered, the real decisions become answerable:
-
-- Web export or desktop? (Now an informed choice, not a guess.)
-- Dedicated server? (Only if humans are actually playing together.)
-- More classes, more maps, or better feel on what exists?
-- Art direction and the first non-capsule mouse.
+With M2–M8 answered, the real decisions become answerable: web or desktop, dedicated
+server or not, Generalist and Juggernaut, more maps or better feel, and the first
+non-capsule mouse.
 
 ---
 
 ## What we deliberately don't build yet
 
-Named explicitly so they don't sneak in:
-
-- Matchmaking, lobbies, party system — friends use a direct connect code
+- Matchmaking, lobbies, parties — friends use a direct connect code
 - Accounts, persistence, stats, leaderboards
-- Anti-cheat — server authority is enough at this scale
-- Multiple maps — one map, iterated on, beats three mediocre ones
+- Anti-cheat beyond server authority and visibility filtering
+- Multiple maps — one map, iterated, beats three mediocre ones
+- Procedural map variation (GDD §8) — fixed layout until the systems are proven
+- Free-form digging — chunks only
+- The Juggernaut and Generalist — M9 at the earliest
 - Audio beyond crude placeholders
 - Animation blending — capsules don't animate
-- Anything in GDD §9 (progression)
 - Client prediction — until it demonstrably hurts
 
 ---
@@ -260,16 +331,15 @@ Named explicitly so they don't sneak in:
 
 | Phase | Infrastructure | Cost |
 |---|---|---|
-| M0–M3 | None — local only | **$0** |
-| M4 | Listen server; friends direct-connect | **$0** |
-| M5 | Same | **$0** |
-| Post-M6, if there are players | 1× Hetzner CX22 (2 vCPU / 4GB / 20TB) | **~€4.50/mo** |
+| M0–M6 | Local only | **$0** |
+| M7–M8 | Listen server, direct connect | **$0** |
+| Post-M9, if there are players | 1× Hetzner CX22 (2 vCPU / 4GB / 20TB) | **~€4.50/mo** |
 | Web build hosting | Cloudflare Pages free tier | **$0** |
 | Domain | | **~$12/yr** |
 
-At 1000 monthly players (10–30 peak concurrent, 1–3 concurrent matches), one small VPS
-is comfortably sufficient. **Do not host game traffic on AWS/GCP** — egress at
-~$0.09/GB would cost more than the entire server.
+At 1000 monthly players (10–30 peak concurrent), one small VPS is comfortably enough.
+**Do not host game traffic on AWS/GCP** — egress at ~$0.09/GB would cost more than the
+entire server.
 
 ---
 
@@ -277,19 +347,21 @@ is comfortably sufficient. **Do not host game traffic on AWS/GCP** — egress at
 
 | Risk | Mitigation |
 |---|---|
-| M2 isn't fun | That's the point of M2. Cheap to learn, and the answer is worth more than the code. |
+| **Tunnels don't read on screen** | M2 answers this in under a week, before anything depends on it |
+| **Digging is legible but boring** | M4 is the second gate. Be willing to hear "no." |
+| Tunnel visibility is cheatable | Server-filtered from the start (§Architecture) — not retrofittable |
+| Bot pathing through tunnels | `AStar3D` over the same graph players use; one source of truth |
+| M3 isn't fun | That's what M3 is for. The answer is worth more than the code. |
 | Netcode rabbit hole | Listen server, no prediction until it hurts, transport behind an interface |
-| Scope creep via classes | Hard cap at two until M3's question is honestly answered |
-| Cheese dilutes the CTF | Added separately in M5a specifically so it can be cut cleanly |
-| Art paralysis | Capsules through M5. No art decisions until the systems are proven. |
-| Motivation over a long solo project | Milestones are 1–2 weeks and each ends in something playable |
+| Scope creep via classes | Two classes through M5. Bruiser at M8. Generalist and Juggernaut at M9. |
+| Art paralysis | Capsules through M8. No art decisions until systems are proven. |
+| Motivation over a long solo project | Every milestone is 1–2 weeks and ends in something playable |
 
 ---
 
 ## Immediate next step
 
-**M0, then M1.** Get a capsule moving around an isometric grey-box backyard and see
-whether it feels good.
+**M0, then M1.** A capsule moving around an isometric grey-box backyard.
 
-Fifteen years of thinking has produced a design worth building. The fastest way to
-learn whether it's *right* is to move a capsule around a box.
+Then **M2** — the dig spike — because that's the question that decides what this game
+actually is, and it's answerable in five evenings.

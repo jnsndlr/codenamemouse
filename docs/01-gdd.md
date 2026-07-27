@@ -1,7 +1,7 @@
 # Codename: Mouse — Game Design Document
 
-> The **what**. Systems, rules, numbers. Numbers marked `[ASSUMED]` are starting
-> values chosen to be tuned, not defended. `[DECIDE]` marks a real open question.
+> The **what**. Systems, rules, numbers. Values marked `[ASSUMED]` are starting points
+> chosen to be tuned, not defended. `[DECIDE]` marks a real open question.
 >
 > Read [`00-intent.md`](00-intent.md) first — it settles arguments this doc starts.
 
@@ -11,283 +11,458 @@
 
 | | |
 |---|---|
-| Format | 4v4 `[ASSUMED]` — smallest count that supports role variety, fills at low population |
+| Players | **One player = one mouse.** 4v4 `[ASSUMED]` |
 | Match length | 8 minutes, or first to 3 captures `[ASSUMED]` |
-| Camera | Fixed orthographic isometric, ~45° yaw / ~40° pitch, slight follow with lookahead |
-| Control | Mouse-aimed. `[DECIDE]` WASD movement + cursor aim, or click-to-move. See §7. |
+| Camera | Fixed orthographic isometric, ~45° yaw / ~40° pitch, follow with lookahead |
+| Control | WASD movement, cursor aim, hotkey abilities |
+| Combat | Martial — claws, tails, thrown acorns, slings. **No guns.** |
 | Win condition | Most flag captures at time, or first to cap limit |
-| Death | **Scruffed** — 6s respawn at nest, drops everything carried |
+| Death | **Scruffed** — knocked flat, costs the team 1 cheese, respawn at nest |
+| World | 4 horizontal planes: surface + 3 dig depths |
+| Solo play | Identical match, AI in every other seat |
 
 ---
 
-## 2. The two objective layers
+## 2. The two layers
 
-This is the central design bet of the game, so it goes first.
+### Layer 1 — The Flag (how you win)
 
-### Layer 1 — The Flag (win condition)
+Deliberately unmodified playground CTF (Pillar 1):
 
-Classic CTF, deliberately unmodified:
+- Each nest has a **team banner**. Steal theirs, carry it home, score.
+- Your own banner must be **at home** to score `[ASSUMED]`.
+- A dropped banner sits for **20s**, then auto-returns. Touching your own returns it instantly.
+- **Carriers are always visible** to everyone on the minimap. No hiding with the flag.
+- **Carrying slows you** — except the Generalist (§4). The single most important rule
+  in the game; see the Generalist entry for why.
 
-- Each nest has a **team banner**. Steal the enemy's, carry it to your nest, score.
-- Your own banner must be **at home** to score `[ASSUMED]` — the standard rule that
-  creates the defend/attack tension.
-- A dropped banner sits on the ground for **20s**, then auto-returns `[ASSUMED]`.
-- Touching your own dropped banner returns it instantly.
-- **Flag carriers are visible to everyone**, always, on the minimap. No hiding.
-- Flag carriers **cannot use their class's mobility ability** `[ASSUMED]` — the
-  carrier is a slow, loud problem that the team has to solve *for* them.
+> `[DECIDE]` **Can the flag go into tunnels?** Allowing it makes tunnels the dominant
+> escape route and makes surface defense feel pointless. Recommend **no** — the flag
+> cannot enter a tunnel, forcing carriers onto the surface where they can be contested.
+> Tunnels move *mice*, not objectives.
 
-### Layer 2 — Cheese (economy)
+### Layer 2 — Cheese (how you survive)
 
-Cheese is the resource layer that makes the map worth fighting over between flag runs.
+**Cheese is the team's respawn supply.** Not a second score — the team's health bar.
 
-- Cheese wedges spawn at fixed **cache points** around the map and respawn on a timer.
-- The best caches are **guarded by the Backyard faction** (§5) — ants, a rat, a wasp
-  nest. High-value cheese always costs a PvE fight.
-- Mice carry cheese back to their nest, adding to **Cheese Stores** (the HUD counter).
-- Cheese is dropped on being scruffed, and can be picked up by anyone.
-- **Enemy stores are raidable** — you can steal from their nest stockpile.
+- Every respawn costs **1 cheese** from the team pool `[ASSUMED]`.
+- At **zero cheese, respawns take 20s instead of 6s** `[ASSUMED]`. Not a death sentence,
+  but a team at zero gets overrun fast.
+- Cheese is gathered from **caches** on the map, carried home one wedge at a time.
+- Scruffed mice **drop carried cheese** where they fall.
+- **The world takes cheese too** — crows raid your stores, ants haul caches away (§7).
+- Enemy stores are **raidable**.
 
-### How the layers interact (the important part)
+> **The bankruptcy play (intended, not incidental).** Because zero cheese is survivable,
+> a team that's ahead on captures can deliberately **trade score for economy** — concede
+> a capture, pull everyone off defense, and go raid cheese to refill the pool. This is a
+> real strategic option and one of the best things about cheese-as-lives. Don't tune it away.
 
-Cheese must **enable flag play**, not compete with it for attention. Cheese Stores are
-spent by the *team*, not hoarded for a score:
+### Spending cheese
+
+Every spend is paid in future deaths. That's the whole tension.
 
 | Spend | Cost `[ASSUMED]` | Effect |
 |---|---|---|
-| **Respawn skip** | 3 | A scruffed teammate returns instantly |
-| **Field upgrade** | 5 | One class ability upgraded for the rest of the match |
-| **Fortify nest** | 4 | Deploy a barricade / trap at your nest |
-| **Bait the cat** | 6 | Drop scent that pulls the cat toward a location you pick |
+| **Respawn** | 1 | Baseline. Automatic, not a choice. |
+| **Sprint** | ~1 per 4s while held | Personal speed boost, toggled on |
+| **Hire a Rat** | 5 | Respawn as the Juggernaut for one life (§4) |
+| **Barricade** | 2 | Engineer deploys a defensive barrier |
 
-> `[DECIDE]` **Who spends the cheese?** Options: (a) any player spends from a shared
-> pool, (b) a designated role, (c) automatic thresholds. (a) is simplest and most
-> readable; (c) removes a decision layer but avoids griefing. I'd start with (a).
+**Sprint is the interesting one.** A tap you leave open, not a purchase. It drains the
+*team's* pool, and everyone sees the number dropping. The teammate burning your respawns
+to get somewhere fast had better be right about it.
 
-> `[DECIDE]` **Does cheese contribute to winning directly?** Current design says **no**
-> — cheese is purely an enabler, flags decide the match. The alternative (cheese as a
-> secondary score) risks two games fighting each other. Recommend keeping it at no
-> until the prototype proves the loop.
-
-**Prototype note:** this entire layer is *deliberately cut* from Milestone 1. We prove
-the flag loop first, then add cheese and check whether the game got better or just busier.
+> `[DECIDE]` **Second currency?** Recommend **no**. Cheese-as-lives works *because*
+> everything trades against one pool — a second currency lets you buy power without
+> paying in survival. Revisit only if the tension flattens in play.
 
 ---
 
-## 3. Map anatomy
+## 3. Digging — the signature system
 
-Every map is a real human place at mouse scale. The first map is **The Backyard**,
-matching the concept art.
+The centerpiece. Designed first, prototyped early.
 
-### Required elements per map
+The model is **layered Dig Dug**, not Red Faction. Discrete tunnel segments chained
+across a few flat depth planes — expressive to play with, and a *graph* rather than a
+deformable mesh, which keeps it buildable.
 
-- **Two nests** — team-colored, contains the banner spawn and the Cheese Stores stockpile
-- **A contested middle** — open ground, dangerous, the default fight
-- **At least two flanking routes** — a drainpipe, a gap under the fence, a gutter
-- **Mouse holes** — one-way or size-gated shortcuts only small classes fit through (§4)
-- **Verticality** — the top of the cardboard box, the woodpile, the flowerpot rim.
-  Iso 3D earns its keep here; ramps and levels create real positional play.
-- **2–3 hazard zones** — sprinkler, patio (cat patrol), open lawn (bird strike)
-- **3–5 cheese caches** — at least one guarded by the Backyard faction
+### The planes
 
-### The Backyard (map 1) — from concept art
+| Plane | Dig time | Collapsible from surface? |
+|---|---|---|
+| **0 — Surface** | — | — |
+| **1 — Shallow** | Fast | Yes |
+| **2 — Mid** | Slower | Yes, harder `[DECIDE]` |
+| **3 — Deep** | Slowest | **No — immune** |
 
-| Feature | Role |
+This is the core risk curve: **shallow tunnels are fast and fragile, deep tunnels are
+slow investments that become permanent infrastructure.** An Engineer choosing depth is
+choosing between tempo and durability.
+
+### Digging mechanics
+
+- Tunnels are built from **discrete chunks**. Each new segment **pivots off the end of
+  the previous one** — pick a direction, dig, repeat. Snake-like, not free-form carving.
+- Digging is **interruptible** and leaves the Engineer stationary and vulnerable.
+- **Ramps** connect adjacent planes. An Engineer builds a ramp to descend or ascend.
+  Ramps are the only vertical transit — you can't dig straight down.
+- **Entrances** are on the surface and are visually subtle to the enemy.
+- **Intersecting tunnels connect.** If your segment runs into an enemy tunnel, the
+  networks join. That's a designed feature — accidentally breaking into their highway
+  is a great moment, and it means deep enemy networks can be invaded rather than only
+  detected. `[DECIDE]` Should the Engineer be able to *choose* to breach, or only
+  discover it by accident?
+
+### Vision — the hidden information layer
+
+The asymmetry here is the best thing in the system:
+
+| Situation | What you see |
 |---|---|
-| Blue nest (doghouse, NW) / Red nest (SE) | Bases, banner spawns, stockpiles |
-| Cardboard box (center) | Central high ground, climbable, sightline control |
-| Metal drainpipe (N) & log tunnel (W) | Covered flank routes, no ranged fire inside |
-| Tree stump (SW) | Mid-height platform, mid-lane cover |
-| Brick piles | Low cover, breaks sightlines |
-| Trash can + flowerpot (E) | Vertical cluster, high cheese cache, hard to hold |
-| Garden hose (E) | Wall / ramp, soft-blocks the east lane |
-| Open dirt paths | Fast movement, fully exposed — the risk/reward lanes |
-| Fence line | Map boundary, with **one gap** as a deep flank |
+| **In your own tunnel** | Wall outlines extend **far ahead** — you know your network intimately |
+| **In an enemy tunnel** | **Direct line of sight only**, fog of war beyond. You are crawling blind. |
+| **On the surface** | Nothing underground, unless revealed |
+| **Scout sonar active** | A pulse reveals tunnel geometry in a radius **through earth**, shared with the team |
+
+Raiding an enemy network should feel genuinely frightening — you don't know what's
+around the corner and they do.
+
+### Movement — size matters
+
+Speed underground scales **inversely with class size**:
+
+| Class | Tunnel speed | Effect |
+|---|---|---|
+| Scout | Fastest | Tunnels are their highway |
+| Generalist | Fast | Comfortable |
+| Engineer | Normal | Lives down here |
+| Bruiser | **Very slow** | Barely moves — but **plugs the tunnel completely** |
+| Juggernaut | **Cannot enter** | Too big. A hard, thematic constraint. |
+
+A Bruiser in a tunnel is a **cork**. Nobody gets past. Real defense at a real cost:
+slow, out of position, and blind to the surface.
+
+### Collapse — the counter
+
+- A **Bruiser collapses a tunnel from the surface** by slamming the ground above a
+  known segment.
+- Mice caught inside are **scruffed** by the cave-in.
+- The segment is destroyed and must be re-dug.
+- **Only works on planes 1–2.** Deep tunnels are immune (see table above).
+- **Requires knowing where the tunnel is** — which is why Scout sonar feeds directly
+  into Bruiser collapse. Two classes, one combo.
+
+### Rendering and legibility `[RISK]`
+
+The biggest open UX question in the project.
+
+- When underground, the **surface ghosts to high transparency**; your current plane
+  renders solid with **brightly highlighted tunnel edges**.
+- Other planes render dim or hidden — one plane in focus at a time.
+- A **depth indicator** on the HUD: am I at 1, 2, or 3?
+- Surface players see **dust puffs and rumbling** above active digging — a subtle,
+  learnable tell that rewards attention without giving the route away.
+- The minimap shows **your full network plus any revealed enemy segments**, by depth.
+
+**Solve this in grey-box, early.** If players can't read what's happening below, the
+signature system fails — and that needs discovering in week three, not month eight.
+
+### Why this is buildable
+
+Worth stating plainly, because it drives the implementation plan:
+
+- Segments are **discrete instanced chunks on a graph** — no runtime mesh deformation
+- Bot pathing is **graph traversal**, not dynamic navmesh rebuilding
+- Each plane is a **flat layer**, so no true 3D volumetric problem
+- Collapse is **removing a node**, not carving geometry
 
 ---
 
 ## 4. Classes
 
-Design rule from Pillar 3: **every class has one capability no other class has.** Not
-a better stat — a thing others literally cannot do.
+Pillar 4: every class has one thing **no other class can do at all.**
 
-> **Prototype ships with Scurry and Bruiser only.** The rest are designed here so the
-> systems are built general enough, but they are not implemented until those two are
-> proven genuinely different.
+**These four are the core set.** Other class ideas exist, but the game is not itself
+without these.
 
-### Scurry — the runner `[PROTOTYPE]`
+### Generalist — the runner
 
 | | |
 |---|---|
-| Fantasy | The fast one who gets in and out |
-| Health | Low (60) `[ASSUMED]` |
-| Speed | Fastest (1.3×) |
-| **Unique capability** | **Fits through mouse holes.** Whole routes exist only for Scurry. |
-| Ability | *Dart* — short burst of speed, no i-frames |
-| Weakness | Loses almost every straight fight; cannot carry cheese while sprinting |
-| Role | Primary flag runner, harasser, cache scout |
+| Fantasy | The reliable one. The one who actually scores. |
+| Stats | Balanced — medium health, medium speed, medium damage |
+| **Unique capability** | **Carries the flag at full speed.** Everyone else is slowed. |
+| Ability | *Second Wind* — brief self-heal, long cooldown |
+| Role | Primary flag runner, on-ramp class |
 
-### Bruiser — the wall `[PROTOTYPE]`
+> **The Generalist problem, and the fix.** "Balanced" classes usually feel bad, because
+> average-at-everything means never-the-right-answer. The fix is to give the Generalist
+> the most important job in a game called capture the flag: **they are the only class
+> that runs the flag well.** Not average — the one who wins matches. That makes the
+> beginner-friendly class genuinely prestigious, which is what casual-first needs.
+
+### Bruiser — the wall
 
 | | |
 |---|---|
 | Fantasy | The big one who says "not through here" |
-| Health | High (160) `[ASSUMED]` |
-| Speed | Slowest (0.8×) |
-| **Unique capability** | **Body-blocks.** Cannot be pushed past; occupies a lane. |
-| Ability | *Slam* — short-range knockback that **makes carriers drop the flag** |
-| Weakness | Cannot chase. Cannot flank. Irrelevant in open ground. |
-| Role | Nest defense, chokepoint hold, carrier escort |
+| Stats | High health, slow, heavy damage |
+| **Unique capability** | **Collapses tunnels** from the surface (planes 1–2) |
+| Ability | *Slam* — short-range knockback; **makes carriers drop the flag** |
+| Underground | Very slow, but **plugs a tunnel completely** |
+| Weakness | Cannot chase, cannot flank, exposed in open ground |
+| Role | Nest defense, chokepoints, tunnel denial, sabotage |
 
-### Tinker — the engineer
-
-| | |
-|---|---|
-| **Unique capability** | **Builds terrain.** Popsicle-stick ramps that create routes that didn't exist. |
-| Ability | *Snap Trap* — a deployable mousetrap; stuns and drops carried items |
-| Role | Map control, nest fortification, opening new lanes mid-match |
-
-### Forager — the support
+### Engineer — the digger
 
 | | |
 |---|---|
-| **Unique capability** | **Carries 3 cheese at once** (everyone else carries 1). |
-| Ability | *Share* — heals and grants a brief speed boost to a nearby ally |
-| Role | Economy engine, carrier escort, sustain |
+| Fantasy | The one who changes the map |
+| Stats | Low damage, medium health, medium speed |
+| **Unique capability** | **Digs tunnels and builds ramps.** Nobody else alters terrain. |
+| Ability | *Barricade* — destructible barrier, 2 cheese |
+| Weakness | Weakest attack in the game. Cannot win a fight, only shape one. |
+| Role | Map control, route creation, fortification |
 
-### Slinger — the ranged threat
+### Scout — the glass cannon
 
 | | |
 |---|---|
-| **Unique capability** | **The only class with real range** (seed slingshot). |
-| Ability | *Pin* — a slow, high-arc shot that briefly roots |
-| Weakness | Very low health, useless in melee, slow projectiles that can be dodged |
-| Role | Zoning, punishing open ground, contesting high cheese caches |
+| Fantasy | The one you don't see until it's too late |
+| Stats | **Lowest health**, fastest, **highest burst damage** |
+| **Unique capability** | **Sonar** — pulses to reveal enemy tunnel geometry through earth, shared with the team |
+| Ability | *Fade* — hard to see while moving slowly; broken by attacking or sprinting |
+| Weakness | Dies to anything that touches them. Loses every fair fight. |
+| Role | Scout, assassin, counter-Engineer, cache raider |
 
-> `[DECIDE]` Five classes is a big balance surface. An alternative is **three classes
-> with two loadout variants each** — same expressive range, much less to tune.
+`[DECIDE]` **Concealment model:** full invisibility (frustrating), a shimmer/distortion
+at distance (readable — recommended), or concealment only while stationary.
+
+### Juggernaut — the hired rat `[SPECIAL]`
+
+Not a class you pick — one you **buy**.
+
+| | |
+|---|---|
+| Cost | **5 cheese** — five respawns |
+| Duration | **One life.** When scruffed, back to your normal class. |
+| Fantasy | You bribed a rat from the alley to fight for your crew |
+| Stats | Very high health, high damage, slow |
+| **Constraint** | **Cannot enter tunnels.** Surface only. |
+| Role | A committed push. A gamble the whole team pays for. |
+
+> **Why a hired rat:** it explains the cost diegetically, ties the economy to the PvE
+> faction (§7 — rats are neutral creatures you bribe), and gives a silhouette that reads
+> instantly as *not a mouse*.
+
+> `[DECIDE]` You mentioned 2–3 special unlockables. Recommend shipping **one** and
+> seeing whether the "spend 5 lives on a big swing" moment lands before designing more.
+
+### Switching class
+
+- **On respawn** — free, always available. Supports composition-as-strategy.
+- **While alive** — return to **your own nest** and use the swap point. Free, but costs
+  **time and position** rather than cheese. Walking home mid-match is the price.
+
+This is a good structure: adaptation is always possible, never resource-gated, but
+always costs tempo.
 
 ---
 
-## 5. The Backyard (PvE faction)
+## 5. The counterplay web
 
-Pillar 2 made concrete. These are **neutral hostiles** — hostile to both teams,
-allied to neither, and *predictable*.
+Every class answers another, and the answers route through the dig system:
 
-The critical constraint: **learnable, never random.** Fixed timers, clear telegraphs,
-consistent behavior. Players should be able to say "the cat comes at 5:30" and be right.
+```
+  Engineer digs a route (shallow = fast, deep = safe)
+        │
+        ▼
+  Scout sonar finds it ──────▶ reveals geometry to their team
+        │                              │
+        │                              ▼
+        │                    Bruiser collapses it (planes 1–2 only)
+        │                              │
+        ▼                              ▼
+  Engineer digs deeper (plane 3)  Mice inside scruffed
+        │
+        ▼
+  Bruiser corks the tunnel ◀──── Scout can't get past
+        │
+        ▼
+  Generalist takes the surface route with the flag
+```
 
-### The Cat — apex pressure
-
-- Enters the map on a **fixed schedule** (e.g. 6:00, 3:00, 0:45) with a loud audio and
-  visual telegraph ~8 seconds before arrival
-- Patrols a set route, one-shot-scruffs any mouse it catches in the open
-- **Ignores mice under cover** (in pipes, under the box, in tall grass)
-- Creates forced truces, route changes, and comedy
-- Can be **manipulated** — the `Bait the cat` cheese spend pulls it toward a location.
-  This turns a hazard into a weapon, which is the most interesting thing about it.
-
-### Birds — area denial
-
-- Periodically shadow-telegraph a circle on **open ground only**
-- Swoop after ~2s; heavy damage in the circle
-- Function: make the fast open lanes genuinely risky, push traffic into flank routes
-
-### Ants / beetles — cache guards
-
-- Static groups guarding high-value cheese caches
-- Weak individually, dangerous in numbers
-- Function: PvE tax on the best economy. A team fighting ants is a team you can jump.
-
-### The Rat — mini-boss
-
-- Holds the single best cache on the map
-- Genuinely hard for one mouse; a real fight for two or three
-- Function: creates a scripted "both teams want this and neither can solo it" moment
-
-### Sprinkler / hose — environmental hazard
-
-- Fixed cycle (e.g. 90s on a visible timer), floods a lane, pushes and slows mice
-- Pure map-state timer; the most learnable hazard in the game
-
-> `[DECIDE]` **How much PvE is too much?** If hazards fire constantly the CTF game
-> can't breathe. Starting rule: **at most one major hazard active at a time**, with
-> quiet windows for clean PvP. Tune aggressively in playtest.
+No hard counters — every answer costs position, cheese, time, or exposure. Note how
+**depth is the Engineer's answer to the Bruiser**, paid for in dig time.
 
 ---
 
 ## 6. Combat
 
-Deliberately simple. Aim is not the mastery axis (Pillar 4, and it keeps netcode sane).
+Simple by design (Pillar 1). Simple combat also keeps netcode sane.
 
+- **Martial only.** Claws, tail-whips, thrown acorns, slings, teeth. No firearms.
+- **Melee is primary** — short cursor-aimed cone, ~0.4s swing, generous hitbox.
+- **Thrown weapons are slow arcing projectiles**, never hitscan. Dodgeable on reaction.
 - **Health**, no armor, no shields. Regenerates after 5s out of combat `[ASSUMED]`.
-- **Scruffed, not killed** — knocked flat, 6s respawn at nest, drops flag and cheese.
-- **Melee is a short cone**, cursor-aimed, ~0.4s swing. Generous hitbox.
-- **Ranged is projectile-based, slow, and dodgeable** — never hitscan. This is a
-  deliberate netcode decision as much as a design one (§ implementation plan).
-- **Knockback and displacement matter more than damage.** Slam, Pin, and the sprinkler
-  all move mice around. Positioning is the skill.
-- **No headshots, no crits, no random damage.** Fully deterministic.
+- **Scruffed, not killed** — drops flag and cheese, costs the team 1 cheese.
+- **Displacement matters more than damage.** Slam, cave-ins, and hazards move mice around.
+- **Fully deterministic.** No crits, no random damage, no headshots.
 
-> `[DECIDE]` Is there any friendly fire or team collision? Team collision would make
-> Bruiser body-blocking apply to allies too, which is interesting but frustrating.
-> Recommend: enemies collide, allies pass through.
+> `[DECIDE]` Team collision? Enemy collision makes Bruiser body-blocking work. Ally
+> collision would apply it to teammates too — interesting but frustrating.
+> Recommend: enemies collide, allies pass through. **Exception:** in tunnels, the
+> Bruiser cork should probably block allies too, or corking is meaningless.
 
 ---
 
-## 7. Controls
+## 7. The world (PvE faction)
 
-> `[DECIDE]` — this is the single biggest feel question and I'd want to prototype both.
+Pillar 5 made concrete. Neutral hostiles: allied to nobody, **predictable always**.
+Fixed timers, loud telegraphs, learnable behavior. Never random.
 
-**Option A — WASD move + cursor aim** (recommended)
-Direct, responsive, standard for iso action games (Hades, Diablo-likes with WASD).
-Movement and aim are independent, which makes kiting and repositioning expressive.
+The world both **gives and takes**.
 
-**Option B — Click to move**
-Classic iso/MOBA. Lower input burden, better for a casual audience, worse for the
-dodge-and-reposition combat described in §6.
+### The Cat — apex threat, forced respite
 
-Given that combat is about displacement and positioning, **A fits the design better**.
-Milestone 1 should implement A and try B for an hour before committing.
+- Arrives on a **fixed schedule** (6:00, 3:00, 0:45), ~8s audio/visual telegraph
+- Patrols a set route; catches any mouse in the open
+- **Ignores mice under cover** — in tunnels, under the box, in tall grass
+- **Function:** hard stop on surface PvP. Both crews go to ground — often *literally*,
+  into the tunnels, which is where the interesting version of this happens.
+
+### The Crow — steals your cheese
+
+- Periodically lands at a nest and hauls cheese away
+- Takes **two mice** to drive off `[ASSUMED]`
+- **Function:** pulls players off the front line, creates a PvP lull, and makes the
+  economy feel alive. It's stealing your *lives*.
+
+### Ants — cache guards
+
+- Static groups guarding the richest caches; weak alone, dangerous in numbers
+- Slowly **haul cheese away** if left alone — caches decay
+- **Function:** the best economy costs a PvE fight, and a team fighting ants is
+  a team you can jump.
+
+### Rats — neutral, and hireable
+
+- Hold the single best cache; a real fight for two or three mice
+- **Bribed with 5 cheese** to fight for you — this is the Juggernaut (§4)
+- **Function:** connects PvE directly to the economy and the class system
+
+### Sprinkler / hazards — the learnable clock
+
+- Fixed cycle on a visible timer, floods a lane, pushes and slows
+- `[DECIDE]` Does water **flood shallow tunnels**? Thematically perfect, mechanically
+  a great reason to dig deep, and it makes plane 1 situationally worthless. Tempting.
+
+> **Density rule:** at most **one major world event active at a time**, with deliberate
+> quiet windows for clean PvP.
 
 ---
 
-## 8. HUD
+## 8. Maps
 
-Directly from the concept art — it's already right.
+**Fixed bones, shuffled details.** Players master the skeleton across matches; variation
+keeps it fresh.
 
-- **Top left** — current objective reminder
+| Fixed every match | Shuffled every match |
+|---|---|
+| Nest positions | Prop placement and cover |
+| Major lanes and chokepoints | Which caches are rich vs. poor |
+| Diggable regions and bedrock | Which cache the rats hold |
+| Hazard locations | Hazard timing offsets |
+| Cache point locations | Minor route blockages |
+
+> **Not everything is diggable.** Bedrock zones (under the patio slab, the concrete
+> path) are permanent constraints that give each map an underground personality and
+> stop tunnels from becoming a featureless free-for-all.
+
+### Planned maps
+
+**Backyard BBQ** (first, matches the concept art) · **The Picnic** · **The Alleyway** ·
+**The Field**
+
+### Backyard BBQ — from concept art
+
+| Feature | Role |
+|---|---|
+| Blue nest (NW) / Red nest (SE) | Bases, banner spawns, cheese stores |
+| Cardboard box (center) | Central high ground, sightline control |
+| Drainpipe (N) & log tunnel (W) | Surface-level covered flanks |
+| Tree stump (SW) | Mid platform, mid-lane cover |
+| Brick piles | Low cover, sightline breaks |
+| Trash can + flowerpot (E) | Vertical cluster, rich cache, hard to hold |
+| Garden hose (E) | Soft wall / ramp |
+| Open dirt paths | Fast, fully exposed — where the cat and crow hunt |
+| Patio slab | **Bedrock** — no digging, forces surface play in the east |
+| Fence line | Boundary, with **one gap** as a deep flank |
+
+---
+
+## 9. Controls
+
+- **WASD** — movement
+- **Mouse cursor** — aim
+- **Left click** — primary attack
+- **Right click / Q, E, F** — abilities
+- **Shift (hold)** — Sprint, draining team cheese (§2)
+- **Tab** — scoreboard / cheese ledger
+- `[DECIDE]` Dig controls — cursor-direction + hold? Discrete segment-by-segment commits?
+  This is the Engineer's entire moment-to-moment experience and deserves its own pass.
+
+---
+
+## 10. HUD
+
+From the concept art, which is already right:
+
+- **Top left** — objective reminder
 - **Top center** — team scores + match timer
-- **Bottom left** — minimap (flag positions, cat position, teammate pings)
-- **Bottom center-left** — event feed (steals, drops, returns) + chat
-- **Bottom center-right** — Cheese Stores, both teams
-- **Bottom right** — flag carrier portraits with health, both teams
+- **Bottom left** — minimap (flags, cat, teammates, **all tunnel planes**)
+- **Bottom center-left** — event feed + chat
+- **Bottom center-right** — **Cheese Stores, both teams** — the second-most important
+  number on screen, because it's lives
+- **Bottom right** — flag carrier portraits with health
 
-The carrier portraits are a genuinely good idea: **the two most important people in the
-match are always on screen with their health visible.** Keep this.
+Additions needed beyond the art:
 
----
-
-## 9. Progression
-
-**In-match only.** No meta-progression, no unlocks, no persistent stats for now.
-
-- Cheese spends (§2) are the entire progression system, and they reset each match.
-- Rationale: a hobby project cannot maintain a live progression economy, and unlocks
-  actively hurt a game whose population is measured in dozens.
-
-> `[DECIDE]` Cosmetics (hat variants for your mouse) are the only meta system worth
-> considering later, and only because they're pure content with no balance surface.
+- **Depth indicator** — surface, 1, 2, or 3
+- **Cheese drain warning** when Sprint is burning the pool
+- **Telegraph banners** for world events ("THE CAT IS COMING")
 
 ---
 
-## 10. Open questions, ranked by leverage
+## 11. Progression
 
-These change the shape of the game. Roughly in the order they need answering:
+**In-match only.** No meta-progression, no unlocks, no persistent stats. Cheese spending
+(§2) is the entire progression system and it resets every match.
 
-1. **Does cheese survive contact with the flag loop?** (§2) — biggest structural risk
-2. **WASD or click-to-move?** (§7) — determines combat feel and everything downstream
-3. **How many classes at ship?** (§4) — balance surface vs. expressive range
-4. **Cheese spending: shared pool, designated role, or automatic?** (§2)
-5. **PvE density** — how often is too often? (§5)
-6. **Is there a solo-vs-bots mode as a first-class citizen?** (Intent: yes, probably)
+> `[DECIDE]` Cosmetic hats are the only meta system worth considering later — pure
+> content, zero balance surface.
+
+---
+
+## 12. Prototype class order
+
+All four are core, but they don't arrive at once. Recommended order:
+
+1. **Engineer + Scout** — proves digging, sonar, and the hidden-information layer.
+   The riskiest and most valuable pair. If this isn't fun, nothing else matters.
+2. **Bruiser** — completes the counterplay web with collapse and corking.
+3. **Generalist** — simplest and best-understood; add once there's a flag game worth running.
+
+---
+
+## 13. Open questions, ranked by leverage
+
+1. **Does digging read on screen?** (§3) The signature system's biggest risk.
+2. **Dig controls** — what does the Engineer actually *do* with their hands? (§9)
+3. **Can the flag enter tunnels?** (§2) Recommend no.
+4. **Does water flood shallow tunnels?** (§7) Tempting, big consequences for plane 1.
+5. **Deliberate breaching** — can an Engineer choose to break into enemy tunnels? (§3)
+6. **Scout concealment model** (§4)
+7. **Is the Generalist's flag-carry gate too strong?** (§4)
+8. **World event density** (§7)
