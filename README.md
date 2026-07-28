@@ -70,9 +70,37 @@ On **Player**:
 
 ```
 docs/           design documents
+art/            Blender source files, imported directly by Godot
 scenes/         player, maps
 scripts/        player, camera, maps, input setup
 ```
+
+## Art pipeline
+
+Godot imports `.blend` files **directly** — edit in Blender, hit save, and Godot
+re-imports. There is no export step and no second copy of the model to drift out of sync.
+
+This requires two settings, already configured on this machine:
+
+- **Editor Settings → FileSystem → Import → Blender → Blender Path**
+  = `/Applications/Blender.app/Contents/MacOS/Blender` (the binary inside the bundle —
+  pointing at the `.app` itself fails, which is why macOS auto-detection doesn't work)
+- **Project Settings → Filesystem → Import → Blender → Enabled**
+
+Consequence: building this project requires Blender installed. Fine for solo work, worth
+remembering if CI ever appears.
+
+### Two gotchas, both already hit
+
+**The whole .blend imports, not just what you'd export.** Cameras, lights, and any
+scaffolding come through as real nodes. `mouse.blend` keeps preview scaffolding in a
+`_preview` collection that's excluded from the view layer, and the import is set to
+visible-only.
+
+**That visible-only setting is per-asset and defaults to "All."** Any *new* `.blend` you
+add will import everything until you select it in the FileSystem dock and set
+**Import → Nodes → Visible** to `Visible Only`, then Reimport. Expect to do this once per
+asset.
 
 Input actions are registered at runtime in [`scripts/input_setup.gd`](scripts/input_setup.gd)
 rather than in `project.godot`, because that file serializes input bindings as one
