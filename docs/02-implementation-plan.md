@@ -55,6 +55,14 @@ No runtime mesh deformation. No dynamic navmesh rebaking. No Red Faction enginee
 The chunk-based, plane-limited design isn't a compromise — it's what makes a solo
 project able to build this at all.
 
+**Organic feel without free-form geometry.** GridMap supports 8-way (45°) connections
+via diagonal tiles in the MeshLibrary. Combined with irregular chunk meshes and per-chunk
+placement jitter, that should read as organic rather than boxy. If it doesn't after M2,
+the escalation is **free-angle segment placement** — instanced meshes on a graph instead
+of a GridMap. Notably, `AStar3D` accepts arbitrary 3D points, so **pathing, networking,
+and visibility code are unchanged by that swap.** Only storage and rendering change,
+which makes this a genuinely reversible decision.
+
 ### Rendering the planes
 
 - Each plane is a `Node3D` at a fixed Y offset, containing its GridMap.
@@ -300,7 +308,16 @@ the proof the web works.
 **8b — The world:** the Cat first, on a fixed schedule. Then the Crow. Does the match
 get better when they show up — as threat *and* as respite?
 
+**8c — Water, binary version:** flooded/not-flooded segments on a timer. Proves whether
+water-as-a-threat is fun *before* building the flow simulation.
+
 **Done when:** you have an honest verdict on each.
+
+> **Flowing water is deliberately not here.** The full system (GDD §7 — sources, spread
+> with noise, current vectors, breath meter, cascade through ramps, ride-the-current-to-a-
+> ramp escapes) is a cellular automaton over the tunnel graph. It's tractable and it's the
+> best set piece in the design, but it is a **post-M9 upgrade**. Build binary flooding
+> first. If binary water isn't fun, flowing water won't rescue it.
 
 ---
 
@@ -318,12 +335,32 @@ non-capsule mouse.
 - Accounts, persistence, stats, leaderboards
 - Anti-cheat beyond server authority and visibility filtering
 - Multiple maps — one map, iterated, beats three mediocre ones
-- Procedural map variation (GDD §8) — fixed layout until the systems are proven
-- Free-form digging — chunks only
+- Procedural map variation (GDD §8) — one hand-built layout until the systems are proven
+- Free-form digging and free-angle placement — snapped chunks only
+- **Flowing water** — binary flooding at M8c, flow simulation post-M9
+- **Tall grass bending** (GDD §8) — a shader problem, not a systems problem. Post-M9.
+- **Scout camouflage shader** — placeholder transparency until then
 - The Juggernaut and Generalist — M9 at the earliest
 - Audio beyond crude placeholders
-- Animation blending — capsules don't animate
 - Client prediction — until it demonstrably hurts
+
+## A note on art
+
+The docs say capsules through M8, and that's still right for **maps and props** — art
+paralysis is a real risk and grey boxes keep you honest.
+
+**One low-poly mouse is the exception, and it's worth making early.** Reasons:
+
+- **It tests a real design question.** Pillar 4 says silhouettes must be readable at
+  isometric distance. A capsule can't tell you whether that's true; a mouse can.
+- **Class differentiation is silhouette + color + one prop**, TF2-style. Making one mouse
+  and then scaling/tinting/hatting it covers all four classes cheaply.
+- **Motivation matters on a fifteen-year project.** Seeing an actual mouse move around
+  your yard is worth more than the hours it costs.
+
+**Timebox it.** One mouse, ~500 tris, no rig at first (a static mesh that slides around is
+fine at M1). Do not model four classes. Do not model props. If it takes more than an
+evening, stop and go back to systems.
 
 ---
 

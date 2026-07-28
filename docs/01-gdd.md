@@ -33,8 +33,24 @@ Deliberately unmodified playground CTF (Pillar 1):
 - Your own banner must be **at home** to score `[ASSUMED]`.
 - A dropped banner sits for **20s**, then auto-returns. Touching your own returns it instantly.
 - **Carriers are always visible** to everyone on the minimap. No hiding with the flag.
-- **Carrying slows you** — except the Generalist (§4). The single most important rule
-  in the game; see the Generalist entry for why.
+- **Carrying slows you**, by an amount that depends on your size. The flag is a fixed
+  size, so it's proportionally more of a burden to a small mouse:
+
+| Class | Flag carry penalty `[ASSUMED]` |
+|---|---|
+| **Generalist** | **-10%** — the designated runner |
+| Engineer | -25% |
+| Bruiser | -30% (already slow; the flag adds less proportionally) |
+| Scout | **-40%** (tiny mouse, big flag) |
+
+> **The handoff play falls out of these numbers.** The Scout is the best class at
+> *stealing* the flag and the worst at *carrying* it — a fleeing Scout is slower than a
+> chasing Generalist. So the natural play becomes: Scout breaks in and grabs it,
+> Generalist meets them and runs it home. That's genuine teamwork emerging from a
+> stat table rather than from a designed "handoff mechanic." Preserve it.
+>
+> Note that even the Generalist loses 10%, so a good pursuit line can always catch a
+> carrier. Nobody outruns the chase for free.
 
 > **The flag cannot enter a tunnel.** `[DECIDED]` Otherwise tunnels become the dominant
 > escape route and surface defense stops mattering. Tunnels move *mice*, not objectives —
@@ -115,8 +131,28 @@ is free, and neither is permanent.
 - **Intersecting tunnels connect.** If your segment runs into an enemy tunnel, the
   networks join. That's a designed feature — accidentally breaking into their highway
   is a great moment, and it means deep enemy networks can be invaded rather than only
-  detected. `[DECIDE]` Should the Engineer be able to *choose* to breach, or only
-  discover it by accident?
+  detected.
+
+### Breaching enemy networks `[DECIDED]`
+
+**Accidental unless you have detection.** You can't deliberately target an enemy tunnel
+you haven't revealed — running into one is a discovery, and a memorable one. Once Scout
+sonar has marked a segment, an Engineer *can* aim for it.
+
+When two networks meet:
+
+- The shared cell becomes a **junction** belonging to both teams.
+- **Vision changes at the junction.** Your own-network wide awareness extends up to the
+  junction and stops there. Past it you're in their network: line of sight and fog only.
+  The junction is the boundary between knowing and not knowing.
+- **You can branch your own tunnel off theirs.** An Engineer standing in an enemy tunnel
+  can dig new segments that belong to *your* team. Networks interleave.
+- **Breaches leave a tell** — rubble and a visible scar at the junction. The defending
+  team discovers the break-in if anyone passes through. Breaching is not silent.
+
+> This makes the underground **contested territory** rather than two private mazes,
+> which is a much better fit for a game about map control. The best tunnel network in
+> the match may end up being a patchwork both teams built pieces of.
 
 ### Obstructions
 
@@ -215,7 +251,7 @@ without these.
 |---|---|
 | Fantasy | The reliable one. The one who actually scores. |
 | Stats | Balanced — medium health, medium speed, medium damage |
-| **Unique capability** | **Carries the flag at full speed.** Everyone else is slowed. |
+| **Unique capability** | **Carries the flag at near-full speed** (-10% vs -25/30/40%) |
 | Ability | *Second Wind* — brief self-heal, long cooldown |
 | Role | Primary flag runner, on-ramp class |
 
@@ -259,8 +295,14 @@ without these.
 | Weakness | Dies to anything that touches them. Loses every fair fight. |
 | Role | Scout, assassin, counter-Engineer, cache raider |
 
-`[DECIDE]` **Concealment model:** full invisibility (frustrating), a shimmer/distortion
-at distance (readable — recommended), or concealment only while stationary.
+**Concealment model `[DECIDED]`: camouflage while stationary.** Octopus-style — a shader
+samples the surrounding terrain and blends the Scout into it. Effectiveness scales with
+cover quality: strongest in shadow and tall grass, weak in open dirt. **Moving breaks it.**
+
+This makes the Scout an *ambush* class rather than a roaming invisible threat: stop,
+blend, wait, burst. It's fair to play against (a stationary enemy is findable, and
+movement always reveals) and it rewards map knowledge — knowing which patches of shadow
+are worth waiting in.
 
 ### Juggernaut — the hired rat `[SPECIAL]`
 
@@ -375,42 +417,100 @@ The world both **gives and takes**.
 - **Bribed with 5 cheese** to fight for you — this is the Juggernaut (§4)
 - **Function:** connects PvE directly to the economy and the class system
 
-### Water — the learnable clock
+### Water — flowing, not binary
 
-Sprinklers, a spilled drink, rain, a kicked-over bucket. Fixed cycle on a visible timer.
+Sprinklers, a spilled drink, rain, a kicked-over bucket. Fixed cycle, visible timer.
 
-- **On the surface:** floods a lane, pushes and slows mice caught in it
-- **Underground:** water drains down through the network and **floods the tunnels
-  beneath**, worst at depth (see §3)
-- Mice caught in a flooding tunnel are **washed out** — swept to the nearest exit,
-  dropping any carried cheese. Not scruffed. Undignified, not fatal.
-- Flooded segments are **impassable until they drain**, and deep segments drain slowest
+Water is **simulated as flow from a source**, not as a flooded/not-flooded flag. This is
+more work than a binary state and it's worth it — it's the difference between a hazard
+and a set piece.
 
-> **Why washed-out and not drowned:** the tone is playground, not grim (Pillar 5), and
-> "flushed out of your own tunnel and deposited on the lawn, cheeseless" is a funnier
-> and more memorable punishment than death. It also gives the enemy a moment to
-> capitalize on rather than just removing a player.
+**How it works:**
 
-This is the most learnable system in the game — a visible timer, a known map, a
-predictable consequence. Veteran players will route around it instinctively.
+- **Source points** are fixed per map (the sprinkler line, a drain, a gap under the door).
+- Water **spreads outward from the source through connected cells**, in a rough circle
+  with noise on the frontier so it reads as natural rather than geometric.
+- Each flooded cell carries a **current vector** pointing away from the source. It pushes
+  mice along it.
+- Water **cascades downward through ramps.** Flooding plane 1 eventually feeds plane 2,
+  then plane 3. Deep tunnels are the sump: last to fill, last to drain.
+
+**What happens to you:**
+
+- You can **swim**, and you can **hold your breath** — a breath meter, not an instant
+  verdict. Getting caught is a problem to solve, not a coin flip.
+- The **current fights you**, pushing you away from the source.
+- **Ride the current to a ramp and you auto-pop up one level.** The map offers you an
+  escape if you swim the right way — which rewards knowing your own network.
+- **Out of air = washed out.** Swept to the nearest exit, dropping carried cheese.
+  Undignified, not fatal (Pillar 5).
+
+**The chaos moment:** when a big source runs long enough to flood two or three planes at
+once, the whole underground becomes a churning mess and everyone is swimming for a ramp.
+That should happen occasionally and it should be the most memorable thirty seconds of
+the match. Tune source duration so it happens rarely rather than never.
+
+> **Implementation note:** this is a cellular automaton over the tunnel graph — a
+> flood-fill with a rate and a per-cell flow vector. It runs on the server and replicates
+> as a set of cell IDs plus water level. Tractable, but it is *not* M2 work. Ship binary
+> flooding first, upgrade to flow later. See the implementation plan.
 
 > **Density rule:** at most **one major world event active at a time**, with deliberate
 > quiet windows for clean PvP.
+
+### Shared events vs. map signatures
+
+Every map runs the **shared set** — cat, crow, ants, rats, water — so the fundamentals
+are learnable everywhere. Each map then adds **one or two signature events of its own**,
+which is where map identity comes from:
+
+| Map | Signature event `[ASSUMED]` |
+|---|---|
+| Backyard BBQ | The grill — heat and falling embers over the east lane |
+| The Picnic | Wasps, and a picnic blanket that gets shaken out |
+| The Alleyway | Rain runoff — the biggest water event in the game |
+| The Field | The lawnmower. A moving, scheduled, map-wide catastrophe. |
 
 ---
 
 ## 8. Maps
 
-**Fixed bones, shuffled details.** Players master the skeleton across matches; variation
-keeps it fresh.
+**Seeded generation with fixed anchors.** Each map is a *recipe*, not a fixed layout.
+A seed generates the match's version of it within authored parameters.
 
-| Fixed every match | Shuffled every match |
+| Fixed every match (the anchors) | Generated per seed |
 |---|---|
-| Nest positions | Prop placement and cover |
-| Major lanes and chokepoints | Which caches are rich vs. poor |
-| Obstruction layout, all planes | Which cache the rats hold |
-| Hazard locations | Hazard timing offsets |
-| Cache point locations | Minor route blockages |
+| The house, patio, fence line | Yard layout, open ground vs. cover |
+| Nest positions | Rocks, logs, trees, grass patches |
+| Water source points | Cache locations and richness |
+| No-surface zones (patio, path) | Rock obstruction layout, **per plane** |
+| Overall lane structure | Which cache the rats hold |
+
+Players learn the **anchors and the vocabulary** — where the patio is, what a rock
+obstruction means, how water moves — and then read the specific arrangement fresh each
+match. Mastery is transferable without any single layout being memorized flat.
+
+> **Cost note:** procedural layout means the navmesh must bake at runtime per seed
+> (Godot supports this) and bots must handle layouts nobody authored. That's real work,
+> which is why the implementation plan defers generation until the systems are proven on
+> a single hand-built layout.
+
+### Tall grass — environmental concealment
+
+Grass patches conceal mice, but **movement bends the blades**, and the bending is
+visible to everyone:
+
+- **Running** through grass leaves an obvious, fast-moving wake
+- **Walking** bends it subtly
+- **Moving slowly** bends nothing at all
+
+This is the best system in the doc for one reason: **it's hidden information that isn't
+a class ability.** Every class gets to make the stealth/speed tradeoff, everyone can read
+the tell, and it costs no cooldowns or resources. The Scout is simply *better* at it
+(camouflage stacks with grass), rather than being the only participant.
+
+> **Implementation:** a vertex shader displacing grass blades from nearby character
+> positions and velocities. Standard technique, cheap, and it looks great in motion.
 
 > **Each map is four floors.** No-surface zones and per-plane rock obstructions (§3)
 > mean the underground has as much designed personality as the surface — and a map isn't
@@ -447,8 +547,24 @@ keeps it fresh.
 - **Right click / Q, E, F** — abilities
 - **Shift (hold)** — Sprint, draining team cheese (§2)
 - **Tab** — scoreboard / cheese ledger
-- `[DECIDE]` Dig controls — cursor-direction + hold? Discrete segment-by-segment commits?
-  This is the Engineer's entire moment-to-moment experience and deserves its own pass.
+### Dig controls `[DECIDED]`
+
+**Continuous drive.** Hold the dig key and steer with WASD; the tunnel extrudes behind
+you as you go. It's Dig Dug, and it should feel good in the hands.
+
+Underneath, cells still **snap to a grid** — continuous input, discrete state. That keeps
+replication trivial (one small message per cell) and rendering cheap.
+
+**The grid must not look like a grid.** Organic feel comes from:
+
+- **8-way snapping minimum** (45° increments), not 4-way
+- **Irregular chunk meshes** — varied cross-sections, rough walls, no repeating box
+- **Placement jitter** — small random rotation and scale per chunk
+
+> `[DECIDE]` If 8-way still reads as rigid after M2, the escalation is **free-angle
+> segment placement** instead of a GridMap. The pathing and network code don't change
+> (`AStar3D` takes arbitrary points, not just grid cells) — only the storage does. So
+> this is a reversible decision, which is why it's safe to start with the cheap version.
 
 ---
 
@@ -495,15 +611,18 @@ All four are core, but they don't arrive at once. Recommended order:
 
 ## 13. Open questions, ranked by leverage
 
-1. **Does digging read on screen?** (§3) The signature system's biggest risk.
-2. **Dig controls** — what does the Engineer actually *do* with their hands? (§9)
-3. **Deliberate breaching** — can an Engineer choose to break into enemy tunnels? (§3)
-4. **Flood/drain timings** — how long is a deep tunnel out of action? Long enough to
-   matter, short enough not to waste the dig investment. (§3, §7)
-5. **Scout concealment model** (§4)
-6. **Is the Generalist's flag-carry gate too strong?** (§4)
-7. **World event density** (§7)
+1. **Does digging read on screen?** (§3) Answered by building, not deciding — see M2.
+2. **Does 8-way snapping feel organic enough?** (§9) If not, escalate to free-angle.
+3. **Water timings** — source duration, spread rate, drain rate, breath length. All
+   playtest values; the system is decided, the numbers are not. (§7)
+4. **World event density** (§7) — pure playtest.
+5. **Is the Generalist's -10% the right gap?** (§2)
+6. **Do class-specific carry penalties make Scout-steals-Generalist-runs *mandatory*
+   rather than *natural*?** Watch for it. (§2)
 
-**Resolved:** flag cannot enter tunnels · water floods tunnels, worst at depth ·
-obstructions are per-plane · class switching free at own nest · zero cheese = 20s respawn ·
-one currency
+**Resolved:** flag cannot enter tunnels · dig via continuous drive on a snapped grid ·
+breaching is accidental unless sonar-marked · networks interleave at junctions · water
+flows from sources with current and breath · Scout camouflages while stationary ·
+tall grass bends to movement · per-class flag carry penalties · obstructions are
+per-plane · maps are seeded from fixed anchors · shared + signature world events ·
+class switching free at own nest · zero cheese = 20s respawn · one currency
