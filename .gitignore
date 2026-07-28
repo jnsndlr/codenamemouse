@@ -1,0 +1,15 @@
+# Godot 4
+.godot/
+/android/
+*.translation
+
+# Exports
+/build/
+/export/
+
+# macOS
+.DS_Store
+
+# Blender
+*.blend1
+*.blend2
