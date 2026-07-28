@@ -34,20 +34,28 @@ Open the project in Godot 4.7+ and press F5, or:
 | Input | Action |
 |---|---|
 | **WASD** | Move (camera-relative — W is always up-screen) |
+| **Shift** | Sprint |
 | **Mouse** | Aim. The snout follows your cursor. |
+
+The camera pulls back as you move faster — tight when still, wider at a run, widest at
+a sprint. It's driven by your *actual* speed rather than by the sprint key, so later on
+carrying the flag or wading through a flooded tunnel will tighten the view automatically
+without a special case.
 
 ### What to fiddle with
 
 Select **CameraRig** in the scene tree and tune these live while the game runs:
 
 - **`pitch_degrees`** (default 40) — true isometric is 35.264, but most games that call
-  themselves isometric are steeper because it reads better. This is the single biggest
-  lever on how the game feels to look at.
-- **`zoom`** (default 9) — orthographic view height in world units
-- **`aim_lead`** (default 0.22) — how far the camera leads toward your cursor
-- **`follow_speed`** (default 8) — how tightly the camera tracks
+  themselves isometric are steeper because it reads better. The single biggest lever on
+  how the game feels to look at.
+- **`zoom_idle` / `zoom_run` / `zoom_sprint`** (7.5 / 9 / 10.75) — the three anchors
+- **`zoom_out_speed` / `zoom_in_speed`** (3.5 / 1.8) — deliberately asymmetric so
+  tapping movement keys doesn't pump the view in and out
+- **`aim_lead`** (0.22) — how far the camera leads toward your cursor
+- **`follow_speed`** (8) — how tightly the camera tracks
 
-On **Player**: `speed`, `acceleration`, `friction`.
+On **Player**: `speed`, `sprint_speed`, `acceleration`, `friction`.
 
 ## Layout
 

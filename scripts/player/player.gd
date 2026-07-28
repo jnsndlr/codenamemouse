@@ -13,6 +13,9 @@ extends CharacterBody3D
 ## the same operation digging and abilities will use later, so it lives here from day one.
 
 @export var speed: float = 4.5
+## Sprint is free right now. Once the economy exists it drains the team's cheese pool
+## while held, and cheese is respawns — see GDD section 2.
+@export var sprint_speed: float = 7.2
 @export var acceleration: float = 40.0
 @export var friction: float = 35.0
 
@@ -28,6 +31,22 @@ func get_aim_point() -> Vector3:
 	return _aim_point
 
 
+func is_sprinting() -> bool:
+	return Input.is_action_pressed("sprint")
+
+
+func get_walk_speed() -> float:
+	return speed
+
+
+func get_sprint_speed() -> float:
+	return sprint_speed
+
+
+func get_horizontal_speed() -> float:
+	return Vector3(velocity.x, 0.0, velocity.z).length()
+
+
 func _physics_process(delta: float) -> void:
 	_update_aim()
 	_apply_movement(delta)
@@ -36,9 +55,10 @@ func _physics_process(delta: float) -> void:
 func _apply_movement(delta: float) -> void:
 	var direction := _input_direction()
 	var horizontal := Vector3(velocity.x, 0.0, velocity.z)
+	var top_speed := sprint_speed if is_sprinting() else speed
 
 	if direction.length_squared() > 0.0:
-		horizontal = horizontal.move_toward(direction * speed, acceleration * delta)
+		horizontal = horizontal.move_toward(direction * top_speed, acceleration * delta)
 	else:
 		horizontal = horizontal.move_toward(Vector3.ZERO, friction * delta)
 
