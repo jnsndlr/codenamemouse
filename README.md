@@ -33,9 +33,13 @@ Open the project in Godot 4.7+ and press F5, or:
 
 | Input | Action |
 |---|---|
-| **WASD** | Move (camera-relative — W is always up-screen) |
+| **WASD** | Move and turn (camera-relative — W is always up-screen) |
 | **Shift** | Sprint |
-| **Mouse** | Aim. The snout follows your cursor. |
+| **Mouse** | Leads the camera. Does *not* aim. |
+
+**Facing follows movement, not the cursor.** Cursor-facing was twitchy at this scale —
+the mouse is small on screen and every flick of the wrist spun it. The turn rate is
+capped, and that cap is a big part of where the sense of weight comes from.
 
 The camera pulls back as you move faster — tight when still, wider at a run, widest at
 a sprint. It's driven by your *actual* speed rather than by the sprint key, so later on
@@ -55,7 +59,12 @@ Select **CameraRig** in the scene tree and tune these live while the game runs:
 - **`aim_lead`** (0.22) — how far the camera leads toward your cursor
 - **`follow_speed`** (8) — how tightly the camera tracks
 
-On **Player**: `speed`, `sprint_speed`, `acceleration`, `friction`.
+On **Player**:
+
+- **`speed` / `sprint_speed`** (3 / 5) — top speeds
+- **`acceleration`** (16) — the main weight dial. Lower is heavier.
+- **`friction`** (24) — kept above acceleration so stopping reads crisper than starting
+- **`rotation_speed`** (9 rad/s) — how fast the mouse turns. Lower feels more committed.
 
 ## Layout
 

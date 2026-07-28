@@ -541,12 +541,25 @@ the tell, and it costs no cooldowns or resources. The Scout is simply *better* a
 
 ## 9. Controls
 
-- **WASD** — movement
-- **Mouse cursor** — aim
-- **Left click** — primary attack
+- **WASD** — movement **and facing**. The mouse turns toward where it's heading, at a
+  capped rate.
+- **Mouse cursor** — **camera lead only.** The view drifts gently toward the cursor so
+  you can peek ahead without moving. It does not aim.
+- **Left click** — primary attack, in the direction you're facing
 - **Right click / Q, E, F** — abilities
 - **Shift (hold)** — Sprint, draining team cheese (§2)
 - **Tab** — scoreboard / cheese ledger
+
+> **Facing is movement-driven, not cursor-driven `[DECIDED]`.** Cursor aiming was tried
+> at M1 and read as twitchy — the mouse is small on screen at isometric distance, and
+> every flick of the wrist spun it. Movement-facing with a capped turn rate is calmer,
+> and the turn rate itself is a big part of how weight is communicated. It also fits
+> Pillar 1: one input does one thing.
+>
+> `[DECIDE]` **Do targeted abilities still use the cursor?** Melee follows facing, that's
+> settled. But thrown acorns, barricade placement, and choosing a dig direction may still
+> want cursor targeting. A hybrid is normal for this genre and probably right — but it
+> needs deciding before the Engineer exists.
 ### Dig controls `[DECIDED]`
 
 **Continuous drive.** Hold the dig key and steer with WASD; the tunnel extrudes behind
