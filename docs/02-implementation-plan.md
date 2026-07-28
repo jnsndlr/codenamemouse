@@ -240,7 +240,7 @@ describing to someone.
 - Tunnels integrated with the flag map
 - **Bots path through tunnels** via `AStar3D` over dug cells
 - Dig controls pass (GDD §9 open question)
-- Bedrock zones
+- No-surface zones and per-plane rock obstructions
 
 **Done when:** you'd rather take the tunnel than the surface route — and the choice
 feels like a real decision rather than an obvious one.

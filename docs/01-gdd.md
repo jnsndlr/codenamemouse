@@ -36,10 +36,9 @@ Deliberately unmodified playground CTF (Pillar 1):
 - **Carrying slows you** — except the Generalist (§4). The single most important rule
   in the game; see the Generalist entry for why.
 
-> `[DECIDE]` **Can the flag go into tunnels?** Allowing it makes tunnels the dominant
-> escape route and makes surface defense feel pointless. Recommend **no** — the flag
-> cannot enter a tunnel, forcing carriers onto the surface where they can be contested.
-> Tunnels move *mice*, not objectives.
+> **The flag cannot enter a tunnel.** `[DECIDED]` Otherwise tunnels become the dominant
+> escape route and surface defense stops mattering. Tunnels move *mice*, not objectives —
+> they get you into position, they don't get you home.
 
 ### Layer 2 — Cheese (how you survive)
 
@@ -89,16 +88,21 @@ deformable mesh, which keeps it buildable.
 
 ### The planes
 
-| Plane | Dig time | Collapsible from surface? |
-|---|---|---|
-| **0 — Surface** | — | — |
-| **1 — Shallow** | Fast | Yes |
-| **2 — Mid** | Slower | Yes, harder `[DECIDE]` |
-| **3 — Deep** | Slowest | **No — immune** |
+| Plane | Dig time | Collapse (Bruiser) | Flooding (water) |
+|---|---|---|---|
+| **0 — Surface** | — | — | Puddles, slows |
+| **1 — Shallow** | Fast | **Vulnerable** | Drains fast |
+| **2 — Mid** | Slower | Harder | Moderate |
+| **3 — Deep** | Slowest | **Immune** | **Floods worst — water pools here** |
 
-This is the core risk curve: **shallow tunnels are fast and fragile, deep tunnels are
-slow investments that become permanent infrastructure.** An Engineer choosing depth is
-choosing between tempo and durability.
+**Every plane has a threat, so no depth is strictly best.** Shallow tunnels are fast to
+build and vulnerable to collapse. Deep tunnels are slow investments, safe from the
+Bruiser — but water runs downhill, and the deep network is the sump. It floods hardest
+and drains slowest.
+
+That inversion is the balance backbone of the whole system: the Engineer's answer to
+the Bruiser (dig deeper) is itself answered by the world (deep floods). Neither answer
+is free, and neither is permanent.
 
 ### Digging mechanics
 
@@ -113,6 +117,25 @@ choosing between tempo and durability.
   is a great moment, and it means deep enemy networks can be invaded rather than only
   detected. `[DECIDE]` Should the Engineer be able to *choose* to breach, or only
   discover it by accident?
+
+### Obstructions
+
+Two distinct kinds, and the distinction matters:
+
+**No-surface zones** — the patio slab, the concrete path, the flagstones. You **can
+tunnel underneath them**, you just **cannot place an entrance or exit** there. A tunnel
+can run beneath the whole patio; it simply can't surface in the middle of it. These
+create long committed crossings where you know exactly where the enemy has to come up.
+
+**Rock obstructions** — solid blocks that stop horizontal digging, scattered across
+depth planes. Critically, **each plane has its own layout**: plane 2 may be blocked
+where plane 1 is open, and vice versa.
+
+> **Why per-plane obstructions are the good idea here.** They turn digging into a real
+> 3D routing problem rather than a flat maze repeated three times. Sometimes the only
+> way past an obstruction is to ramp down, go around on a different plane, and ramp back
+> up — which makes ramps meaningful, gives each plane its own character, and means map
+> knowledge extends *downward*. Learning a map means learning four floors of it.
 
 ### Vision — the hidden information layer
 
@@ -352,11 +375,24 @@ The world both **gives and takes**.
 - **Bribed with 5 cheese** to fight for you — this is the Juggernaut (§4)
 - **Function:** connects PvE directly to the economy and the class system
 
-### Sprinkler / hazards — the learnable clock
+### Water — the learnable clock
 
-- Fixed cycle on a visible timer, floods a lane, pushes and slows
-- `[DECIDE]` Does water **flood shallow tunnels**? Thematically perfect, mechanically
-  a great reason to dig deep, and it makes plane 1 situationally worthless. Tempting.
+Sprinklers, a spilled drink, rain, a kicked-over bucket. Fixed cycle on a visible timer.
+
+- **On the surface:** floods a lane, pushes and slows mice caught in it
+- **Underground:** water drains down through the network and **floods the tunnels
+  beneath**, worst at depth (see §3)
+- Mice caught in a flooding tunnel are **washed out** — swept to the nearest exit,
+  dropping any carried cheese. Not scruffed. Undignified, not fatal.
+- Flooded segments are **impassable until they drain**, and deep segments drain slowest
+
+> **Why washed-out and not drowned:** the tone is playground, not grim (Pillar 5), and
+> "flushed out of your own tunnel and deposited on the lawn, cheeseless" is a funnier
+> and more memorable punishment than death. It also gives the enemy a moment to
+> capitalize on rather than just removing a player.
+
+This is the most learnable system in the game — a visible timer, a known map, a
+predictable consequence. Veteran players will route around it instinctively.
 
 > **Density rule:** at most **one major world event active at a time**, with deliberate
 > quiet windows for clean PvP.
@@ -372,13 +408,13 @@ keeps it fresh.
 |---|---|
 | Nest positions | Prop placement and cover |
 | Major lanes and chokepoints | Which caches are rich vs. poor |
-| Diggable regions and bedrock | Which cache the rats hold |
+| Obstruction layout, all planes | Which cache the rats hold |
 | Hazard locations | Hazard timing offsets |
 | Cache point locations | Minor route blockages |
 
-> **Not everything is diggable.** Bedrock zones (under the patio slab, the concrete
-> path) are permanent constraints that give each map an underground personality and
-> stop tunnels from becoming a featureless free-for-all.
+> **Each map is four floors.** No-surface zones and per-plane rock obstructions (§3)
+> mean the underground has as much designed personality as the surface — and a map isn't
+> learned until all four planes are.
 
 ### Planned maps
 
@@ -397,7 +433,8 @@ keeps it fresh.
 | Trash can + flowerpot (E) | Vertical cluster, rich cache, hard to hold |
 | Garden hose (E) | Soft wall / ramp |
 | Open dirt paths | Fast, fully exposed — where the cat and crow hunt |
-| Patio slab | **Bedrock** — no digging, forces surface play in the east |
+| Patio slab | **No-surface zone** — tunnel under it, but you can't come up until you're clear |
+| Sprinkler line | Floods the east lane on a timer, and everything beneath it |
 | Fence line | Boundary, with **one gap** as a deep flank |
 
 ---
@@ -460,9 +497,13 @@ All four are core, but they don't arrive at once. Recommended order:
 
 1. **Does digging read on screen?** (§3) The signature system's biggest risk.
 2. **Dig controls** — what does the Engineer actually *do* with their hands? (§9)
-3. **Can the flag enter tunnels?** (§2) Recommend no.
-4. **Does water flood shallow tunnels?** (§7) Tempting, big consequences for plane 1.
-5. **Deliberate breaching** — can an Engineer choose to break into enemy tunnels? (§3)
-6. **Scout concealment model** (§4)
-7. **Is the Generalist's flag-carry gate too strong?** (§4)
-8. **World event density** (§7)
+3. **Deliberate breaching** — can an Engineer choose to break into enemy tunnels? (§3)
+4. **Flood/drain timings** — how long is a deep tunnel out of action? Long enough to
+   matter, short enough not to waste the dig investment. (§3, §7)
+5. **Scout concealment model** (§4)
+6. **Is the Generalist's flag-carry gate too strong?** (§4)
+7. **World event density** (§7)
+
+**Resolved:** flag cannot enter tunnels · water floods tunnels, worst at depth ·
+obstructions are per-plane · class switching free at own nest · zero cheese = 20s respawn ·
+one currency
