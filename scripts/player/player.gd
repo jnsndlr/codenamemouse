@@ -25,10 +25,32 @@ extends CharacterBody3D
 ## Radians per second the body can turn. Lower feels heavier and more committed.
 @export var rotation_speed: float = 9.0
 
+@export_group("Appearance")
+## Team colour is applied over whatever the model ships with, rather than baked into the
+## mesh. Crews are blue and red (GDD section 1), so tint has to be a runtime decision —
+## the same mouse asset serves both sides and, later, all four classes.
+@export var team_color: Color = Color(0.30, 0.45, 0.80)
+
 @onready var _visual: Node3D = $Visual
 @onready var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 20.0)
 
 var _aim_point: Vector3 = Vector3.ZERO
+
+
+func _ready() -> void:
+	apply_team_color(team_color)
+
+
+## Flat tint across every mesh in the model. Deliberately crude for now — once classes
+## exist this wants two tones (fur and tunic) so silhouette AND colour both carry class
+## identity at isometric distance.
+func apply_team_color(colour: Color) -> void:
+	team_color = colour
+	var material := StandardMaterial3D.new()
+	material.albedo_color = colour
+	material.roughness = 0.85
+	for node in _visual.find_children("*", "MeshInstance3D", true, false):
+		(node as MeshInstance3D).material_override = material
 
 
 ## Where the cursor currently sits on the ground plane.
