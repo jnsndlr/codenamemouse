@@ -5,6 +5,8 @@ extends SceneTree
 ##
 ##   godot --path . --resolution 1100x760 --script tools/dig_spike_probe.gd
 ##
+## Needs a real renderer -- do NOT add --headless, it will hang on the first force_draw.
+##
 ## Writes PNGs to user:// (on macOS, ~/Library/Application Support/Godot/app_userdata/).
 ## Also asserts the thing that silently broke once already: that every plane's floor
 ## actually exists in the physics world, rather than only in the render.

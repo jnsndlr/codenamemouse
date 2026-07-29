@@ -29,6 +29,10 @@ func _process(_delta: float) -> void:
 		var marker := ">" if index == plane else " "
 		counts.append("%s%d:%d" % [marker, index, _network.cell_count(index)])
 
-	text = "%s\n%s\n\nE hold: dig    R: ramp down" % [
-		NAMES[clampi(plane, 0, NAMES.size() - 1)], " ".join(counts)
+	var hint := (
+		"hold E to burrow in" if plane <= 0
+		else "hold E to dig, steer with the cursor    R: ramp down a plane"
+	)
+	text = "%s\n%s\n\n%s" % [
+		NAMES[clampi(plane, 0, NAMES.size() - 1)], " ".join(counts), hint
 	]
