@@ -1,8 +1,8 @@
-[gd_scene load_steps=10 format=3]
+[gd_scene format=3 uid="uid://c1tt5lyd21xoc"]
 
-[ext_resource type="Script" path="res://scripts/maps/greybox.gd" id="1_greybox"]
+[ext_resource type="Script" uid="uid://jdavq81lnmkg" path="res://scripts/maps/greybox.gd" id="1_greybox"]
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="2_player"]
-[ext_resource type="Script" path="res://scripts/camera/camera_rig.gd" id="3_rig"]
+[ext_resource type="Script" uid="uid://cp7mpyoll0l5k" path="res://scripts/camera/camera_rig.gd" id="3_rig"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_top_color = Color(0.34, 0.57, 0.85, 1)
@@ -22,7 +22,6 @@ tonemap_mode = 2
 
 [sub_resource type="StandardMaterial3D" id="Mat_ground"]
 albedo_color = Color(0.44, 0.42, 0.31, 1)
-roughness = 1.0
 
 [sub_resource type="StandardMaterial3D" id="Mat_prop"]
 albedo_color = Color(0.63, 0.51, 0.36, 1)
@@ -32,66 +31,65 @@ roughness = 0.9
 albedo_color = Color(0.55, 0.58, 0.45, 1)
 roughness = 0.9
 
-[node name="Greybox" type="Node3D"]
+[node name="Greybox" type="Node3D" unique_id=451597982]
 script = ExtResource("1_greybox")
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1729532730]
 environment = SubResource("Env")
 
-[node name="Sun" type="DirectionalLight3D" parent="."]
+[node name="Sun" type="DirectionalLight3D" parent="." unique_id=1559828667]
 light_energy = 1.1
 shadow_enabled = true
 
-[node name="Ground" type="CSGBox3D" parent="."]
+[node name="Ground" type="CSGBox3D" parent="." unique_id=111605692]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.5, 0)
 use_collision = true
 size = Vector3(40, 1, 40)
 material = SubResource("Mat_ground")
 
-[node name="Props" type="Node3D" parent="."]
+[node name="Props" type="Node3D" parent="." unique_id=39102230]
 
-[node name="Crate" type="CSGBox3D" parent="Props"]
+[node name="Crate" type="CSGBox3D" parent="Props" unique_id=872323240]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 0.75, -3)
 use_collision = true
 size = Vector3(3, 1.5, 3)
 material = SubResource("Mat_prop")
 
-[node name="Log" type="CSGBox3D" parent="Props"]
+[node name="Log" type="CSGBox3D" parent="Props" unique_id=1312721750]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.5, 4)
 use_collision = true
 size = Vector3(2, 1, 5)
 material = SubResource("Mat_prop")
 
-[node name="Wall" type="CSGBox3D" parent="Props"]
+[node name="Wall" type="CSGBox3D" parent="Props" unique_id=372341073]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 1.25, 7)
 use_collision = true
 size = Vector3(4, 2.5, 2)
 material = SubResource("Mat_prop")
 
-[node name="Post" type="CSGBox3D" parent="Props"]
+[node name="Post" type="CSGBox3D" parent="Props" unique_id=2124595398]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3, 1.5, -6)
 use_collision = true
 size = Vector3(1.2, 3, 1.2)
 material = SubResource("Mat_prop")
 
-[node name="Ramp" type="CSGBox3D" parent="Props"]
+[node name="Ramp" type="CSGBox3D" parent="Props" unique_id=1534255592]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 9, 0.32, 3)
 use_collision = true
 size = Vector3(3, 0.4, 6)
 material = SubResource("Mat_ramp")
 
-[node name="Player" parent="." instance=ExtResource("2_player")]
+[node name="Player" parent="." unique_id=707050311 instance=ExtResource("2_player")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, 0)
 
-[node name="CameraRig" type="Node3D" parent="."]
+[node name="CameraRig" type="Node3D" parent="." unique_id=259204391]
 script = ExtResource("3_rig")
 target = NodePath("../Player")
 
-[node name="Pitch" type="Node3D" parent="CameraRig"]
+[node name="Pitch" type="Node3D" parent="CameraRig" unique_id=113805632]
 
-[node name="Camera3D" type="Camera3D" parent="CameraRig/Pitch"]
+[node name="Camera3D" type="Camera3D" parent="CameraRig/Pitch" unique_id=1313894131]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 30)
 projection = 1
 size = 9.0
-near = 0.05
 far = 200.0
