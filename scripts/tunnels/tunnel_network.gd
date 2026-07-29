@@ -31,6 +31,13 @@ const SIDES: Array[Vector2i] = [
 	Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)
 ]
 
+@export_group("Bounds")
+## Half-extent of diggable ground, in cells. Walls stop you WALKING off the arena; this is
+## what stops you tunnelling off it. Without both, a tunnel runs out from under the map and
+## you surface into open sky. Keep this inside the perimeter wall so tunnels never emerge
+## underneath it.
+@export var half_extent_cells: int = 37
+
 @export_group("Look")
 @export var floor_color: Color = Color(0.30, 0.26, 0.21)
 @export var wall_color: Color = Color(0.17, 0.14, 0.11)
@@ -130,6 +137,11 @@ func plane_at_height(y: float) -> int:
 	return clampi(roundi(-y / SPACING), 0, PLANE_COUNT - 1)
 
 
+## Whether a cell is inside the diggable arena at all.
+func in_bounds(cell: Vector2i) -> bool:
+	return absi(cell.x) <= half_extent_cells and absi(cell.y) <= half_extent_cells
+
+
 func is_dug(plane: int, cell: Vector2i) -> bool:
 	return plane >= 0 and plane < PLANE_COUNT and _cells[plane].has(cell)
 
@@ -142,6 +154,8 @@ func cell_count(plane: int) -> int:
 ## segment from a no-op without re-querying.
 func dig(plane: int, cell: Vector2i) -> bool:
 	if plane <= 0 or plane >= PLANE_COUNT or _cells[plane].has(cell):
+		return false
+	if not in_bounds(cell):
 		return false
 	_cells[plane][cell] = TunnelChunks.FLOOR
 	_grids[plane].set_cell_item(Vector3i(cell.x, 0, cell.y), TunnelChunks.FLOOR)
@@ -159,6 +173,10 @@ func dig_ramp(plane: int, cell: Vector2i, step: Vector2i) -> bool:
 		return false
 
 	var lower := cell + step
+	# A ramp reaches two cells past its start, so all three have to be inside the arena --
+	# checking only the entry cell lets a ramp land its exit outside the map.
+	if not (in_bounds(cell) and in_bounds(lower) and in_bounds(lower + step)):
+		return false
 	if _cells[plane].has(cell) and _cells[plane][cell] != TunnelChunks.FLOOR:
 		return false
 
