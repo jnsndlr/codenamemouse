@@ -35,12 +35,17 @@ extends Node3D
 @export_range(0.0, 1.0, 0.01) var aim_lead: float = 0.22
 ## Hard cap on that lead, so flinging the cursor across the map doesn't lose the player.
 @export var max_lead: float = 3.0
+## World-space radius around screen centre where the cursor produces NO lead at all. The
+## cursor now steers the mouse (GDD section 9), so it's in constant motion — without a
+## dead zone the view drifts every time you correct your heading.
+@export var lead_dead_zone: float = 1.5
 
 @onready var _pitch: Node3D = $Pitch
 @onready var _camera: Camera3D = $Pitch/Camera3D
 
 var _target: Node3D
 var _zoom: float = zoom_idle
+var _speed_signal: float = 0.0
 
 
 func _ready() -> void:
@@ -66,6 +71,12 @@ func _physics_process(delta: float) -> void:
 	var weight := 1.0 - exp(-follow_speed * delta)
 	global_position = global_position.lerp(_desired_position(), weight)
 
+	# Smooth the speed BEFORE it reaches the zoom curve, not after. Zoom changes the
+	# orthographic size, which changes how many world units a pixel covers, which changes
+	# the cursor lead below — so a jittery speed reading would show up as the whole frame
+	# breathing. One filter here fixes it everywhere downstream.
+	_speed_signal = lerpf(_speed_signal, _current_speed(), 1.0 - exp(-6.0 * delta))
+
 	# Asymmetric smoothing: widen promptly, return lazily.
 	var wanted := _wanted_zoom()
 	var rate := zoom_out_speed if wanted > _zoom else zoom_in_speed
@@ -82,11 +93,17 @@ func _apply_angles() -> void:
 ## key is down. That matters later: carrying the flag, wading through water, or squeezing
 ## through a tunnel all slow you down, and the camera should tighten up for those without
 ## anyone writing a special case.
+func _current_speed() -> float:
+	if not _target.has_method("get_horizontal_speed"):
+		return 0.0
+	return _target.get_horizontal_speed()
+
+
 func _wanted_zoom() -> float:
 	if not _target.has_method("get_horizontal_speed"):
 		return zoom_idle
 
-	var current: float = _target.get_horizontal_speed()
+	var current := _speed_signal
 	var walk: float = _target.get_walk_speed() if _target.has_method("get_walk_speed") else 4.5
 	var top: float = _target.get_sprint_speed() if _target.has_method("get_sprint_speed") else walk
 
@@ -99,11 +116,54 @@ func _wanted_zoom() -> float:
 
 func _desired_position() -> Vector3:
 	var base: Vector3 = _target.global_position
-	if not _target.has_method("get_aim_point"):
-		return base
-
-	var lead: Vector3 = (_target.get_aim_point() - base) * aim_lead
-	lead.y = 0.0
+	var lead := _lead_offset() * aim_lead
 	if lead.length() > max_lead:
 		lead = lead.normalized() * max_lead
 	return base + lead
+
+
+## Where the cursor sits relative to SCREEN CENTRE, in world units on the ground plane.
+##
+## This used to read the player's cursor ground-point and lead toward it, which was a
+## feedback loop: the ground-point is computed from the camera's own transform, so the
+## camera fed its own input. It converged, but slowly and through the follow lerp, so the
+## frame never actually settled — hold the cursor perfectly still and the view still
+## crept. Worse, orthographic size is part of that projection, so merely accelerating
+## slid the camera sideways.
+##
+## Taking the difference between two points unprojected through the SAME camera cancels
+## the camera's position exactly, which makes this a pure function of cursor screen
+## position, camera angles and zoom. No loop, and it settles the instant you stop moving
+## the mouse.
+func _lead_offset() -> Vector3:
+	var viewport := get_viewport()
+	if viewport == null:
+		return Vector3.ZERO
+
+	var stick := Vector2(
+		Input.get_action_strength("look_right") - Input.get_action_strength("look_left"),
+		Input.get_action_strength("look_down") - Input.get_action_strength("look_up")
+	)
+
+	var offset: Vector3
+	if stick.length() > 0.25:
+		# Pad: the stick has no screen position to read, so lead a fixed distance along it.
+		var size := viewport.get_visible_rect().size
+		offset = _ground_point(size * 0.5 + stick * size.y * 0.5) - _ground_point(size * 0.5)
+	else:
+		offset = _ground_point(viewport.get_mouse_position()) \
+			- _ground_point(viewport.get_visible_rect().size * 0.5)
+
+	offset.y = 0.0
+	var distance := offset.length()
+	if distance <= lead_dead_zone:
+		return Vector3.ZERO
+	return offset.normalized() * (distance - lead_dead_zone)
+
+
+func _ground_point(screen: Vector2) -> Vector3:
+	var plane := Plane(Vector3.UP, _target.global_position.y)
+	var hit: Variant = plane.intersects_ray(
+		_camera.project_ray_origin(screen), _camera.project_ray_normal(screen)
+	)
+	return hit if hit != null else Vector3.ZERO

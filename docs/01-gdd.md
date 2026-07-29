@@ -14,7 +14,7 @@
 | Players | **One player = one mouse.** 4v4 `[ASSUMED]` |
 | Match length | 8 minutes, or first to 3 captures `[ASSUMED]` |
 | Camera | Fixed orthographic isometric, ~45° yaw / ~40° pitch, follow with lookahead |
-| Control | WASD movement, cursor aim, hotkey abilities |
+| Control | **Cursor steers**, W/S/A/D move relative to facing, hotkey abilities (§9) |
 | Combat | Martial — claws, tails, thrown acorns, slings. **No guns.** |
 | Win condition | Most flag captures at time, or first to cap limit |
 | Death | **Scruffed** — knocked flat, costs the team 1 cheese, respawn at nest |
@@ -80,13 +80,23 @@ Every spend is paid in future deaths. That's the whole tension.
 | Spend | Cost `[ASSUMED]` | Effect |
 |---|---|---|
 | **Respawn** | 1 | Baseline. Automatic, not a choice. |
-| **Sprint** | ~1 per 4s while held | Personal speed boost, toggled on |
+| **Scurry** | 1 | ~2s burst of real speed, well above sprint. Personal cooldown ~15s. |
 | **Hire a Rat** | 5 | Respawn as the Juggernaut for one life (§4) |
 | **Barricade** | 2 | Engineer deploys a defensive barrier |
 
-**Sprint is the interesting one.** A tap you leave open, not a purchase. It drains the
-*team's* pool, and everyone sees the number dropping. The teammate burning your respawns
-to get somewhere fast had better be right about it.
+**Scurry is the interesting one.** Sprint is free and every mouse has it (§9) — Scurry is
+the one you *buy*. A single button that turns a losing chase into a won one, paid for with
+a teammate's respawn. Everyone sees the number drop the instant you press it, and everyone
+knows who pressed it.
+
+- Available to **every class**. It's a spend, not an ability.
+- **Multiplies your current speed** rather than setting a flat one — so it does *not*
+  erase the flag carry penalty, and a Scurrying Scout is still a worse carrier than a
+  Scurrying Generalist. The handoff play survives contact with the boost button. This is
+  the important constraint on Scurry; don't relax it.
+- **Refills sprint stamina** on use, which is what makes it feel like a second wind rather
+  than a stat buff.
+- `[DECIDE]` The name. "Scurry" is the working title; "Super Scurry" also on the table.
 
 > `[DECIDE]` **Second currency?** Recommend **no**. Cheese-as-lives works *because*
 > everything trades against one pool — a second currency lets you buy power without
@@ -314,7 +324,7 @@ Not a class you pick — one you **buy**.
 | Duration | **One life.** When scruffed, back to your normal class. |
 | Fantasy | You bribed a rat from the alley to fight for your crew |
 | Stats | Very high health, high damage, slow |
-| **Constraint** | **Cannot enter tunnels.** Surface only. |
+| **Constraint** | **Cannot enter tunnels.** Surface only. **Cannot sprint** (§9). |
 | Role | A committed push. A gamble the whole team pays for. |
 
 > **Why a hired rat:** it explains the cost diegetically, ties the economy to the PvE
@@ -500,9 +510,14 @@ match. Mastery is transferable without any single layout being memorized flat.
 Grass patches conceal mice, but **movement bends the blades**, and the bending is
 visible to everyone:
 
+- **Sprinting** (§9) tears a loud, unmistakable wake — visible clear across a lane
 - **Running** through grass leaves an obvious, fast-moving wake
 - **Walking** bends it subtly
 - **Moving slowly** bends nothing at all
+
+> The bottom tier is **Shift/Slow** (§9). Without it the quietest thing a keyboard player
+> could do is Run, and half this table would only exist for controller players feathering
+> the stick.
 
 This is the best system in the doc for one reason: **it's hidden information that isn't
 a class ability.** Every class gets to make the stealth/speed tradeoff, everyone can read
@@ -539,31 +554,117 @@ the tell, and it costs no cooldowns or resources. The Scout is simply *better* a
 
 ---
 
-## 9. Controls
+## 9. Controls and movement
 
-- **WASD** — movement **and facing**. The mouse turns toward where it's heading, at a
-  capped rate.
-- **Mouse cursor** — **camera lead only.** The view drifts gently toward the cursor so
-  you can peek ahead without moving. It does not aim.
-- **Left click** — primary attack, in the direction you're facing
-- **Right click / Q, E, F** — abilities
-- **Shift (hold)** — Sprint, draining team cheese (§2)
-- **Tab** — scoreboard / cheese ledger
+### The scheme `[DECIDED]`
 
-> **Facing is movement-driven, not cursor-driven `[DECIDED]`.** Cursor aiming was tried
-> at M1 and read as twitchy — the mouse is small on screen at isometric distance, and
-> every flick of the wrist spun it. Movement-facing with a capped turn rate is calmer,
-> and the turn rate itself is a big part of how weight is communicated. It also fits
-> Pillar 1: one input does one thing.
+**The cursor is the steering wheel.** Your mouse always faces it. W drives you that way.
+W/S/A/D are relative to **your facing**, not to the camera.
+
+| Input | Does |
+|---|---|
+| **Mouse** | **Steers.** Facing follows the cursor at a capped turn rate. Also aims thrown weapons, barricades, and dig direction. |
+| **W** | Forward, toward the cursor |
+| **S** | Backpedal — still facing forward |
+| **A / D** | Sidestep left/right — still facing forward |
+| **Double-tap W** | **Sprint** (below). Hold on the second tap. |
+| **Left click** | Primary attack, in the direction you're facing |
+| **Right click / Q, E, F** | Abilities |
+| **Space** | **Scurry** — the cheese boost (§2) `[ASSUMED]` |
+| **Shift (hold)** | **Slow** — the quiet tier. Minecraft's crouch, and it should feel like it. |
+| **Tab** | Scoreboard / cheese ledger |
+
+Nine times out of ten you are holding W and moving the mouse. S and A/D are situational —
+circling someone in a scrap, peeling off from the cat, backing out of a tunnel.
+
+> **Why the cursor steers, reversing the earlier call.** Cursor *aiming* was tried at M1
+> alongside WASD movement and read as twitchy — but that was a cursor with no job except
+> pointing the body, so every idle wrist flick spun the mouse for no reason. Making the
+> cursor the *steering wheel* fixes that: a wrist flick is now a deliberate turn, because
+> turning is the only thing it does. It also puts steering and sprinting under one hand
+> and leaves the left hand for abilities, which is the actual ergonomic win.
 >
-> `[DECIDE]` **Do targeted abilities still use the cursor?** Melee follows facing, that's
-> settled. But thrown acorns, barricade placement, and choosing a dig direction may still
-> want cursor targeting. A hybrid is normal for this genre and probably right — but it
-> needs deciding before the Engineer exists.
+> The old scheme's weight came from facing lagging behind travel, which meant the mouse
+> visibly crabbed sideways during direction changes. Here movement is *derived from*
+> facing, so the two can never disagree — and the turn-rate cap still supplies the weight,
+> now as a body that takes a moment to swing around rather than one pointing the wrong way.
+
+> **Turn rate is per-class, and it's free characterisation.** The Scout whips around; the
+> Bruiser commits to a heading. Costs one number per class and does real work — it's why
+> you can juke a Bruiser and can't juke a Scout.
+
+> **Double-tap W over hold-shift `[DECIDED]`.** Minecraft's approach. No extra finger, no
+> stretch, no key held for thirty seconds at a time.
+
+> **Shift is Slow `[DECIDED]`.** Also Minecraft's paradigm — crouch — and worth taking the
+> whole way: a held key, a visibly lowered posture, and a deliberate, careful feel. It's
+> the quiet tier tall grass (§8) needs, it's how a Scout sets up an ambush, and it's the
+> only way a keyboard player gets under the Run noise floor.
+>
+> Slow overrides Sprint while held, so you can't be quiet and fast. That's the point.
+
+> **Controller is the same scheme, not a port.** Left stick = W/S/A/D with analog in
+> between. Right stick = the mouse. Sprint on **L3**, Scurry on a bumper. One set of rules
+> across both devices, one code path, nothing to re-learn. The analog stick gets the
+> walk/run continuum for free; keyboard needs a discrete key for it.
+
+> **The backpedal-and-throw is a skill, not a problem.** The cursor steers *and* aims, so
+> you cannot wind up a thrown acorn at someone behind you while running away — unless you
+> swing the cursor round and switch to S. That's a real thing to learn, it looks great when
+> someone pulls it off mid-chase, and it's exactly the kind of earned mastery that costs
+> nothing to design. Keep the coupling; don't add a separate aim modifier to "fix" it.
+
+### The speed ladder `[DECIDED]`
+
+Three tiers, and they are three different systems on purpose:
+
+| Tier | How | Costs | Feels like |
+|---|---|---|---|
+| **Slow** | Hold Shift | Nothing but time | Careful. Crouched. Setting something up. |
+| **Run** | Default. Just press W. | Nothing | Your normal speed |
+| **Sprint** | Double-tap W | **Personal stamina** | A short push you can spend freely |
+| **Scurry** | Space | **1 team cheese** (§2) | A real boost. A decision. |
+
+On a controller the bottom two tiers are one input — feather the left stick and you get the
+whole Slow-to-Run continuum for free. Keyboard needs the discrete key, which is what Shift
+is for.
+
+**Sprint is per-class stamina, not economy.** Every mouse has it. What differs is how long
+you can hold it and how fast it comes back — small quick mice run far, big ones don't.
+
+| Class | Sprint duration `[ASSUMED]` | Regen delay | Full refill |
+|---|---|---|---|
+| **Scout** | **6.0s** | 1.5s | 4s |
+| Generalist | 4.0s | 2.0s | 6s |
+| Engineer | 3.0s | 2.5s | 7s |
+| Bruiser | **1.5s** | 4.0s | 10s |
+| **Juggernaut** | **Cannot sprint** | — | — |
+
+- **Sprint speed is a uniform multiplier** (~+40% `[ASSUMED]`) for everyone. The class dial
+  is **duration**, not speed — one number per class, and it stacks with base speed so the
+  Scout ends up far and away the best sprinter without a second knob.
+- **Stamina is personal and visible only to you.** It is not a team resource and never
+  appears on the enemy's screen.
+- Sprint **breaks Scout camouflage** and leaves the loudest wake in tall grass (§8).
+- `[DECIDE]` Can you sprint in a tunnel? Tight quarters argue no, and it would give the
+  underground its own tempo. Cheap to try either way at M2.
+
+> **Why splitting sprint off cheese is the right correction.** Sprint-as-cheese made the
+> most common movement input in the game an economic decision, which meant either you felt
+> guilty for moving or you stopped noticing the cost — and both of those are worse than
+> having no cost. Moving fast should be free and constant; *beating someone who is already
+> moving fast* is what's worth a life. Pillar 3 is intact — cheese still buys advantage —
+> it just buys a moment instead of a movement key.
+
 ### Dig controls `[DECIDED]`
 
-**Continuous drive.** Hold the dig key and steer with WASD; the tunnel extrudes behind
-you as you go. It's Dig Dug, and it should feel good in the hands.
+**Continuous drive.** Hold the dig key and steer with the cursor; the tunnel extrudes
+behind you as you go. It's Dig Dug, and it should feel good in the hands.
+
+> Cursor steering (§9) matters more here than anywhere else in the game. Drawing a curve
+> with the mouse produces a tunnel that reads as *dug*; stair-stepping one out of eight
+> keyboard directions produces a staircase. The scheme change makes the 8-way snapping
+> below far more likely to survive — you're aiming at a heading, not clacking between them.
 
 Underneath, cells still **snap to a grid** — continuous input, discrete state. That keeps
 replication trivial (one small message per cell) and rendering cheap.
@@ -596,7 +697,11 @@ From the concept art, which is already right:
 Additions needed beyond the art:
 
 - **Depth indicator** — surface, 1, 2, or 3
-- **Cheese drain warning** when Sprint is burning the pool
+- **Sprint stamina** — personal, near the mouse rather than parked in a corner, so you
+  read it without looking away from the chase. Yours only; never shown for anyone else.
+- **Scurry ready/cooldown** — and a hard, unmissable tick on the team cheese counter the
+  moment anyone spends one. The whole point of Scurry costing a life is that the team sees
+  it happen (§2).
 - **Telegraph banners** for world events ("THE CAT IS COMING")
 
 ---
@@ -632,8 +737,15 @@ All four are core, but they don't arrive at once. Recommended order:
 5. **Is the Generalist's -10% the right gap?** (§2)
 6. **Do class-specific carry penalties make Scout-steals-Generalist-runs *mandatory*
    rather than *natural*?** Watch for it. (§2)
+7. **Sprint stamina numbers** (§9) — the spread between Scout and Bruiser is the real
+   question, not the absolute values. Pure playtest.
+8. **Is Scurry at 1 cheese too cheap?** (§2) It should feel like a decision, not a
+   cooldown. If people press it on reflex, raise the cost before touching the effect.
 
-**Resolved:** flag cannot enter tunnels · dig via continuous drive on a snapped grid ·
+**Resolved:** cursor steers and W/S/A/D move relative to facing · sprint is free,
+per-class stamina · sprint on double-tap W, Shift is Slow · cheese buys Scurry, not
+sprint · Scurry multiplies speed so it can't erase the flag carry penalty ·
+flag cannot enter tunnels · dig via continuous drive on a snapped grid ·
 breaching is accidental unless sonar-marked · networks interleave at junctions · water
 flows from sources with current and breath · Scout camouflages while stationary ·
 tall grass bends to movement · per-class flag carry penalties · obstructions are
