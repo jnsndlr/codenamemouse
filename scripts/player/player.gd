@@ -102,6 +102,13 @@ func get_aim_point() -> Vector3:
 	return _aim_point
 
 
+## Unit vector the mouse is pointing. Dig direction and ramp direction both come from
+## here rather than from velocity -- you should be able to aim a tunnel while standing
+## still, and while digging you are barely moving anyway.
+func get_facing_direction() -> Vector3:
+	return _forward()
+
+
 func is_sprinting() -> bool:
 	return _sprinting
 

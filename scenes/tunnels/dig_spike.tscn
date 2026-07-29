@@ -1,0 +1,154 @@
+[gd_scene load_steps=18 format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
+[ext_resource type="Script" path="res://scripts/camera/camera_rig.gd" id="2_rig"]
+[ext_resource type="Script" path="res://scripts/tunnels/tunnel_network.gd" id="3_network"]
+[ext_resource type="Script" path="res://scripts/tunnels/dig_controller.gd" id="4_dig"]
+[ext_resource type="Script" path="res://scripts/tunnels/depth_focus.gd" id="5_focus"]
+[ext_resource type="Script" path="res://scripts/ui/depth_indicator.gd" id="6_depth"]
+[ext_resource type="Script" path="res://scripts/tunnels/surface_holes.gd" id="7_holes"]
+
+[sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
+sky_top_color = Color(0.28, 0.44, 0.66, 1)
+sky_horizon_color = Color(0.6, 0.66, 0.7, 1)
+ground_bottom_color = Color(0.12, 0.11, 0.1, 1)
+ground_horizon_color = Color(0.3, 0.28, 0.24, 1)
+
+[sub_resource type="Sky" id="Sky"]
+sky_material = SubResource("Sky_mat")
+
+[sub_resource type="Environment" id="Env"]
+background_mode = 2
+sky = SubResource("Sky")
+ambient_light_source = 3
+ambient_light_energy = 0.45
+tonemap_mode = 2
+glow_enabled = true
+glow_intensity = 0.5
+glow_bloom = 0.1
+
+[sub_resource type="StandardMaterial3D" id="Mat_ground"]
+albedo_color = Color(0.44, 0.42, 0.31, 1)
+roughness = 1.0
+
+[sub_resource type="StandardMaterial3D" id="Mat_prop"]
+albedo_color = Color(0.63, 0.51, 0.36, 1)
+roughness = 0.9
+
+[sub_resource type="BoxMesh" id="Mesh_prop"]
+material = SubResource("Mat_prop")
+size = Vector3(2, 1.4, 2)
+
+[sub_resource type="BoxShape3D" id="Shape_prop"]
+size = Vector3(2, 1.4, 2)
+
+[sub_resource type="StandardMaterial3D" id="Mat_earth"]
+albedo_color = Color(0.1, 0.085, 0.07, 1)
+roughness = 1.0
+
+[sub_resource type="BoxMesh" id="Mesh_earth"]
+material = SubResource("Mat_earth")
+size = Vector3(70, 1, 70)
+
+[sub_resource type="LabelSettings" id="Label_hud"]
+font_size = 19
+outline_size = 5
+outline_color = Color(0, 0, 0, 0.75)
+
+[node name="DigSpike" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Env")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.78, -0.42, 0.46, 0, 0.74, 0.67, -0.62, -0.52, 0.58, 0, 8, 0)
+light_energy = 1.05
+shadow_enabled = true
+
+[node name="Surface" type="Node3D" parent="."]
+
+[node name="Ground" type="CSGCombiner3D" parent="Surface"]
+use_collision = true
+script = ExtResource("7_holes")
+network_path = NodePath("../../Tunnels")
+
+[node name="Slab" type="CSGBox3D" parent="Surface/Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, 0)
+size = Vector3(40, 0.5, 40)
+material = SubResource("Mat_ground")
+
+[node name="PropA" type="MeshInstance3D" parent="Surface"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 0.7, -4)
+mesh = SubResource("Mesh_prop")
+
+[node name="Body" type="StaticBody3D" parent="Surface/PropA"]
+
+[node name="Collision" type="CollisionShape3D" parent="Surface/PropA/Body"]
+shape = SubResource("Shape_prop")
+
+[node name="PropB" type="MeshInstance3D" parent="Surface"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0.7, 3)
+mesh = SubResource("Mesh_prop")
+
+[node name="Body" type="StaticBody3D" parent="Surface/PropB"]
+
+[node name="Collision" type="CollisionShape3D" parent="Surface/PropB/Body"]
+shape = SubResource("Shape_prop")
+
+[node name="PropC" type="MeshInstance3D" parent="Surface"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0.7, 7)
+mesh = SubResource("Mesh_prop")
+
+[node name="Body" type="StaticBody3D" parent="Surface/PropC"]
+
+[node name="Collision" type="CollisionShape3D" parent="Surface/PropC/Body"]
+shape = SubResource("Shape_prop")
+
+[node name="EarthBackdrop" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -11, 0)
+mesh = SubResource("Mesh_earth")
+
+[node name="Tunnels" type="Node3D" parent="."]
+script = ExtResource("3_network")
+
+[node name="Player" parent="." instance=ExtResource("1_player")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, 0)
+
+[node name="CameraRig" type="Node3D" parent="."]
+script = ExtResource("2_rig")
+target = NodePath("../Player")
+zoom_idle = 11.0
+zoom_run = 12.5
+zoom_sprint = 14.0
+
+[node name="Pitch" type="Node3D" parent="CameraRig"]
+
+[node name="Camera3D" type="Camera3D" parent="CameraRig/Pitch"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 30)
+projection = 1
+size = 11.0
+near = 0.05
+far = 200.0
+
+[node name="DigController" type="Node" parent="."]
+script = ExtResource("4_dig")
+network_path = NodePath("../Tunnels")
+player_path = NodePath("../Player")
+
+[node name="DepthFocus" type="Node" parent="."]
+script = ExtResource("5_focus")
+network_path = NodePath("../Tunnels")
+player_path = NodePath("../Player")
+surface_path = NodePath("../Surface")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="Depth" type="Label" parent="HUD"]
+offset_left = 24.0
+offset_top = 18.0
+offset_right = 460.0
+offset_bottom = 130.0
+label_settings = SubResource("Label_hud")
+script = ExtResource("6_depth")
+network_path = NodePath("../../Tunnels")
+player_path = NodePath("../../Player")

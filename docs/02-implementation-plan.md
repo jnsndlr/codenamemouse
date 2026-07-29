@@ -220,6 +220,35 @@ depth count needs to drop from 3 to 2.
 **This milestone can save you a year.** The GDD's signature system lives or dies on
 this question, and it's answerable in under a week.
 
+#### What the spike found
+
+**Verdict: yes, three planes read — but only because of colour, not depth.**
+
+- **Vertical separation does almost nothing.** Planes are one `SPACING` apart, which at a
+  40° pitch projects to a handful of screen pixels. Rendered in one colour, three stacked
+  networks land nearly on top of each other and are genuinely indistinguishable — you can
+  see there's a network and not what shape it is. Dimming the unfocused planes did **not**
+  fix this on its own.
+- **Per-depth rim hue fixed it outright.** Cyan / amber / magenta for depths 1–3. With hue
+  carrying identity, dimming only has to carry *focus*, and the two jobs stop fighting.
+  This is the single most important finding of the milestone and it's a five-line change.
+- **The bright rim does the work, not the floor.** A thin emissive band capping each wall
+  outlines the network far more legibly than lit floor tiles ever did.
+- **"Underground" needs something behind it.** Ghosting the surface at first revealed the
+  *sky*, and the whole network read as floating in mid-air. An opaque earth backdrop below
+  the deepest plane fixed it. Ghosting alone is not enough — there has to be earth.
+- **Zoom matters more than expected.** Close in, one plane dominates and reads easily.
+  Pulled back to see a whole network, everything above depends on the hue coding.
+
+> Three depths survive. The plan's escape hatch — dropping 3 to 2 — was **not** needed.
+
+> **Deferred, and honest about it:** `GridMap`'s MeshLibrary collision shapes are set and
+> valid but no body ever appears in the physics world, so the player fell through every
+> floor. `tunnel_network` generates its own collision trimesh from the same cell data. It
+> works and it's verifiable, but it's a workaround for something not yet understood, and
+> it costs the free batching the storage decision was partly chosen for. Worth a proper
+> diagnosis before M4 leans on tunnels for real.
+
 ---
 
 ### M3 — The core loop (1 week)
