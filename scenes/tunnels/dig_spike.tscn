@@ -1,4 +1,4 @@
-[gd_scene load_steps=19 format=3]
+[gd_scene load_steps=21 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="Script" path="res://scripts/camera/camera_rig.gd" id="2_rig"]
@@ -7,6 +7,8 @@
 [ext_resource type="Script" path="res://scripts/tunnels/depth_focus.gd" id="5_focus"]
 [ext_resource type="Script" path="res://scripts/ui/depth_indicator.gd" id="6_depth"]
 [ext_resource type="Script" path="res://scripts/tunnels/surface_holes.gd" id="7_holes"]
+[ext_resource type="Script" path="res://scripts/maps/rock_scatter.gd" id="8_rocks"]
+[ext_resource type="Script" path="res://scripts/player/fall_guard.gd" id="9_fall"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_top_color = Color(0.28, 0.44, 0.66, 1)
@@ -101,6 +103,9 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -40.0, 1.25, 0)
 size = Vector3(1, 2.5, 80)
 material = SubResource("Mat_wall")
 
+[node name="Rocks" type="Node3D" parent="Surface"]
+script = ExtResource("8_rocks")
+
 [node name="PropA" type="MeshInstance3D" parent="Surface"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 11, 0.7, -9)
 mesh = SubResource("Mesh_prop")
@@ -164,6 +169,10 @@ script = ExtResource("5_focus")
 network_path = NodePath("../Tunnels")
 player_path = NodePath("../Player")
 surface_path = NodePath("../Surface")
+
+[node name="FallGuard" type="Node" parent="."]
+script = ExtResource("9_fall")
+player_path = NodePath("../Player")
 
 [node name="HUD" type="CanvasLayer" parent="."]
 

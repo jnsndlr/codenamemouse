@@ -61,6 +61,14 @@ var _cells: Array[Dictionary] = []
 ## Which way each ramp cell descends. Needed to rebuild its collision, since the GridMap
 ## stores orientation as an opaque basis index that is awkward to read back.
 var _ramp_steps: Array[Dictionary] = []
+## Faces that must NOT be walled, per plane: cell -> Array[Vector2i] of open sides.
+##
+## A ramp's cells belong to the plane it STARTS on, so the plane below has no idea the ramp
+## arrives. Its landing cell sees an undug neighbour, dutifully walls that face, and seals
+## the bottom of the ramp -- you walk down and stop against an invisible wall one cell short
+## of the floor. Wall generation is per-plane and can't see across planes, so the crossing
+## has to be recorded when the ramp is cut.
+var _open_faces: Array[Dictionary] = []
 var _grids: Array[GridMap] = []
 var _walls: Array[MeshInstance3D] = []
 var _bodies: Array[StaticBody3D] = []
@@ -75,6 +83,7 @@ func _ready() -> void:
 	for plane in range(PLANE_COUNT):
 		_cells.append({})
 		_ramp_steps.append({})
+		_open_faces.append({})
 
 		var floor_material := _make_material(floor_color)
 		var wall_material := _make_material(wall_color)
@@ -188,11 +197,26 @@ func dig_ramp(plane: int, cell: Vector2i, step: Vector2i) -> bool:
 		_ramp_steps[plane][at] = step
 		_grids[plane].set_cell_item(Vector3i(at.x, 0, at.y), item, orientation)
 
-	dig(plane + 1, lower + step)
+	# Mark the crossing BEFORE digging the landing, so its first wall build already knows
+	# the ramp face is open. Then rebuild the lower plane unconditionally -- dig() is a
+	# no-op on an already-dug cell and would skip the rebuild the new open face needs.
+	var landing := lower + step
+	_mark_open(plane + 1, landing, -step)
+	dig(plane + 1, landing)
 	_rebuild_walls(plane)
+	_rebuild_walls(plane + 1)
 	if plane == 0:
 		entrance_cut.emit(cell, step)
 	return true
+
+
+func _mark_open(plane: int, cell: Vector2i, side: Vector2i) -> void:
+	if plane < 0 or plane >= PLANE_COUNT:
+		return
+	var faces: Array = _open_faces[plane].get(cell, [])
+	if not faces.has(side):
+		faces.append(side)
+	_open_faces[plane][cell] = faces
 
 
 ## Focus a plane: it renders solid with a bright rim, everything else fades back. Called
@@ -254,7 +278,10 @@ func _rebuild_walls(plane: int) -> void:
 		var centre := Vector3(cell.x * CELL, 0.0, cell.y * CELL)
 
 		if cells[cell] != TunnelChunks.FLOOR:
-			_collide_ramp(collision, centre, cells[cell], _ramp_steps[plane].get(cell))
+			faces += _ramp_geometry(
+				walls, rims, collision, cells, cell, centre,
+				cells[cell], _ramp_steps[plane].get(cell)
+			)
 			continue
 
 		# Walkable surface.
@@ -262,8 +289,9 @@ func _rebuild_walls(plane: int) -> void:
 			centre + Vector3(-half, 0.0, -half), centre + Vector3(half, 0.0, -half),
 			centre + Vector3(half, 0.0, half), centre + Vector3(-half, 0.0, half))
 
+		var open: Array = _open_faces[plane].get(cell, [])
 		for side: Vector2i in SIDES:
-			if cells.has(cell + side):
+			if cells.has(cell + side) or open.has(side):
 				continue
 
 			# The shared edge between this cell and the missing neighbour.
@@ -306,10 +334,21 @@ func _rebuild_walls(plane: int) -> void:
 
 ## Ramp halves slope from one edge to the other along `step`. Reconstructed here rather
 ## than read back off the GridMap so collision can never drift from what was stored.
-func _collide_ramp(out: PackedVector3Array, centre: Vector3, item: int, step: Variant) -> void:
+##
+## Crucially this also walls the ramp's SIDES. Ramps used to be skipped by wall generation
+## entirely, which left every ramp an open trough -- you could walk straight off the edge
+## of one and fall out of the world. The side walls follow the slope, so they meet the ramp
+## surface along its whole length instead of leaving a wedge-shaped gap at the low end.
+##
+## The faces along `step` are deliberately left open: those are the way on and the way off.
+func _ramp_geometry(
+	walls: SurfaceTool, rims: SurfaceTool, out: PackedVector3Array,
+	cells: Dictionary, cell: Vector2i, centre: Vector3, item: int, step: Variant
+) -> int:
 	if step == null:
-		return
-	var direction := Vector3((step as Vector2i).x, 0.0, (step as Vector2i).y)
+		return 0
+	var travel: Vector2i = step
+	var direction := Vector3(travel.x, 0.0, travel.y)
 	var side := direction.cross(Vector3.UP)
 	var half := CELL * 0.5
 
@@ -321,6 +360,22 @@ func _collide_ramp(out: PackedVector3Array, centre: Vector3, item: int, step: Va
 	_collide_quad(out,
 		back - side * half + Vector3.UP * high, back + side * half + Vector3.UP * high,
 		front + side * half + Vector3.UP * low, front - side * half + Vector3.UP * low)
+
+	var side_cell := Vector2i(roundi(side.x), roundi(side.z))
+	var built := 0
+	var up := Vector3(0.0, WALL_HEIGHT, 0.0)
+	for sign: float in [1.0, -1.0]:
+		if cells.has(cell + side_cell * int(sign)):
+			continue
+		var a := back + side * (half * sign) + Vector3.UP * high
+		var b := front + side * (half * sign) + Vector3.UP * low
+		_quad(walls, a, b, b + up, a + up)
+		_collide_quad(out, a, b, b + up, a + up)
+
+		var inward := -side * (RIM_WIDTH * sign)
+		_quad(rims, a + up, b + up, b + up + inward, a + up + inward)
+		built += 1
+	return built
 
 
 func _collide_quad(out: PackedVector3Array, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:

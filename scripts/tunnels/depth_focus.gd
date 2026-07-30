@@ -43,11 +43,19 @@ func _collect_surface_materials() -> void:
 	if surface == null:
 		return
 
+	# Deduplicated by source material. The rock scatter shares one material across ~190
+	# meshes; a copy each would mean 190 materials to walk every frame of a fade, for
+	# identical output.
+	var seen: Dictionary = {}
 	for node in surface.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := node as MeshInstance3D
-		var material := _fadeable(mesh_instance.get_active_material(0))
-		mesh_instance.material_override = material
-		_materials.append(material)
+		var source: Material = mesh_instance.get_active_material(0)
+		var key: Variant = source.get_instance_id() if source != null else 0
+		if not seen.has(key):
+			var made := _fadeable(source)
+			seen[key] = made
+			_materials.append(made)
+		mesh_instance.material_override = seen[key]
 
 	# The ground is CSG so entrances can be subtracted out of it (see surface_holes.gd).
 	# CSG primitives carry their own material and have no material_override, so they are
@@ -61,11 +69,15 @@ func _collect_surface_materials() -> void:
 		_materials.append(material)
 
 
+## Left OPAQUE until something actually needs to fade. Marking these alpha up front put the
+## ground and the rocks in the same transparent pass with depth-write off, and the 80x80
+## ground slab sorted after the rocks and painted straight over them -- 760 rocks rendering
+## as an empty field. Transparency is switched on only while ghosting (see _process).
 func _fadeable(source: Material) -> StandardMaterial3D:
 	var material: StandardMaterial3D = (
 		source.duplicate() if source is StandardMaterial3D else StandardMaterial3D.new()
 	)
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 	return material
 
 
@@ -81,10 +93,15 @@ func _process(delta: float) -> void:
 	var wanted := 1.0 if plane <= 0 else surface_alpha_underground
 	_alpha = lerpf(_alpha, wanted, 1.0 - exp(-fade_speed * delta))
 
+	var ghosting := _alpha < 0.998
 	for material in _materials:
 		var colour := material.albedo_color
 		colour.a = _alpha
 		material.albedo_color = colour
+		material.transparency = (
+			BaseMaterial3D.TRANSPARENCY_ALPHA if ghosting
+			else BaseMaterial3D.TRANSPARENCY_DISABLED
+		)
 
 
 func get_current_plane() -> int:
