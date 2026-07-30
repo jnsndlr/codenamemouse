@@ -35,6 +35,8 @@ func _physics_process(_delta: float) -> void:
 
 	if Input.is_action_just_pressed("ramp"):
 		_cut_ramp(plane, cell)
+	if Input.is_action_just_pressed("ramp_up"):
+		_cut_ramp_up(plane, cell)
 
 	# Starting a dig from the surface has to be the SAME key as continuing one. Requiring
 	# ramp-first meant holding dig on the surface did nothing whatsoever, with no feedback
@@ -114,6 +116,25 @@ func _cut_ramp(plane: int, cell: Vector2i) -> void:
 
 	# From the surface this is an entrance; from underground it's a descent.
 	if _network.dig_ramp(plane, cell, step):
+		_last_cell = Vector2i.MAX
+
+
+## Cut a ramp that RISES ahead of you, to the plane above.
+##
+## Same geometry as a descent, just authored from the bottom: a ramp is always stored on the
+## upper of the two planes it joins, so ascending from plane N means cutting a descent on
+## plane N-1 whose landing is the cell in front of you. From plane 1 that's an exit to the
+## surface, which is simply an entrance built from underneath.
+func _cut_ramp_up(plane: int, cell: Vector2i) -> void:
+	if plane <= 0:
+		return
+	var step := _cardinal(_facing())
+	if step == Vector2i.ZERO:
+		return
+
+	# Landing sits one cell ahead; the sloped pair runs on beyond it, descending back toward
+	# us, so walking forward takes us up.
+	if _network.dig_ramp(plane - 1, cell + step * 3, -step):
 		_last_cell = Vector2i.MAX
 
 

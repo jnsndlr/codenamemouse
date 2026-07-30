@@ -28,6 +28,7 @@ const KEYS: Dictionary = {
 	# M2 dig spike. Dig is a hold, per GDD section 9's continuous drive.
 	"dig": [KEY_E],
 	"ramp": [KEY_R],
+	"ramp_up": [KEY_F],
 }
 
 ## action -> [axis, direction]. Direction is the sign of the axis that triggers it.

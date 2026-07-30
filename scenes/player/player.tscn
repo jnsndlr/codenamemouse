@@ -4,14 +4,14 @@
 [ext_resource type="PackedScene" path="res://art/mouse.blend" id="2_mouse"]
 
 [sub_resource type="CapsuleShape3D" id="Shape_body"]
-radius = 0.28
-height = 0.9
+radius = 0.16
+height = 0.4
 
 [node name="Player" type="CharacterBody3D"]
 script = ExtResource("1_player")
 
 [node name="Collision" type="CollisionShape3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.45, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, 0)
 shape = SubResource("Shape_body")
 
 [node name="Visual" type="Node3D" parent="."]

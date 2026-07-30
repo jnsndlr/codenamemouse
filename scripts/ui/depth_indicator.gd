@@ -29,9 +29,12 @@ func _process(_delta: float) -> void:
 		var marker := ">" if index == plane else " "
 		counts.append("%s%d:%d" % [marker, index, _network.cell_count(index)])
 
+	# Sprint is spelled out because double-tap W is invisible until someone tells you, and
+	# not knowing whether you *can* sprint reads as the tunnels being sluggish.
 	var hint := (
-		"hold E to burrow in" if plane <= 0
-		else "hold E to dig, steer with the cursor    R: ramp down a plane"
+		"hold E: burrow in     double-tap W: sprint" if plane <= 0
+		else "hold E: dig (steer with cursor)     R: ramp down     F: ramp up"
+			+ "\ndouble-tap W: sprint     shift: slow"
 	)
 	text = "%s\n%s\n\n%s" % [
 		NAMES[clampi(plane, 0, NAMES.size() - 1)], " ".join(counts), hint

@@ -22,7 +22,15 @@ const PLANE_COUNT: int = 4
 const SPACING: float = TunnelChunks.PLANE_SPACING
 const CELL: float = TunnelChunks.CELL
 ## How far the earth face rises above the tunnel floor.
-const WALL_HEIGHT: float = 0.55
+##
+## MUST stay below the mouse's own height (~0.36). At 0.55 the near wall was taller than
+## the mouse, so from a 40 degree camera it hid the thing you were controlling completely
+## and the mouse read as being *under* the floor. In a top-down game the wall's job is to
+## outline the tunnel, not to enclose it.
+const WALL_HEIGHT: float = 0.26
+## Largest height change you can walk over. Anything bigger gets a wall instead of an
+## opening, which is what stops a corridor from delivering you off the top of a ramp.
+const STEP_TOLERANCE: float = 0.18
 ## Width of the horizontal emissive band capping each wall. This band is the single
 ## biggest contributor to reading the shape from above -- it's the outline.
 const RIM_WIDTH: float = 0.09
@@ -99,6 +107,18 @@ func _ready() -> void:
 		var grid := GridMap.new()
 		grid.name = "Plane%d" % plane
 		grid.cell_size = Vector3(CELL, SPACING, CELL)
+		# Godot centres cells on ALL THREE axes by default, so map_to_local(0,0,0) comes
+		# back as (0.5, 0.75, 0.5) rather than the origin. Left on, every tile rendered
+		# half a cell off in X and Z and -- far worse -- half a plane-spacing ABOVE the
+		# collision floor this class generates. The mouse then walked at the real floor
+		# height while the floor you could SEE was 0.75 higher, so it looked like it was
+		# sunk under the tiles, ramps only lined up where the slope happened to cross that
+		# offset, and the tiles overlapped the wall geometry and z-fought, which is what the
+		# flickering outlines were. Turning centring off makes cell (x,0,z) mean exactly
+		# (x, 0, z), matching the wall and collision maths.
+		grid.cell_center_x = false
+		grid.cell_center_y = false
+		grid.cell_center_z = false
 		grid.mesh_library = TunnelChunks.build(floor_material)
 		grid.position = Vector3(0.0, plane_y(plane), 0.0)
 		add_child(grid)
@@ -197,6 +217,12 @@ func dig_ramp(plane: int, cell: Vector2i, step: Vector2i) -> bool:
 		_ramp_steps[plane][at] = step
 		_grids[plane].set_cell_item(Vector3i(at.x, 0, at.y), item, orientation)
 
+	# Floor to ARRIVE on at the top. Digging down, this cell is the corridor you walked in
+	# from and the call is a no-op; digging UP from the plane below there is nothing there,
+	# and without it you climb the ramp and step off the top into open air. Refused on the
+	# surface, which needs no floor cell.
+	dig(plane, cell - step)
+
 	# Mark the crossing BEFORE digging the landing, so its first wall build already knows
 	# the ramp face is open. Then rebuild the lower plane unconditionally -- dig() is a
 	# no-op on an already-dug cell and would skip the rebuild the new open face needs.
@@ -208,6 +234,35 @@ func dig_ramp(plane: int, cell: Vector2i, step: Vector2i) -> bool:
 	if plane == 0:
 		entrance_cut.emit(cell, step)
 	return true
+
+
+## Whether stepping from a floor cell into `other` across `side` is too big a change in
+## height to walk. Floors are always flush with each other; ramps are the interesting case.
+func _blocked_by_step(plane: int, other: Vector2i, side: Vector2i) -> bool:
+	var item: int = _cells[plane][other]
+	if item == TunnelChunks.FLOOR:
+		return false
+	var step: Variant = _ramp_steps[plane].get(other)
+	if step == null:
+		return true
+	# We are standing on the ramp's `-side` flank, so that's the edge facing us.
+	var edge: Variant = _ramp_edge_height(item, step, -side)
+	return edge == null or absf(edge as float) > STEP_TOLERANCE
+
+
+## Height of a ramp cell's edge on its `facing` side, relative to its own plane. Null for
+## the two lateral sides, which are the slope's flanks and never walkable.
+##
+## The upshot: from a floor cell you can only ever step onto the TOP of an upper ramp half.
+## Every other approach is a drop of half a plane or more, and gets a wall.
+func _ramp_edge_height(item: int, step: Vector2i, facing: Vector2i) -> Variant:
+	var high := 0.0 if item == TunnelChunks.RAMP_UPPER else -SPACING * 0.5
+	var low := -SPACING * 0.5 if item == TunnelChunks.RAMP_UPPER else -SPACING
+	if facing == step:
+		return low
+	if facing == -step:
+		return high
+	return null
 
 
 func _mark_open(plane: int, cell: Vector2i, side: Vector2i) -> void:
@@ -226,9 +281,17 @@ func set_focus_plane(plane: int) -> void:
 	for index in range(PLANE_COUNT):
 		var focused := index == _focus
 		var alpha := 1.0 if focused else unfocused_alpha
-		_set_alpha(_floor_materials[index], alpha)
-		_set_alpha(_wall_materials[index], alpha)
-		_set_alpha(_rim_materials[index], alpha)
+		# The FOCUSED plane goes fully opaque. Left alpha-blended it sat in the transparent
+		# pass with depth-write off, and the emissive rims flickered as their draw order
+		# swapped against the floors and each other whenever the camera moved.
+		for material: StandardMaterial3D in [
+			_floor_materials[index], _wall_materials[index], _rim_materials[index]
+		]:
+			_set_alpha(material, alpha)
+			material.transparency = (
+				BaseMaterial3D.TRANSPARENCY_DISABLED if focused
+				else BaseMaterial3D.TRANSPARENCY_ALPHA
+			)
 		_rim_materials[index].emission_energy_multiplier = (
 			1.6 if focused else unfocused_rim_energy
 		)
@@ -242,8 +305,8 @@ func _make_material(colour: Color) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.albedo_color = colour
 	material.roughness = 0.95
-	# Planes have to be able to fade, so they are transparent-capable from the start.
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	# Starts opaque; set_focus_plane switches this on only for planes that are fading.
+	material.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return material
 
@@ -291,7 +354,13 @@ func _rebuild_walls(plane: int) -> void:
 
 		var open: Array = _open_faces[plane].get(cell, [])
 		for side: Vector2i in SIDES:
-			if cells.has(cell + side) or open.has(side):
+			if open.has(side):
+				continue
+			# A dug neighbour is only an OPENING if you can actually step into it. A ramp
+			# next door is a dug cell, but its floor may be most of a plane below yours --
+			# treating that as an opening is how a T-junction beside a ramp dropped you
+			# straight off the world.
+			if cells.has(cell + side) and not _blocked_by_step(plane, cell + side, side):
 				continue
 
 			# The shared edge between this cell and the missing neighbour.
@@ -364,9 +433,10 @@ func _ramp_geometry(
 	var side_cell := Vector2i(roundi(side.x), roundi(side.z))
 	var built := 0
 	var up := Vector3(0.0, WALL_HEIGHT, 0.0)
+	# ALWAYS walled, even where a corridor runs alongside. A ramp's flanks are a slope
+	# viewed edge-on; stepping onto one mid-way is a climb of up to half a plane, so
+	# leaving them open just let the player jam against an invisible ledge.
 	for sign: float in [1.0, -1.0]:
-		if cells.has(cell + side_cell * int(sign)):
-			continue
 		var a := back + side * (half * sign) + Vector3.UP * high
 		var b := front + side * (half * sign) + Vector3.UP * low
 		_quad(walls, a, b, b + up, a + up)
