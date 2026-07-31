@@ -116,7 +116,7 @@ func _initialize() -> void:
 func _fresh_network() -> void:
 	if _scene != null:
 		_scene.free()
-	_scene = (load("res://scenes/tunnels/dig_spike.tscn") as PackedScene).instantiate()
+	_scene = (load("res://scenes/maps/arena.tscn") as PackedScene).instantiate()
 	root.add_child(_scene)
 	for path: String in STRIP:
 		var node: Node = _scene.get_node_or_null(path)
@@ -142,7 +142,7 @@ func _fresh_network() -> void:
 func _check_dig_flow() -> void:
 	if _scene != null:
 		_scene.free()
-	_scene = (load("res://scenes/tunnels/dig_spike.tscn") as PackedScene).instantiate()
+	_scene = (load("res://scenes/maps/arena.tscn") as PackedScene).instantiate()
 	root.add_child(_scene)
 	await process_frame
 	await physics_frame

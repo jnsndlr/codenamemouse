@@ -2,7 +2,7 @@ extends SceneTree
 ## M2 verification harness. Builds a three-plane network, then photographs it from the game
 ## camera at each depth so the legibility question can be looked at rather than argued about.
 ##
-##   godot --path . --resolution 1100x760 --script tools/dig_spike_probe.gd
+##   godot --path . --resolution 1100x760 --script tools/arena_probe.gd
 ##
 ## Needs a real renderer -- do NOT add --headless, it will hang on the first force_draw.
 ## For correctness rather than looks, use tools/tunnel_audit.gd, which is headless and checks
@@ -14,7 +14,7 @@ const OUT := "user://"
 
 
 func _initialize() -> void:
-	var scene: Node = (load("res://scenes/tunnels/dig_spike.tscn") as PackedScene).instantiate()
+	var scene: Node = (load("res://scenes/maps/arena.tscn") as PackedScene).instantiate()
 	root.add_child(scene)
 	await process_frame
 	await process_frame

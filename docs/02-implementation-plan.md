@@ -154,7 +154,7 @@ codenamemouse/
 │   ├── game/               # match, spawn, objective, economy managers
 │   ├── entities/           # mouse, flag, cheese, world creatures
 │   ├── tunnels/            # GridMaps, chunk MeshLibrary, dig controller
-│   ├── maps/               # backyard_bbq.tscn + greybox
+│   ├── maps/               # arena.tscn — one world, not a copy per milestone
 │   └── ui/                 # HUD, minimap, depth indicator
 ├── scripts/
 │   ├── net/                # NetTransport + implementations
@@ -429,8 +429,6 @@ It found four families of bug, three of which the spike had been shipping:
 
 **Question:** is the flag run tense?
 
-Surface only — tunnels are switched off for this milestone.
-
 - Two nests, two banners, pickup / carry / drop / capture / return
 - Melee combat, health, scruffed state, respawn
 - Score, timer, win condition
@@ -439,7 +437,21 @@ Surface only — tunnels are switched off for this milestone.
 **Done when:** you can play a full match against bots and it produces a moment worth
 describing to someone.
 
-**Not in scope:** cheese, tunnels, real classes, multiplayer, art.
+**Not in scope:** cheese, real classes, multiplayer, art.
+
+> **Tunnels stay on, reversing the original "surface only".** M2 didn't leave a prototype
+> to be integrated later — it left a working dig system in the shipping arena. Switching it
+> off would mean maintaining a disabled path and paying the integration cost anyway at M4,
+> which is the same drift that killed the second scene. Digging is simply available.
+>
+> **GDD §2 already contains the guard that makes this safe.** *The flag cannot enter a
+> tunnel* — so the carry home is surface by rule, and no amount of digging can shortcut the
+> run M3 exists to evaluate. Tunnels move mice into position; they never move the objective.
+> The milestone's question stays readable.
+>
+> **The residual cost, stated anyway:** bots don't path through tunnels until M4, so a human
+> can approach the enemy nest underground against defenders who structurally cannot follow.
+> That skews the *steal*, not the *run*. Judge tension by the trip home.
 
 ---
 
@@ -448,8 +460,9 @@ describing to someone.
 **Question:** is digging *fun*, not just legible?
 
 - Engineer class: dig, ramp, barricade
-- Tunnels integrated with the flag map
-- **Bots path through tunnels** via `AStar3D` over dug cells
+- **Bots path through tunnels** via `AStar3D` over dug cells — this is now the milestone's
+  centre of gravity, since M3 already ships digging and the flag map together. Until bots
+  can follow, digging isn't a decision, it's an exploit.
 - Dig controls pass (GDD §9 open question)
 - No-surface zones and per-plane rock obstructions
 

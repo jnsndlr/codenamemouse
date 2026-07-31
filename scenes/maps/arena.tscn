@@ -67,7 +67,7 @@ font_color = Color(1, 0.93, 0.7, 1)
 outline_size = 8
 outline_color = Color(0, 0, 0, 0.85)
 
-[node name="DigSpike" type="Node3D"]
+[node name="Arena" type="Node3D"]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Env")
