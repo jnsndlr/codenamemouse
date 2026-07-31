@@ -64,6 +64,11 @@ func _ready() -> void:
 		)
 		if spot.length() < clear_radius:
 			continue
+		# Nests keep their ground clear. A rock on the capture disc is ugly; a rock on the spawn
+		# point is a bot pinned against it for a whole match -- and the scatter is seeded, so it
+		# would happen every single time and look like an AI bug.
+		if Nest.blocks(get_tree(), spot):
+			continue
 
 		var big := rng.randf() < large_fraction
 		var span: Vector2 = large_size if big else small_size

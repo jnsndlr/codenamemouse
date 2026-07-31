@@ -1,0 +1,26 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/ai/bot.gd" id="1_bot"]
+[ext_resource type="PackedScene" path="res://art/mouse.blend" id="2_mouse"]
+
+[sub_resource type="CapsuleShape3D" id="Shape_body"]
+radius = 0.16
+height = 0.4
+
+[node name="Bot" type="CharacterBody3D"]
+script = ExtResource("1_bot")
+
+[node name="Collision" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, 0)
+shape = SubResource("Shape_body")
+
+[node name="Visual" type="Node3D" parent="."]
+
+[node name="Mouse" parent="Visual" instance=ExtResource("2_mouse")]
+
+[node name="Agent" type="NavigationAgent3D" parent="."]
+path_desired_distance = 0.35
+target_desired_distance = 0.5
+path_height_offset = 0.1
+avoidance_enabled = false
+debug_enabled = false

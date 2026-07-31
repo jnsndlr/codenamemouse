@@ -129,6 +129,11 @@ func _ready() -> void:
 		)
 		if spot.length() < clear_radius:
 			continue
+		# Not over a nest. Cover next to a nest is good -- an approach you can creep up -- but
+		# cover ON one hides the banner itself, and an objective nobody can find is not hidden
+		# information, it's a missing objective.
+		if Nest.blocks(get_tree(), spot, patch_radius.y):
+			continue
 		var extent := rng.randf_range(patch_radius.x, patch_radius.y)
 		_build_patch(placed, spot, extent, mesh, rng)
 		_patches.push_back({"at": Vector3(spot.x, 0.0, spot.y), "extent": extent})

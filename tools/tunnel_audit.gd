@@ -44,7 +44,13 @@ extends SceneTree
 ## turn a real hole into a pass, and a live player wandering the arena makes it non-deterministic.
 const STRIP: Array[String] = [
 	"Player", "CameraRig", "DigController", "DepthFocus", "FallGuard", "HUD", "Surface/Rocks"
-]
+] + STRIP_MATCH
+
+## The flag game, stripped from every scenario including the dig-flow one. Bots would wander
+## through the containment probes and make them non-deterministic, and the navmesh bake costs
+## real time fifteen times over. None of it has anything to say about tunnel geometry --
+## tools/match_audit.gd is where the match rules are checked.
+const STRIP_MATCH: Array[String] = ["MatchDirector", "Navigation", "Nests"]
 
 const REACH: float = 0.7
 const MAX_DROP: float = TunnelChunks.PLANE_SPACING + 0.3
@@ -116,16 +122,27 @@ func _initialize() -> void:
 func _fresh_network() -> void:
 	if _scene != null:
 		_scene.free()
-	_scene = (load("res://scenes/maps/arena.tscn") as PackedScene).instantiate()
-	root.add_child(_scene)
-	for path: String in STRIP:
-		var node: Node = _scene.get_node_or_null(path)
-		if node != null:
-			node.free()
+	_scene = _arena(STRIP)
 	_network = _scene.get_node("Tunnels") as TunnelNetwork
 	await process_frame
 	await physics_frame
 	_space = _scene.get_viewport().world_3d.direct_space_state
+
+
+## The arena, with the named nodes removed BEFORE it enters the tree.
+##
+## Before, not after, and that ordering is load-bearing now that there is a match in the scene:
+## a node that has already readied has done whatever it does. The director spawns its bots as
+## its own SIBLINGS, so freeing it afterwards leaves two mice wandering through every
+## containment probe -- which is exactly the kind of non-determinism this file exists to avoid.
+func _arena(strip: Array[String]) -> Node:
+	var scene: Node = (load("res://scenes/maps/arena.tscn") as PackedScene).instantiate()
+	for path: String in strip:
+		var node: Node = scene.get_node_or_null(path)
+		if node != null:
+			node.free()
+	root.add_child(scene)
+	return scene
 
 
 ## Does aiming at a tile and holding the button actually open it?
@@ -142,8 +159,7 @@ func _fresh_network() -> void:
 func _check_dig_flow() -> void:
 	if _scene != null:
 		_scene.free()
-	_scene = (load("res://scenes/maps/arena.tscn") as PackedScene).instantiate()
-	root.add_child(_scene)
+	_scene = _arena(STRIP_MATCH)
 	await process_frame
 	await physics_frame
 

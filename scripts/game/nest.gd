@@ -1,0 +1,122 @@
+class_name Nest
+extends Node3D
+## A crew's home: where you spawn, where your banner stands, and where a steal becomes a
+## capture (GDD section 2).
+##
+## One node with three jobs, because in the fiction they are one place and separating them
+## would immediately invite them to drift apart -- a capture zone that isn't where the banner
+## stands is a bug you can only find by playing.
+##
+## It builds its own banner. The banner spends most of the match somewhere else entirely, but
+## it BELONGS here: `send_home` needs an address, and having the nest own it means there is no
+## way to wire up a scene where the blue banner returns to the red nest.
+##
+## Grey box, deliberately (implementation plan): a tinted disc on the ground and a stand. The
+## real nest is a heap of chewed cardboard and stolen insulation, and that is an M9 problem.
+
+## How far from the middle counts as home. Generous -- a capture that needs you to thread a
+## precise spot at a dead run is a frustration, not a skill.
+@export var radius: float = 2.6
+## Where a respawning mouse appears, relative to the nest. Behind the banner stand rather than
+## on top of it, so you don't spawn inside your own objective.
+@export var spawn_offset: Vector3 = Vector3(0.0, 0.25, 1.1)
+@export_enum("Blue", "Red") var team: int = Team.BLUE
+
+var _banner: Banner
+
+
+func _ready() -> void:
+	_build()
+	_banner = Banner.new()
+	_banner.name = "Banner"
+	add_child(_banner)
+	_banner.setup(team, banner_stand())
+
+
+func get_banner() -> Banner:
+	return _banner
+
+
+## Where the banner stands when it's home. Raised a little: the pole is planted in a mound.
+func banner_stand() -> Vector3:
+	return global_position + Vector3.UP * 0.08
+
+
+func spawn_point() -> Vector3:
+	return global_position + spawn_offset
+
+
+## Which way a mouse faces when it spawns -- out of the nest, toward the middle of the arena.
+## Spawning with your back to the match is disorienting for exactly as long as it takes to
+## turn around, which is long enough to be worth this one line.
+func spawn_facing() -> float:
+	var out := -global_position
+	out.y = 0.0
+	if out.length_squared() < 0.001:
+		return 0.0
+	out = out.normalized()
+	return atan2(-out.x, -out.z)
+
+
+## Ground the scatterers must leave alone, as a flat radius around the middle.
+##
+## Wider than the pad itself. A boulder on the capture disc is ugly; a boulder on the spawn
+## point is a bot standing still for a whole match, and the scatter is seeded, so it would be
+## reproducible and mysterious rather than occasional and obvious.
+static func blocks(tree: SceneTree, spot: Vector2, margin: float = 0.0) -> bool:
+	for node in tree.get_nodes_in_group(&"nest"):
+		var nest := node as Nest
+		if nest == null:
+			continue
+		var away := Vector2(spot.x - nest.global_position.x, spot.y - nest.global_position.z)
+		if away.length() < nest.radius + 0.9 + margin:
+			return true
+	return false
+
+
+func contains(at: Vector3) -> bool:
+	return Vector2(at.x - global_position.x, at.z - global_position.z).length() <= radius
+
+
+func _build() -> void:
+	var colour := Team.color_of(team)
+
+	var pad_mesh := CylinderMesh.new()
+	pad_mesh.top_radius = radius
+	pad_mesh.bottom_radius = radius
+	pad_mesh.height = 0.05
+	pad_mesh.radial_segments = 24
+	var pad_material := StandardMaterial3D.new()
+	# Mostly dirt, with just enough of the crew's colour to say whose it is. A saturated disc
+	# reads as a UI decal painted on the lawn -- the first pass mixed half and half and looked
+	# like a selection highlight from a strategy game.
+	pad_material.albedo_color = colour.lerp(Color(0.34, 0.28, 0.20), 0.78)
+	pad_material.roughness = 1.0
+	pad_mesh.material = pad_material
+
+	# The mound keeps the colour the pad gave up. Identity belongs at the banner, which is the
+	# thing you are actually looking for, and a small bright object reads from further away than
+	# a large dull one.
+	var mound_material := StandardMaterial3D.new()
+	mound_material.albedo_color = colour.lerp(Color(0.34, 0.28, 0.20), 0.25)
+	mound_material.roughness = 0.95
+
+	var pad := MeshInstance3D.new()
+	pad.name = "Pad"
+	pad.mesh = pad_mesh
+	# Just proud of the ground. Flush, it z-fights the lawn across the whole disc.
+	pad.position.y = 0.026
+	add_child(pad)
+
+	var mound_mesh := CylinderMesh.new()
+	mound_mesh.top_radius = 0.28
+	mound_mesh.bottom_radius = 0.42
+	mound_mesh.height = 0.1
+	mound_mesh.radial_segments = 10
+	mound_mesh.material = mound_material
+
+	var mound := MeshInstance3D.new()
+	mound.name = "Stand"
+	mound.mesh = mound_mesh
+	mound.position.y = 0.05
+	add_child(mound)

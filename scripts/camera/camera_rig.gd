@@ -120,6 +120,17 @@ func _ready() -> void:
 	_camera.size = _zoom
 	if _target != null:
 		global_position = _desired_position()
+		# CUT ON RESPAWN, don't fly. A respawn puts the mouse at its own nest, which is most of
+		# an arena away, and easing after it means several seconds where you can neither see
+		# your mouse nor understand what you are looking at. It's the same reason the rig snaps
+		# here rather than easing in from wherever it was authored.
+		if _target.has_signal("revived"):
+			_target.revived.connect(_cut_to_target)
+
+
+func _cut_to_target(_mouse: Node) -> void:
+	if _target != null:
+		global_position = _desired_position()
 
 
 func _process(_delta: float) -> void:

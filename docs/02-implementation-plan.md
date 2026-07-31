@@ -501,6 +501,93 @@ describing to someone.
 > can approach the enemy nest underground against defenders who structurally cannot follow.
 > That skews the *steal*, not the *run*. Judge tension by the trip home.
 
+#### What the milestone found
+
+**The loop closes, and it produces a story without being told to.** Three bots a side, left alone
+for three minutes: a steal at 22s, scruffed on the way home at 31s, the banner recovered by its
+own crew, a capture at 48s, a counter-steal, a chase that ended two strides from the nest. Final
+2–1. Nothing in that sequence is scripted — it's four rules and a navmesh — and it is the first
+thing this project has produced that is recognisably *a match* rather than a demonstration.
+
+- **Bots that fight are bots that never play.** The first version ranked "an enemy is nearby"
+  alongside the banner rules, which made a nearby enemy a *destination*. Four bots then spent an
+  entire ninety-second soak brawling in the middle of the yard: sixteen scruffs, one steal, zero
+  captures. The milestone's own question was unanswerable because there were no flag runs to
+  judge. The fix is to split the decision in two — **where it is going** and **who it is squaring
+  up to** — and let only the banner rules move a bot. A raider now swings at whatever it brushes
+  past and keeps walking.
+- **A defended nest is what makes a run worth measuring**, which is why crews are three and not
+  the plan's "two bots". Three is the smallest crew that fields a defender and still has someone
+  raiding. With nobody home a steal is a walk, and a walk tells you nothing about tension.
+- **Everyone chases the thief**, raiders included — not out of loyalty but because GDD §2's rule
+  that your own banner must be home means a crew whose banner is away *cannot score at all*.
+  There is nothing else worth doing. A rule written for tension turned out to also be the AI's
+  priority function.
+- **The banner rides above the carrier's head.** GDD §2 says carriers are always visible on the
+  minimap; there is no minimap yet, so the rule became a world object instead — a pole a
+  body-length above the grass line. Concealment reads the same fact and switches itself off for a
+  carrier, so you cannot steal the flag and then hide in a bush with it.
+
+> **Left click is the attack; digging moved to right click.** GDD §9's table always said so, but
+> through M2 there was nothing to fight, so the dig hold took the primary button unopposed and
+> would quietly have become the convention. Digging is the Engineer's *ability* (§4), and right
+> click is the ability button in that same table. The milestone didn't decide this — it was the
+> first one with a reason to care.
+
+> **The flag cannot enter a tunnel, and it's enforced at two gates.** The dig controller refuses
+> to take a carrier down a shaft *and says why*, which is where a player meets the rule; the
+> director drops the banner if a carrier is found underground by any other means. The second gate
+> exists because every future way of being moved somewhere you didn't choose — Slam, a cave-in, a
+> current — routes around the first.
+
+> **One mouse, two drivers.** `mouse.gd` now owns locomotion, health, the swing and the team
+> colour; `player.gd` and `bot.gd` are the halves that read a keyboard and a navigation path.
+> This wasn't tidiness: the grass tell (§8) only works if a bot bends grass exactly as hard as a
+> player moving at the same speed, and two movement implementations would have drifted apart on
+> the first tuning pass.
+
+> **The camera cuts on respawn rather than flying.** A respawn puts you at your own nest, most of
+> an arena away, and easing after it costs several seconds in which you can neither see your
+> mouse nor read the fight you just lost. The rig snaps whenever its target emits `revived`. The
+> follow speed also went from 1.0 to 6.0 — the slow follow was an M2 setting for looking at
+> tunnels while standing still, and a chase needs the mouse near the middle of the screen.
+
+**Two bugs worth remembering, both invisible to every rule-level check:**
+
+- **The navmesh has to bake a frame late.** A CSG shape builds its mesh the frame *after* it
+  enters the tree, so baking in `_ready` parsed no ground at all — six polygons floating on top
+  of the props. Every bot found no path, stood still, and looked exactly like broken AI. It's why
+  `match_audit` asserts a nest-to-nest path directly of the navigation server: the failure and
+  the symptom are in different files.
+- **Two mice at one point don't stand on each other, they launch.** A zero-length separation
+  vector resolves in whatever direction the solver picks, usually straight up. Respawns and bot
+  spawns are now fanned around a small ring. The same physics ate an afternoon in the audit
+  harness, where a body added at the origin and moved afterwards fired the mouse standing there
+  clear across the arena — which looked precisely like a teleport bug in the director.
+
+> **`tools/match_audit.gd` is the tunnel audit's bargain applied to the rules.** Ten invariants:
+> nav path, steal, capture (all three conditions), scruff-drops, the return clock, the flag
+> underground at both gates, melee (in front only — not behind you, not your own crew, not
+> someone standing on another plane beneath your feet), respawn, both ways a match can end, and
+> a check that bots actually leave the nest. Rule bugs fail the same way geometry bugs do: they
+> need a specific sequence, they won't happen in the first ten matches, and they are trivial to
+> check once stated. Timed rules are tested at fractions of a second — the twenty and the six are
+> balance dials, the mechanism is what must not break.
+
+**Deliberately still absent:** a scruff costs no cheese (that's the economy, M6), bots cannot
+follow you underground (M4), there are no classes, and the swing is a cone with no animation
+behind it.
+
+---
+
+> **The honest verdict on "is the flag run tense?" is: yes, and it is the chase that does it,
+> not the fight.** Getting scruffed two strides from your own nest with the banner over your head
+> is the moment the milestone was looking for, and it happens on its own. What is *not* tense is
+> the middle of the yard, which is eighty metres of open dirt with three rocks in it — the
+> arena was built to look at tunnels from above, not to be run across. That is a map problem
+> rather than a systems one, and it belongs to whichever milestone first has a reason to lay out
+> a real Backyard BBQ (GDD §8).
+
 ---
 
 ### M4 — Digging in the game (1–2 weeks)
@@ -666,7 +753,11 @@ entire server.
 
 ## Immediate next step
 
-**M0, then M1.** A capsule moving around an isometric grey-box backyard.
+**M0–M3 are done.** There is a match: two crews, two banners, melee, scruffing, respawns, a
+clock, and bots that play the objective. Both audits pass (`tools/tunnel_audit.gd`,
+`tools/match_audit.gd`).
 
-Then **M2** — the dig spike — because that's the question that decides what this game
-actually is, and it's answerable in five evenings.
+Next is **M4 — digging in the game**, and its centre of gravity has already shifted, exactly as
+this plan predicted: M3 ships digging and the flag map together, so the question is no longer
+"can we integrate them" but **"can a bot follow you down there?"** Until it can, the tunnel is an
+exploit rather than a decision — the one residual cost M3 knowingly accepted.

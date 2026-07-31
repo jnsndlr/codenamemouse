@@ -1,0 +1,454 @@
+extends SceneTree
+## Invariant audit for the flag game. The same bargain tools/tunnel_audit.gd struck, applied to
+## the rules instead of the geometry.
+##
+##   godot --headless --path . --script tools/match_audit.gd
+##
+## The tunnel audit exists because every "I fell out of the world" bug was found by playing
+## until it happened. The rules of a capture-the-flag match fail the same way and worse: a
+## capture that counts while your own banner is away, a banner that returns while somebody is
+## holding it, a mouse that respawns still carrying the thing it dropped. Every one of those
+## needs a specific sequence to expose, none of them will happen in the first ten matches, and
+## all of them are trivially checkable if you just say what must be true.
+##
+## The invariants, and what each one is really protecting:
+##
+##   NAV_PATH        A navigation path exists between the two nests. If this fails, bots stand
+##                   still and it looks like the AI is broken rather than the navmesh.
+##   STEAL           Touching THEIR banner takes it; touching your own at home does nothing.
+##   CAPTURE         A capture needs their banner in your paws, you at home, AND your own
+##                   banner home. The third condition is what makes defence matter.
+##   SCRUFF_DROPS    A scruffed carrier drops the banner where they fell -- not at their nest,
+##                   not into the void.
+##   RETURN_CLOCK    A dropped banner goes home by itself, and instantly if its own crew
+##                   touches it first.
+##   NO_UNDERGROUND  The flag cannot enter a tunnel (GDD section 2). Checked at BOTH gates: the
+##                   dig controller's refusal, and the director's backstop.
+##   MELEE           A swing hits enemies in front, and nothing else -- not behind you, not
+##                   your own crew, and not somebody on another plane standing under your feet.
+##   RESPAWN         Scruffed mice come back, at their own nest, whole.
+##   MATCH_END       The cap ends the match; the clock names the leader.
+##   BOTS_MOVE       Bots actually leave the nest. Covers the whole chain -- navmesh, agent,
+##                   director, control loop -- with one number that cannot be argued with.
+##
+## TIMED RULES ARE TESTED SHORT. The audit sets the return clock and the respawn to fractions
+## of a second rather than waiting the real twenty and six. Those numbers are balance dials
+## (GDD section 2) and will be tuned; what must not break is the mechanism, and a test that
+## takes half a minute to prove a countdown counts is a test nobody runs.
+##
+## Exit code is non-zero if any invariant fails, so this can gate a commit.
+
+## Everything with nothing to say about the rules. The rock and grass scatters are the
+## expensive ones -- 760 bodies and 63000 blades rebuilt for every scenario -- and the camera
+## and HUD only exist to be looked at.
+const STRIP: Array[String] = [
+	"CameraRig", "HUD", "LookPanel", "Surface/Rocks", "Surface/Grass", "FallGuard"
+]
+
+var _scene: Node
+var _director: MatchDirector
+var _findings: Array[String] = []
+var _total_failures: int = 0
+
+
+func _initialize() -> void:
+	var checks: Array = [
+		["nav_path", _check_nav_path],
+		["steal", _check_steal],
+		["capture", _check_capture],
+		["scruff_drops", _check_scruff_drops],
+		["return_clock", _check_return_clock],
+		["no_underground", _check_no_underground],
+		["melee", _check_melee],
+		["respawn", _check_respawn],
+		["match_end", _check_match_end],
+		["bots_move", _check_bots_move],
+	]
+
+	for check: Array in checks:
+		_findings.clear()
+		await (check[1] as Callable).call()
+		_report(check[0] as String)
+
+	print("")
+	print("=".repeat(78))
+	if _total_failures == 0:
+		print("ALL MATCH INVARIANTS HOLD across %d checks." % checks.size())
+	else:
+		print("%d failures across %d checks." % [_total_failures, checks.size()])
+	print("=".repeat(78))
+	quit(1 if _total_failures > 0 else 0)
+
+
+# ------------------------------------------------------------------------------ the checks
+
+
+## Can a bot get from one nest to the other at all?
+##
+## Asked of the navigation server rather than by watching a bot walk, so a failure says
+## "there is no path" instead of "a bot didn't arrive", which are very different bugs with the
+## same symptom.
+func _check_nav_path() -> void:
+	await _arena(1)
+	# The bake is a frame late (the lawn is CSG and does not exist before then) and the server
+	# then syncs the region into the map on the next physics frame. Ask too early and you get an
+	# empty path from a navmesh that is perfectly fine.
+	await _advance(0.3)
+	var region := _scene.get_node("Navigation") as NavigationRegion3D
+	_expect(region.navigation_mesh.get_polygon_count() > 0, "the navmesh baked at all")
+
+	var blue := _director.nest_of(Team.BLUE).global_position
+	var red := _director.nest_of(Team.RED).global_position
+	var path := NavigationServer3D.map_get_path(region.get_navigation_map(), blue, red, true)
+	_expect(path.size() >= 2, "a path exists between the nests")
+	if path.size() >= 2:
+		_expect(
+			path[path.size() - 1].distance_to(red) < 2.0,
+			"the path actually reaches the far nest (ends %.1fm short)" % (
+				path[path.size() - 1].distance_to(red)
+			)
+		)
+
+
+## Theirs is a steal. Yours, sitting at home, is nothing at all.
+func _check_steal() -> void:
+	await _arena(1)
+	var theirs := _director.banner_of(Team.RED)
+	var ours := _director.banner_of(Team.BLUE)
+
+	var friend := _puppet(Team.BLUE, ours.global_position)
+	await _advance(0.2)
+	_expect(not friend.is_carrying(), "a mouse cannot pick up its own banner at home")
+	_expect(ours.state == Banner.AT_NEST, "an untouched banner stays home")
+
+	var thief := _puppet(Team.BLUE, theirs.global_position)
+	await _advance(0.2)
+	_expect(thief.is_carrying(), "touching the enemy banner takes it")
+	_expect(theirs.state == Banner.CARRIED, "the banner knows it is carried")
+	_expect(theirs.carrier == thief, "the banner knows who has it")
+
+	# It rides above the carrier rather than staying where it was picked up.
+	await _advance(0.1)
+	thief.global_position = Vector3(4.0, 0.2, -3.0)
+	await _advance(0.2)
+	_expect(
+		Vector2(theirs.global_position.x - 4.0, theirs.global_position.z + 3.0).length() < 0.5,
+		"the banner follows its carrier"
+	)
+
+
+## The three conditions, checked one at a time.
+func _check_capture() -> void:
+	await _arena(1)
+	var ours := _director.banner_of(Team.BLUE)
+	var theirs := _director.banner_of(Team.RED)
+	var home := _director.nest_of(Team.BLUE).global_position
+
+	# Our banner is away: a carrier standing in our own nest must NOT score.
+	var raider := _puppet(Team.RED, ours.global_position)
+	await _advance(0.2)
+	_expect(raider.is_carrying(), "the enemy took our banner")
+	raider.global_position = Vector3(0.0, 0.2, 0.0)
+
+	var runner := _puppet(Team.BLUE, theirs.global_position)
+	await _advance(0.2)
+	runner.global_position = home + Vector3(0.0, 0.2, 0.0)
+	await _advance(0.3)
+	_expect(_director.score_of(Team.BLUE) == 0, "no capture while our own banner is away")
+	_expect(runner.is_carrying(), "and the carrier keeps hold of it")
+
+	# Bring ours home, and the same standing position becomes a capture.
+	ours.send_home()
+	await _advance(0.3)
+	_expect(_director.score_of(Team.BLUE) == 1, "capture counts once our banner is home")
+	_expect(not runner.is_carrying(), "the carrier hands it over on scoring")
+	_expect(theirs.state == Banner.AT_NEST, "the captured banner goes back to its own nest")
+
+
+## Dropped where they fell, which is the whole point of the rule.
+func _check_scruff_drops() -> void:
+	await _arena(1)
+	var theirs := _director.banner_of(Team.RED)
+	var runner := _puppet(Team.BLUE, theirs.global_position)
+	await _advance(0.2)
+
+	var where := Vector3(-6.0, 0.2, 8.0)
+	runner.global_position = where
+	await _advance(0.2)
+	runner.take_hit(9999.0, Vector3(0.0, 0.0, 0.0), 0.0)
+	await _advance(0.2)
+
+	_expect(runner.is_scruffed(), "a big enough hit scruffs")
+	_expect(not runner.is_carrying(), "a scruffed mouse is not carrying anything")
+	_expect(theirs.state == Banner.DROPPED, "the banner is dropped, not returned")
+	_expect(
+		Vector2(theirs.global_position.x - where.x, theirs.global_position.z - where.z).length()
+			< 1.0,
+		"the banner lands where the carrier fell"
+	)
+
+
+func _check_return_clock() -> void:
+	await _arena(1)
+	var theirs := _director.banner_of(Team.RED)
+	# Short, on purpose. See the note at the top: this proves the countdown runs, not that 20
+	# is the right number.
+	theirs.return_seconds = 0.4
+
+	var runner := _puppet(Team.BLUE, theirs.global_position)
+	await _advance(0.2)
+	runner.global_position = Vector3(3.0, 0.2, 3.0)
+	await _advance(0.1)
+	runner.take_hit(9999.0, Vector3.ZERO, 0.0)
+	await _advance(0.2)
+	_expect(theirs.state == Banner.DROPPED, "dropped after a scruff")
+	_expect(theirs.return_countdown() > 0.0, "the return clock is running")
+
+	await _advance(0.5)
+	_expect(theirs.state == Banner.AT_NEST, "an abandoned banner returns itself")
+
+	# Now the other half: its own crew touching it sends it straight home.
+	var owner := _puppet(Team.RED, Vector3(10.0, 0.2, 10.0))
+	theirs.drop()
+	theirs.global_position = Vector3(10.0, 0.0, 10.0)
+	await _advance(0.2)
+	_expect(theirs.state == Banner.AT_NEST, "its own crew returns it instantly")
+	_expect(not owner.is_carrying(), "and does not pick it up")
+
+
+## THE FLAG CANNOT ENTER A TUNNEL, at both gates.
+func _check_no_underground() -> void:
+	await _arena(1)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+	var controller := _scene.get_node("DigController")
+	var player := _scene.get_node("Player") as Mouse
+	var theirs := _director.banner_of(Team.RED)
+
+	# Gate one: the dig controller refuses to take a carrier down a shaft.
+	var cell := Vector2i(0, 0)
+	network.dig_shaft_down(0, cell)
+	await _advance(0.1)
+
+	player.set_physics_process(false)
+	controller.set_physics_process(false)
+	player.global_position = network.cell_to_world(0, cell) + Vector3.UP * 0.2
+	theirs.take(player)
+	await _advance(0.1)
+
+	controller._take_shaft(cell)
+	_expect(controller.get_plane() == 0, "a carrier is refused entry to a shaft")
+	_expect(player.is_carrying(), "and keeps the banner rather than dropping it down the hole")
+
+	# Gate two: the director's backstop, for every other way of ending up underground.
+	player.set_plane(1)
+	await _advance(0.2)
+	_expect(not player.is_carrying(), "a carrier found underground drops the banner")
+	_expect(theirs.state == Banner.DROPPED, "and the banner is left where it was")
+
+
+## Hits what is in front of you, and nothing else.
+func _check_melee() -> void:
+	await _arena(1)
+	var attacker := _puppet(Team.BLUE, Vector3(0.0, 0.2, 0.0))
+	# facing 0 means forward is -Z, per the model's own convention.
+	attacker.revive_at(Vector3(0.0, 0.2, 0.0), 0.0)
+
+	# Spread out, because two capsules sharing a spot shove each other hard enough to leave the
+	# cone before the swing lands -- and every one of these is inside the arc and the reach, so
+	# the only thing that can excuse a miss is the rule being tested.
+	var ahead := _puppet(Team.RED, Vector3(0.0, 0.2, -0.6))
+	var behind := _puppet(Team.RED, Vector3(0.0, 0.2, 0.75))
+	var friend := _puppet(Team.BLUE, Vector3(-0.4, 0.2, -0.4))
+	var below := _puppet(Team.RED, Vector3(0.4, 0.2, -0.4))
+	below.set_plane(1)
+	await _advance(0.1)
+
+	_expect(attacker.swing(), "a swing starts")
+	await _advance(attacker.attack_swing + 0.1)
+
+	_expect(ahead.get_health_ratio() < 1.0, "an enemy in front is hit")
+	_expect(behind.get_health_ratio() >= 1.0, "an enemy behind you is not")
+	_expect(friend.get_health_ratio() >= 1.0, "your own crew is never hit")
+	_expect(below.get_health_ratio() >= 1.0, "nobody on another plane is hit")
+
+	# Displacement, not just damage (GDD section 6): the hit has to move them.
+	_expect(
+		ahead.global_position.z < -0.65,
+		"the hit knocks them back (they are at z=%.2f, from -0.60)" % ahead.global_position.z
+	)
+
+
+func _check_respawn() -> void:
+	await _arena(1)
+	_director.respawn_seconds = 0.4
+	var nest := _director.nest_of(Team.RED)
+
+	var mouse := _puppet(Team.RED, Vector3(12.0, 0.2, -12.0))
+	await _advance(0.1)
+	mouse.take_hit(9999.0, Vector3.ZERO, 0.0)
+	await _advance(0.1)
+	_expect(mouse.is_scruffed(), "scruffed")
+	_expect(_director.respawn_left(mouse) > 0.0, "the respawn clock is running")
+	_expect(mouse.collision_layer == 0, "a scruffed mouse stops body-blocking")
+
+	await _advance(0.6)
+	_expect(not mouse.is_scruffed(), "back on its feet")
+	_expect(mouse.get_health_ratio() >= 1.0, "at full health")
+	_expect(
+		mouse.global_position.distance_to(nest.spawn_point()) < 1.0,
+		"at its own nest, not where it fell"
+	)
+	_expect(mouse.collision_layer != 0, "and solid again")
+
+
+func _check_match_end() -> void:
+	await _arena(1)
+	_director.capture_limit = 1
+	var theirs := _director.banner_of(Team.RED)
+	var runner := _puppet(Team.BLUE, theirs.global_position)
+	await _advance(0.2)
+	runner.global_position = _director.nest_of(Team.BLUE).global_position + Vector3.UP * 0.2
+	await _advance(0.3)
+
+	_expect(_director.score_of(Team.BLUE) == 1, "the capture landed")
+	_expect(not _director.is_playing(), "reaching the cap ends the match")
+	_expect(_director.get_winner() == Team.BLUE, "and names the winner")
+
+	# The clock, on a fresh arena: whoever is ahead when it runs out wins.
+	await _arena(1)
+	_director._score = [0, 2]
+	_director._clock = 0.05
+	await _advance(0.3)
+	_expect(not _director.is_playing(), "the clock ends the match")
+	_expect(_director.get_winner() == Team.RED, "and the leader wins it")
+
+
+## Full crews, left alone for three seconds. Anything wrong anywhere in the chain -- navmesh,
+## agent, director, control loop -- shows up as a bot that hasn't moved.
+##
+## The two roles are held to different bars on purpose, because "went somewhere" is the wrong
+## test for a defender: its job is to stand near its own nest, and a defender that sprinted off
+## across the arena would be the bug. A raider has to cover real ground.
+func _check_bots_move() -> void:
+	await _arena(3)
+	await _advance(0.5)
+
+	var bots: Array[Bot] = []
+	var starts: Array[Vector3] = []
+	for node in root.get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
+		var bot := node as Bot
+		if bot != null:
+			bots.append(bot)
+			starts.append(bot.global_position)
+
+	# Three seats a crew, minus the one the player is holding on blue.
+	_expect(bots.size() == 5, "every empty seat was filled (found %d bots)" % bots.size())
+	var raiders := 0
+	for bot: Bot in bots:
+		if bot.role == Bot.RAIDER:
+			raiders += 1
+	_expect(raiders > 0 and raiders < bots.size(), "the crews are a mix of roles")
+
+	await _advance(3.0)
+
+	for i in range(bots.size()):
+		var bot := bots[i]
+		var home := _director.nest_of(bot.team).global_position
+		if bot.role == Bot.RAIDER:
+			_expect(
+				bot.global_position.distance_to(starts[i]) > 3.0,
+				"%s is on its way over (moved %.1fm, intent: %s)" % [
+					bot.name, bot.global_position.distance_to(starts[i]), bot.get_intent()
+				]
+			)
+			continue
+		# A defender is judged on where it IS, not on how far it went. It walks to its post in
+		# the first second and then stands there, which is the job -- an early version of this
+		# check asked every bot to keep covering ground and failed the one behaving correctly.
+		_expect(
+			home.distance_to(bot.global_position) <= bot.defend_radius,
+			"%s is holding its nest (%.1fm out, intent: %s)" % [
+				bot.name, home.distance_to(bot.global_position), bot.get_intent()
+			]
+		)
+
+
+# ------------------------------------------------------------------------------ the harness
+
+
+## A fresh arena per check, so nothing leaks from one to the next.
+##
+## The crew size is set BEFORE the scene enters the tree, because the director spawns bots from
+## `_ready` -- afterwards is too late, and a check that meant to run with nobody else in the
+## arena would quietly be sharing it with mice making their own decisions. `crew` of 1 leaves
+## only the player, since the player holds blue's first seat.
+func _arena(crew: int) -> void:
+	if _scene != null:
+		_scene.free()
+	_scene = (load("res://scenes/maps/arena.tscn") as PackedScene).instantiate()
+	for path: String in STRIP:
+		var node: Node = _scene.get_node_or_null(path)
+		if node != null:
+			node.free()
+
+	_director = _scene.get_node("MatchDirector") as MatchDirector
+	_director.crew_size = crew
+
+	root.add_child(_scene)
+	await process_frame
+	await physics_frame
+	await physics_frame
+
+
+## A mouse with nobody driving it. The base class with no `_control`, which is exactly what a
+## test wants: it stands where it's put, and everything else about it -- health, carrying,
+## collision layers, the swing -- is the real thing rather than a stand-in.
+##
+## PLACED BEFORE IT ENTERS THE TREE, and that ordering cost an afternoon. A body added at the
+## origin and moved afterwards exists at the origin for one physics frame; anything standing
+## there is overlapping it, and the depenetration that follows is computed from the overlap and
+## applied against the NEW transform -- so the bystander is fired across the arena and lands on
+## top of the newcomer. It looked exactly like a teleport bug in the director.
+func _puppet(side: int, at: Vector3) -> Mouse:
+	var mouse := Mouse.new()
+	mouse.name = "Puppet%s%d" % [Team.name_of(side), randi() % 1000]
+	mouse.team = side
+
+	# Built before it enters the tree, because `@onready var _visual := $Visual` resolves the
+	# instant it does.
+	var visual := Node3D.new()
+	visual.name = "Visual"
+	mouse.add_child(visual)
+
+	var shape := CollisionShape3D.new()
+	var capsule := CapsuleShape3D.new()
+	capsule.radius = 0.16
+	capsule.height = 0.4
+	shape.shape = capsule
+	shape.position.y = 0.2
+	mouse.add_child(shape)
+
+	mouse.position = at
+	_scene.add_child(mouse)
+	return mouse
+
+
+func _advance(seconds: float) -> void:
+	for i in range(maxi(1, int(ceilf(seconds * 60.0)))):
+		await physics_frame
+
+
+func _expect(condition: bool, what: String) -> void:
+	if not condition:
+		_findings.append(what)
+
+
+func _report(label: String) -> void:
+	print("")
+	print("-- %s" % label)
+	if _findings.is_empty():
+		print("   ok")
+		return
+	for finding: String in _findings:
+		print("   FAIL: %s" % finding)
+	_total_failures += _findings.size()

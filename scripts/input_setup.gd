@@ -45,8 +45,15 @@ const KEYS: Dictionary = {
 ## Digging moved to the mouse: point at a tile, hold, watch it open. The cursor is already the
 ## steering wheel (GDD section 9), so it is the thing that knows where you're looking -- which
 ## makes it the only sensible way to say "that tile, there".
+##
+## LEFT IS THE ATTACK AND RIGHT IS THE DIG, reversing what M2 shipped. Section 9's table always
+## read "left click: primary attack, right click: abilities" -- but through M2 there was nothing
+## to fight, so the dig hold took the primary button unopposed and would quietly have become the
+## convention. Digging is the Engineer's ability (section 4), so right click is where the design
+## already put it; M3 is simply the first milestone with a reason to care.
 const MOUSE: Dictionary = {
-	"dig": [MOUSE_BUTTON_LEFT],
+	"attack": [MOUSE_BUTTON_LEFT],
+	"dig": [MOUSE_BUTTON_RIGHT],
 }
 
 ## action -> [axis, direction]. Direction is the sign of the axis that triggers it.
@@ -59,6 +66,9 @@ const PAD_AXES: Dictionary = {
 	"look_down": [JOY_AXIS_RIGHT_Y, 1.0],
 	"look_left": [JOY_AXIS_RIGHT_X, -1.0],
 	"look_right": [JOY_AXIS_RIGHT_X, 1.0],
+	# The triggers, in the same order as the mouse buttons they mirror: attack right, dig left.
+	"attack": [JOY_AXIS_TRIGGER_RIGHT, 1.0],
+	"dig": [JOY_AXIS_TRIGGER_LEFT, 1.0],
 }
 
 const PAD_BUTTONS: Dictionary = {

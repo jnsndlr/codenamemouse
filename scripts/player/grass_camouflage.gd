@@ -12,8 +12,13 @@ extends Node
 ## One number decides both, which is what makes the mechanic teachable -- what you see happen
 ## to the grass IS what is happening to you.
 ##
-## Deliberately NOT the Scout's camouflage (GDD section 4). That is a class ability that
-## stacks on top of this and needs its own shader. This is the floor everybody stands on.
+## EVERY MOUSE, not just the player. It was the player's alone through M2.5 because there was
+## nobody else in the arena; the moment bots exist, a mechanic that only conceals you is not a
+## mechanic, it's a cheat. It also means the thing you're looking for while crossing a lane is
+## exactly the thing they're looking for -- which is the whole reason the tell is worth reading.
+##
+## Deliberately NOT the Scout's camouflage (GDD section 4). That is a class ability that stacks
+## on top of this and needs its own shader. This is the floor everybody stands on.
 
 ## How much of your own colour survives when perfectly still in deep cover. Not zero: hidden
 ## information (GDD section 3) is about not being FOUND, never about being unhittable once you
@@ -31,37 +36,40 @@ extends Node
 ## that flickers is far more visible than one that is simply there.
 @export var fade_speed: float = 6.0
 
-@export var player_path: NodePath
 @export var grass_path: NodePath
 
-var _player: Node3D
 var _grass: Node3D
-var _material: StandardMaterial3D
-var _own_color: Color = Color.WHITE
-var _opacity: float = 1.0
+## mouse -> its current opacity, so each fades on its own clock.
+var _opacity: Dictionary = {}
 
 
 func _ready() -> void:
-	_player = get_node_or_null(player_path) as Node3D
 	_grass = get_node_or_null(grass_path) as Node3D
-	if _player != null and _player.has_method("get_body_material"):
-		_material = _player.get_body_material()
-		_own_color = _material.albedo_color
-	if _material == null:
-		push_warning("grass camouflage: no body material at %s -- concealment is off" %
-			player_path)
+	if _grass == null or not _grass.has_method("concealment_at"):
+		push_warning("grass camouflage: no grass at %s -- concealment is off" % grass_path)
 		set_process(false)
 
 
 func _process(delta: float) -> void:
-	_opacity = lerpf(_opacity, _wanted_opacity(), 1.0 - exp(-fade_speed * delta))
-	# Straight alpha. The two predecessors of this line -- a dither, then a blend toward the
-	# grass colour -- both existed only to stay out of the transparent queue, because the pixel
-	# pass used to erase whatever was in it. It runs after transparency now, so the honest
-	# version works and fades correctly against whatever is actually behind the mouse.
-	var colour := _own_color
-	colour.a = _opacity
-	_material.albedo_color = colour
+	for node in get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
+		var mouse := node as Mouse
+		if mouse == null:
+			continue
+		var material := mouse.get_body_material()
+		if material == null:
+			continue
+
+		var now: float = _opacity.get(mouse, 1.0)
+		now = lerpf(now, _wanted_opacity(mouse), 1.0 - exp(-fade_speed * delta))
+		_opacity[mouse] = now
+
+		# Straight alpha. The two predecessors of this line -- a dither, then a blend toward the
+		# grass colour -- both existed only to stay out of the transparent queue, because the
+		# pixel pass used to erase whatever was in it. It runs after transparency now, so the
+		# honest version works and fades correctly against whatever is actually behind the mouse.
+		var colour := mouse.team_color
+		colour.a = now
+		material.albedo_color = colour
 
 
 ## How visible this mouse should be, before smoothing.
@@ -69,20 +77,23 @@ func _process(delta: float) -> void:
 ## Concealment scales the whole effect rather than gating it, so standing in the fringe of a
 ## patch hides you PARTLY. A yes-or-no test would make the rim of every patch a hard line to
 ## sit exactly on, and the rim is meant to be a risk, not a hiding place.
-func _wanted_opacity() -> float:
-	if _grass == null or not _grass.has_method("concealment_at"):
+func _wanted_opacity(mouse: Mouse) -> float:
+	# CARRIERS ARE ALWAYS VISIBLE (GDD section 2). No hiding with the flag -- the rule exists so
+	# a steal has to be run home rather than parked in a bush until the coast clears, and it is
+	# the same rule that floats the banner above the carrier's head where everyone can see it.
+	if mouse.is_carrying() or mouse.is_scruffed():
 		return 1.0
 
-	var cover: float = _grass.concealment_at(_player.global_position)
+	var cover: float = _grass.concealment_at(mouse.global_position)
 	if cover <= 0.0:
 		return 1.0
 
 	# Scurry is not built yet -- it needs the cheese economy, which is M6. Asking the mouse
-	# rather than assuming false means this starts behaving correctly the day it lands, and
-	# the question is worth asking now because the ANSWER is a design decision: buying speed
-	# must not also buy stealth, or cheese becomes the strictly-best way to move unseen.
-	var exposed: bool = _player.has_method("is_boosting") and _player.is_boosting()
-	var moving: float = _grass.speed_tell(_player) if _grass.has_method("speed_tell") else 1.0
+	# rather than assuming false means this starts behaving correctly the day it lands, and the
+	# question is worth asking now because the ANSWER is a design decision: buying speed must
+	# not also buy stealth.
+	var exposed := mouse.is_boosting()
+	var moving: float = _grass.speed_tell(mouse) if _grass.has_method("speed_tell") else 1.0
 	var in_cover := lerpf(hidden_opacity, moving_opacity, moving)
 
 	# Full cover reaches the concealed value; no cover is fully visible.

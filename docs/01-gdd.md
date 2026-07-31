@@ -813,6 +813,8 @@ All four are core, but they don't arrive at once. Recommended order:
 per-class stamina · sprint on double-tap W, Shift is Slow · cheese buys Scurry, not
 sprint · Scurry multiplies speed so it can't erase the flag carry penalty ·
 flag cannot enter tunnels · dig via continuous drive on a snapped grid ·
+primary attack on left click, digging moved to the ability button (right click) ·
+carriers are visible because the banner rides above their head, and concealment switches off ·
 breaching is accidental unless sonar-marked · networks interleave at junctions · water
 flows from sources with current and breath · Scout camouflages while stationary ·
 tall grass bends to movement · per-class flag carry penalties · obstructions are

@@ -1,6 +1,11 @@
-[gd_scene load_steps=25 format=3]
+[gd_scene load_steps=29 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
+[ext_resource type="Script" path="res://scripts/game/nest.gd" id="14_nest"]
+[ext_resource type="Script" path="res://scripts/game/match_director.gd" id="15_director"]
+[ext_resource type="Script" path="res://scripts/maps/nav_surface.gd" id="16_nav"]
+[ext_resource type="Script" path="res://scripts/ui/match_hud.gd" id="17_hud"]
+[ext_resource type="Script" path="res://scripts/ui/vitals.gd" id="18_vitals"]
 [ext_resource type="Script" path="res://scripts/camera/camera_rig.gd" id="2_rig"]
 [ext_resource type="Script" path="res://scripts/tunnels/tunnel_network.gd" id="3_network"]
 [ext_resource type="Script" path="res://scripts/tunnels/dig_controller.gd" id="4_dig"]
@@ -94,9 +99,21 @@ transform = Transform3D(0.78, -0.42, 0.46, 0, 0.74, 0.67, -0.62, -0.52, 0.58, 0,
 light_energy = 1.05
 shadow_enabled = true
 
+[node name="Nests" type="Node3D" parent="."]
+
+[node name="Blue" type="Node3D" parent="Nests" groups=["nest"]]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -20, 0, -20)
+script = ExtResource("14_nest")
+team = 0
+
+[node name="Red" type="Node3D" parent="Nests" groups=["nest"]]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 20, 0, 20)
+script = ExtResource("14_nest")
+team = 1
+
 [node name="Surface" type="Node3D" parent="."]
 
-[node name="Ground" type="CSGCombiner3D" parent="Surface"]
+[node name="Ground" type="CSGCombiner3D" parent="Surface" groups=["nav_source"]]
 use_collision = true
 
 [node name="Slab" type="CSGBox3D" parent="Surface/Ground"]
@@ -130,7 +147,7 @@ script = ExtResource("8_rocks")
 [node name="Grass" type="Node3D" parent="Surface"]
 script = ExtResource("12_grass")
 
-[node name="PropA" type="MeshInstance3D" parent="Surface"]
+[node name="PropA" type="MeshInstance3D" parent="Surface" groups=["nav_source"]]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 11, 0.7, -9)
 mesh = SubResource("Mesh_prop")
 
@@ -139,7 +156,7 @@ mesh = SubResource("Mesh_prop")
 [node name="Collision" type="CollisionShape3D" parent="Surface/PropA/Body"]
 shape = SubResource("Shape_prop")
 
-[node name="PropB" type="MeshInstance3D" parent="Surface"]
+[node name="PropB" type="MeshInstance3D" parent="Surface" groups=["nav_source"]]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -14, 0.7, 7)
 mesh = SubResource("Mesh_prop")
 
@@ -148,7 +165,7 @@ mesh = SubResource("Mesh_prop")
 [node name="Collision" type="CollisionShape3D" parent="Surface/PropB/Body"]
 shape = SubResource("Shape_prop")
 
-[node name="PropC" type="MeshInstance3D" parent="Surface"]
+[node name="PropC" type="MeshInstance3D" parent="Surface" groups=["nav_source"]]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 0.7, 16)
 mesh = SubResource("Mesh_prop")
 
@@ -156,6 +173,9 @@ mesh = SubResource("Mesh_prop")
 
 [node name="Collision" type="CollisionShape3D" parent="Surface/PropC/Body"]
 shape = SubResource("Shape_prop")
+
+[node name="Navigation" type="NavigationRegion3D" parent="."]
+script = ExtResource("16_nav")
 
 [node name="EarthBackdrop" type="MeshInstance3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -3, 0)
@@ -175,7 +195,7 @@ zoom_run = 12.5
 zoom_sprint = 14.0
 pixel_aligned_panning = false
 pixel_size = 1.0
-follow_speed = 1.0
+follow_speed = 6.0
 aim_lead = 0.0
 
 [node name="Pitch" type="Node3D" parent="CameraRig"]
@@ -204,10 +224,16 @@ environment_path = NodePath("../WorldEnvironment")
 [node name="FallGuard" type="Node" parent="."]
 script = ExtResource("9_fall")
 player_path = NodePath("../Player")
+respawn_at = Vector3(-20, 0.6, -18.9)
+
+[node name="MatchDirector" type="Node" parent="."]
+script = ExtResource("15_director")
+blue_nest_path = NodePath("../Nests/Blue")
+red_nest_path = NodePath("../Nests/Red")
+player_path = NodePath("../Player")
 
 [node name="GrassCamouflage" type="Node" parent="."]
 script = ExtResource("13_camo")
-player_path = NodePath("../Player")
 grass_path = NodePath("../Surface/Grass")
 
 [node name="LookPanel" type="CanvasLayer" parent="."]
@@ -236,3 +262,11 @@ label_settings = SubResource("Label_prompt")
 script = ExtResource("7_hint")
 network_path = NodePath("../../Tunnels")
 player_path = NodePath("../../Player")
+
+[node name="Match" type="Control" parent="HUD"]
+script = ExtResource("17_hud")
+director_path = NodePath("../../MatchDirector")
+
+[node name="Vitals" type="Control" parent="HUD"]
+script = ExtResource("18_vitals")
+director_path = NodePath("../../MatchDirector")

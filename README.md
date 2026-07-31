@@ -15,11 +15,25 @@ Read these in order — they're the source of truth for what we're building and 
 | [`docs/01-gdd.md`](docs/01-gdd.md) | The **what** — digging, cheese-as-lives, classes, the world |
 | [`docs/02-implementation-plan.md`](docs/02-implementation-plan.md) | The **how** — tech, architecture, milestones M0–M9 |
 
-## Current state: M1 — a mouse that moves
+## Current state: M3 — the core loop
 
-A capsule you can drive around a grey-box yard under a fixed isometric camera.
-That's it, and that's the point — M1 exists to answer one question: *does isometric
-movement feel good?*
+**There is a match.** Two crews of three, two banners, melee, scruffing, respawns, a clock,
+and bots that play the objective rather than each other. Digging is still there and still
+works; the banner simply cannot go underground.
+
+M3 exists to answer one question: *is the flag run tense?* Short answer: yes, and it's the
+**chase** that does it — getting scruffed two strides from your own nest with the banner over
+your head. See the findings in the implementation plan.
+
+### The rules
+
+- Steal **their** banner, carry it home, score. First to **3**, or most captures at **8:00**.
+- **Your own banner must be home** for a capture to count — so a double steal is a standoff.
+- A dropped banner returns itself after **20s**, or instantly if its own crew touches it.
+- **Scruffed, not killed** — you drop what you're carrying where you fall, and you're back at
+  your nest in 6 seconds. (It'll cost the team a cheese once the economy lands at M6.)
+- **The flag cannot enter a tunnel.** Tunnels move mice, never objectives.
+- **Carriers can't hide.** The banner floats above your head and grass concealment switches off.
 
 ### Running it
 
@@ -33,46 +47,68 @@ Open the project in Godot 4.7+ and press F5, or:
 
 | Input | Action |
 |---|---|
-| **WASD** | Move and turn (camera-relative — W is always up-screen) |
-| **Shift** | Sprint |
-| **Mouse** | Leads the camera. Does *not* aim. |
+| **Mouse** | **Steers.** The mouse turns to face the cursor at a capped rate. |
+| **W / S / A / D** | Forward / backpedal / sidestep — all relative to *facing*, not the camera |
+| **Double-tap W** | Sprint (personal stamina) |
+| **Shift** | Slow — the quiet tier. Bends no grass. |
+| **Left click** | Attack — a short cone in front of you |
+| **Right click** | Dig: point at a tile next to your tunnel and hold |
+| **E** | Take the shaft under or over you |
+| **F / R** | Sink a shaft down / break one up |
+| **Arrows** | Turn the view a quarter at a time |
 
-**Facing follows movement, not the cursor.** Cursor-facing was twitchy at this scale —
-the mouse is small on screen and every flick of the wrist spun it. The turn rate is
-capped, and that cap is a big part of where the sense of weight comes from.
+**The cursor is the steering wheel, not a crosshair.** Movement is derived from facing, so the
+two can never disagree; the turn-rate cap is where the weight comes from. Left click attacks
+because that's what GDD §9 always said — digging is the Engineer's ability, so it lives on the
+ability button.
 
-The camera pulls back as you move faster — tight when still, wider at a run, widest at
-a sprint. It's driven by your *actual* speed rather than by the sprint key, so later on
-carrying the flag or wading through a flooded tunnel will tighten the view automatically
-without a special case.
+The camera pulls back as you move faster, driven by your *actual* speed rather than by the
+sprint key — so carrying the banner tightens the view without a special case. It **cuts** rather
+than flies when you respawn.
 
 ### What to fiddle with
 
-Select **CameraRig** in the scene tree and tune these live while the game runs:
+On **MatchDirector**: `crew_size` (3), `capture_limit` (3), `match_seconds` (480),
+`respawn_seconds` (6), `pickup_radius`. On a **Nest**: `radius` — how generous a capture is.
+On a **Banner**: `return_seconds` (20).
 
-- **`pitch_degrees`** (default 40) — true isometric is 35.264, but most games that call
-  themselves isometric are steeper because it reads better. The single biggest lever on
-  how the game feels to look at.
-- **`zoom_idle` / `zoom_run` / `zoom_sprint`** (7.5 / 9 / 10.75) — the three anchors
-- **`zoom_out_speed` / `zoom_in_speed`** (3.5 / 1.8) — deliberately asymmetric so
-  tapping movement keys doesn't pump the view in and out
-- **`aim_lead`** (0.22) — how far the camera leads toward your cursor
-- **`follow_speed`** (8) — how tightly the camera tracks
+On **Player** (and every mouse, via the shared base): `speed` (3), `acceleration` (30),
+`turn_speed` (10 — the main weight dial), `carry_penalty` (0.25 — per-class at M4, and the whole
+handoff play falls out of the spread), `attack_damage` / `attack_reach` / `attack_knockback`.
 
-On **Player**:
+On a **Bot**: `role` (raider or defender), `defend_radius` (9 — measured from the *nest*, so a
+defender can't be lured off its post), `engage_radius` (4.5 — who it squares up to, never where
+it goes; conflating those two produced bots that brawled in the midfield and never scored).
 
-- **`speed` / `sprint_speed`** (3 / 5) — top speeds
-- **`acceleration`** (16) — the main weight dial. Lower is heavier.
-- **`friction`** (24) — kept above acceleration so stopping reads crisper than starting
-- **`rotation_speed`** (9 rad/s) — how fast the mouse turns. Lower feels more committed.
+On **CameraRig**: `pitch_degrees` (48), `zoom_idle` / `zoom_run` / `zoom_sprint`, `follow_speed`.
+
+### Audits
+
+Two headless invariant suites. Both must pass; both exit non-zero if they don't.
+
+```bash
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/tunnel_audit.gd
+```
+
+```bash
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/match_audit.gd
+```
+
+The first builds eighteen awkward tunnel networks and asserts you cannot fall out of any of
+them. The second plays out the flag rules — steal, capture, drop, return, respawn, the flag
+underground, who a swing may hit — and checks the bots can path between the nests at all.
 
 ## Layout
 
 ```
 docs/           design documents
-art/            Blender source files, imported directly by Godot
-scenes/         player, maps
-scripts/        player, camera, maps, input setup
+art/            Blender source files and shaders, imported directly by Godot
+scenes/         player, bots, maps
+scripts/actors/ the mouse itself — locomotion, health, melee, carrying
+scripts/game/   teams, nests, banners, the match rules
+scripts/ai/     bots
+scripts/        player, camera, tunnels, maps, ui, input setup
+tools/          headless audits
 ```
 
 ## Art pipeline
@@ -107,8 +143,9 @@ rather than in `project.godot`, because that file serializes input bindings as o
 unreadable line. Move them into Project Settings > Input Map when you want in-editor
 rebinding.
 
-## Next: M2 — the dig spike
+## Next: M4 — digging in the game
 
-Four planes, chunk-based tunnels, surface ghosting. No game around it — it exists purely
-to answer whether a player can look at a tunnel network from above and understand its
-shape. See the implementation plan.
+Is digging *fun*, not just legible? The centre of gravity is **bots pathing through tunnels**
+(`AStar3D` over the same dug cells the player digs), because until a defender can follow you
+down there, taking the tunnel isn't a decision — it's an exploit. Then the Engineer class,
+per-plane rock obstructions, and a dig-controls pass. See the implementation plan.

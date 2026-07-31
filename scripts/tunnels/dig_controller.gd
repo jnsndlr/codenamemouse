@@ -44,8 +44,7 @@ func _ready() -> void:
 	_player = get_node_or_null(player_path) as Node3D
 	if _network == null:
 		return
-	if _player is CollisionObject3D:
-		_network.apply_plane_collision(_player as CollisionObject3D, _plane)
+	_apply_plane()
 	_cursor = DigCursor.new()
 	_network.add_child(_cursor)
 
@@ -148,14 +147,21 @@ func _take_shaft(cell: Vector2i) -> void:
 	if target < 0:
 		return
 
+	# THE FLAG CANNOT ENTER A TUNNEL (GDD section 2, decided). Refused here, at the one place a
+	# player can choose to go under, rather than by silently dropping the banner down the hole
+	# -- a refusal you can hear is a rule you can learn, and dropping it would hand the carrier
+	# a free way to stash the objective at the bottom of a shaft.
+	if _player.has_method("is_carrying") and _player.call("is_carrying"):
+		_network.dig_refused.emit("the banner will not go underground")
+		return
+
 	_plane = target
 	_player.global_position = (
 		_network.cell_to_world(target, cell) + Vector3.UP * arrival_lift
 	)
 	if _player is CharacterBody3D:
 		(_player as CharacterBody3D).velocity = Vector3.ZERO
-	if _player is CollisionObject3D:
-		_network.apply_plane_collision(_player as CollisionObject3D, target)
+	_apply_plane()
 	_target = Vector2i.MAX
 	_progress = 0.0
 
@@ -171,7 +177,20 @@ func _resync_plane() -> void:
 	if absf(_player.global_position.y - expected) <= TunnelNetwork.SPACING * 0.5:
 		return
 	_plane = _network.plane_at_height(_player.global_position.y)
-	if _player is CollisionObject3D:
-		_network.apply_plane_collision(_player as CollisionObject3D, _plane)
+	_apply_plane()
 	_target = Vector2i.MAX
 	_progress = 0.0
+
+
+## Tell the body which layer it is on.
+##
+## Asks the MOUSE first, because a mouse's collision mask carries a second thing this controller
+## knows nothing about: the crew layers that make enemies body-block and allies pass through
+## (GDD section 6). Setting the mask straight from the network would wipe them, and the bug that
+## produces -- teammates suddenly solid, enemies suddenly not -- looks nothing like a digging
+## bug and would be hunted for in the wrong file.
+func _apply_plane() -> void:
+	if _player.has_method("set_plane"):
+		_player.call("set_plane", _plane)
+	elif _player is CollisionObject3D:
+		_network.apply_plane_collision(_player as CollisionObject3D, _plane)
