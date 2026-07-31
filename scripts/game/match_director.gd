@@ -26,11 +26,23 @@ extends Node
 
 signal event(text: String)
 signal score_changed(blue: int, red: int)
+## A crew's stores changed. Carries the side and what it left, so the HUD can tick the counter
+## the moment it happens (GDD section 10 asks for exactly that, and asks for it to be hard to
+## miss -- the whole point of a life costing something is that the team sees it go).
+signal cheese_changed(side: int, amount: int)
 signal match_ended(winner: int)
 
 const DIRECTOR_GROUP: StringName = &"match_director"
 ## No winner: the clock ran out level.
 const DRAW: int = -1
+
+## Who the mice are, per crew, by seat. Flavour, and cheap -- but the roster is a list of names
+## and "BotBLUE2" on it makes your own crew read as scenery. Distinct across the two crews so a
+## name in the feed is never ambiguous.
+const CREW_NAMES: Array = [
+	["NIBS", "PIP", "TUFT", "BURR", "SNIP", "MOTE"],
+	["BRIE", "WICK", "GRIT", "RUSK", "CHAFF", "DUSK"],
+]
 
 @export var blue_nest_path: NodePath
 @export var red_nest_path: NodePath
@@ -55,6 +67,18 @@ const DRAW: int = -1
 ## do not stand on each other, they launch.
 @export var spawn_spread: float = 0.4
 
+@export_group("Cheese")
+## What each crew starts the match with. GDD section 2: cheese is the team's respawn supply,
+## not a second score -- the team's health bar.
+##
+## THE LEDGER, NOT THE ECONOMY. A respawn costs one, and that is the whole system for now.
+## Caches to raid, cheese you can carry and drop, spending it on Scurry, and the twenty-second
+## respawn at zero are M6, and they belong together: the slow respawn without any way to refill
+## the pool is a death spiral, which is a worse game than no economy at all. So the counter
+## ticks down honestly and nothing yet depends on it -- the number on the HUD is real, and the
+## consequences arrive in one piece.
+@export var starting_cheese: int = 20
+
 @export_group("Bots")
 ## Mice per crew, the player included. Solo play is the same match with AI in every other seat
 ## (GDD section 1), so this is one honest number rather than two bot counts: the player takes a
@@ -70,6 +94,7 @@ var _nests: Array[Nest] = []
 var _banners: Array[Banner] = []
 var _player: Mouse
 var _score: Array[int] = [0, 0]
+var _cheese: Array[int] = [0, 0]
 var _clock: float = 0.0
 var _playing: bool = true
 var _winner: int = DRAW
@@ -94,10 +119,12 @@ func _ready() -> void:
 	_nests = [blue, red]
 	_banners = [blue.get_banner(), red.get_banner()]
 	_clock = match_seconds
+	_cheese = [starting_cheese, starting_cheese]
 
 	_player = get_node_or_null(player_path) as Mouse
 	if _player != null:
 		_player.set_team(Team.BLUE)
+		_name_seat(_player, Team.BLUE, 0)
 		_send_home(_player)
 
 	# Deferred, because a node cannot gain siblings while its parent is still building its
@@ -126,6 +153,12 @@ func banner_of(side: int) -> Banner:
 
 func score_of(side: int) -> int:
 	return _score[side]
+
+
+## What a crew has left in its stores. The second-most important number on the HUD, because it
+## is lives (GDD section 10).
+func cheese_of(side: int) -> int:
+	return _cheese[side]
 
 
 func time_left() -> float:
@@ -204,7 +237,7 @@ func _check_pickup(mouse: Mouse) -> void:
 		if _within(mouse, theirs, pickup_radius):
 			theirs.take(mouse)
 			event.emit("%s takes the %s banner" % [
-				Team.name_of(mouse.team), Team.name_of(theirs.team)
+				mouse.get_display_name(), Team.name_of(theirs.team)
 			])
 			return
 
@@ -262,8 +295,28 @@ func _on_scruffed(mouse: Mouse, by: Mouse) -> void:
 			event.emit("the %s banner is dropped" % Team.name_of(banner.team))
 
 	_down[mouse] = respawn_seconds
+	# The life, charged at the moment it is spent rather than when the mouse stands back up. You
+	# are down, the crew is already a cheese poorer, and the counter ticking as you hit the dirt
+	# is the whole reason it is on screen (GDD section 10).
+	_spend_cheese(mouse.team, 1)
 	if by != null:
-		event.emit("%s scruffs %s" % [Team.name_of(by.team), Team.name_of(mouse.team)])
+		event.emit("%s scruffs %s" % [by.get_display_name(), mouse.get_display_name()])
+
+
+## Take cheese off a crew's pile. Floors at zero and says so once.
+##
+## Zero is SURVIVABLE, deliberately (GDD section 2). The bankruptcy play -- concede a capture,
+## pull everyone off defence, go and refill the pool -- only exists because running out is a
+## setback rather than an ending, and it is one of the best things about cheese-as-lives. What
+## running out actually costs is M6's to decide, alongside the caches that let you fix it.
+func _spend_cheese(side: int, amount: int) -> void:
+	if _cheese[side] <= 0:
+		return
+	var before := _cheese[side]
+	_cheese[side] = maxi(0, before - amount)
+	cheese_changed.emit(side, _cheese[side])
+	if _cheese[side] == 0:
+		event.emit("%s IS OUT OF CHEESE" % Team.name_of(side))
 
 
 func _tick_respawns(delta: float) -> void:
@@ -317,6 +370,7 @@ func _finish(winner: int) -> void:
 ## one match.
 func _reset() -> void:
 	_score = [0, 0]
+	_cheese = [starting_cheese, starting_cheese]
 	_clock = match_seconds
 	_winner = DRAW
 	_playing = true
@@ -328,7 +382,18 @@ func _reset() -> void:
 		if mouse != null:
 			_send_home(mouse)
 	score_changed.emit(0, 0)
+	for side in [Team.BLUE, Team.RED]:
+		cheese_changed.emit(side, _cheese[side])
 	event.emit("MATCH START -- steal the %s banner" % Team.name_of(Team.RED))
+
+
+## Give a mouse the name its seat carries, unless the scene already named it. Nothing depends on
+## a name being unique; it is on screen, and that is the whole job.
+func _name_seat(mouse: Mouse, side: int, seat: int) -> void:
+	if not mouse.display_name.is_empty():
+		return
+	var pool: Array = CREW_NAMES[side]
+	mouse.display_name = pool[seat % pool.size()]
 
 
 # --------------------------------------------------------------------------------- roster
@@ -368,6 +433,7 @@ func _spawn_bots() -> void:
 			bot.name = "Bot%s%d" % [Team.name_of(side), seat]
 			bot.team = side
 			bot.role = Bot.DEFENDER if seat % 2 == 1 else Bot.RAIDER
+			_name_seat(bot, side, seat)
 			# Positioned BEFORE it enters the tree. A body that exists at the origin for one
 			# frame and is moved afterwards depenetrates against its old overlap and its new
 			# transform at once, which fires whoever was standing there across the arena.

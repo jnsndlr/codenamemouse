@@ -43,6 +43,13 @@ const MOUSE_GROUP: StringName = &"mouse"
 @export_group("Crew")
 ## Set before the mouse enters the tree where possible; `set_team` handles it afterwards.
 @export_enum("Blue", "Red") var team: int = Team.BLUE
+## Which of the four this mouse is (GDD section 4). A LABEL and nothing else until M4 gives the
+## classes their stats and abilities -- see mouse_class.gd for why that is honest rather than a
+## stub. The roster reads it; nothing in this file behaves differently because of it yet.
+@export_enum("Generalist", "Bruiser", "Engineer", "Scout") var mouse_class: int = MouseClass.GENERALIST
+## What the roster calls this mouse. Blank means fall back to the node name, which is what the
+## headless audits get -- they build mice directly and have no use for flavour.
+@export var display_name: String = ""
 
 @export_group("Movement")
 @export var speed: float = 3.0
@@ -148,6 +155,15 @@ func _ready() -> void:
 
 
 # ------------------------------------------------------------------------------ identity
+
+
+## The name on the roster. Never empty -- a nameless row is worse than an ugly one.
+func get_display_name() -> String:
+	return display_name if not display_name.is_empty() else String(name)
+
+
+func get_class_name() -> String:
+	return MouseClass.name_of(mouse_class)
 
 
 func set_team(side: int) -> void:

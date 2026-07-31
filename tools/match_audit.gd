@@ -30,6 +30,11 @@ extends SceneTree
 ##   MATCH_END       The cap ends the match; the clock names the leader.
 ##   BOTS_MOVE       Bots actually leave the nest. Covers the whole chain -- navmesh, agent,
 ##                   director, control loop -- with one number that cannot be argued with.
+##   SPOTTING        What the minimap is allowed to show. An enemy your crew can see appears;
+##                   one behind a prop, one on another plane, and one nobody has laid eyes on do
+##                   not. A contact goes stale where it was last seen and is forgotten on time.
+##                   This is hidden information (GDD section 3) and every failure of it leaks
+##                   the wrong way -- silently, and in the direction of knowing too much.
 ##
 ## TIMED RULES ARE TESTED SHORT. The audit sets the return clock and the respawn to fractions
 ## of a second rather than waiting the real twenty and six. Those numbers are balance dials
@@ -63,6 +68,7 @@ func _initialize() -> void:
 		["respawn", _check_respawn],
 		["match_end", _check_match_end],
 		["bots_move", _check_bots_move],
+		["spotting", _check_spotting],
 	]
 
 	for check: Array in checks:
@@ -371,6 +377,95 @@ func _check_bots_move() -> void:
 				bot.name, home.distance_to(bot.global_position), bot.get_intent()
 			]
 		)
+
+
+## What one crew is allowed to know about the other.
+##
+## Every check here is about a NEGATIVE -- the enemy who must NOT appear on the map -- because
+## that is the direction this system fails in. A spot that fails to register is visible the
+## first time you play; a spot that registers when it shouldn't looks exactly like a spot that
+## should, and quietly hands away the hidden information the tunnel layer is built on.
+##
+## Timings are shortened the same way the return clock is: the mechanism must work, and the
+## fifteen seconds is a balance dial.
+func _check_spotting() -> void:
+	await _arena(1)
+	var eyes := _scene.get_node("Spotting") as Spotting
+	eyes.interval = 0.05
+	eyes.memory_seconds = 0.8
+
+	# In the open, in range, nothing in the way.
+	var watcher := _puppet(Team.BLUE, Vector3(0.0, 0.2, 0.0))
+	var seen := _puppet(Team.RED, Vector3(5.0, 0.2, 0.0))
+	await _advance(0.2)
+	var book: Dictionary = eyes.contacts_for(Team.BLUE)
+	_expect(book.has(seen), "an enemy in the open is spotted")
+	_expect(bool(book.get(seen, {}).get("live", false)), "and the contact is live while seen")
+	# Both crews keep their own book, and it is the same rule twice -- red spots blue exactly as
+	# blue spots red. It has to already be true for their side the day bots read this.
+	_expect(eyes.contacts_for(Team.RED).has(watcher), "the other crew spots symmetrically")
+
+	# Out of range: the contact must stay behind at the last place it was seen rather than
+	# following them. A marker that tracks someone you cannot see is a lie the map is telling.
+	seen.global_position = Vector3(0.0, 0.2, 30.0)
+	await _advance(0.25)
+	book = eyes.contacts_for(Team.BLUE)
+	_expect(book.has(seen), "a contact is remembered after they break away")
+	_expect(not bool(book.get(seen, {}).get("live", true)), "and is no longer live")
+	var frozen: Vector3 = book.get(seen, {}).get("at", Vector3.ZERO)
+	_expect(
+		frozen.distance_to(Vector3(5.0, 0.2, 0.0)) < 1.0,
+		"the marker stays where they were last seen (drifted %.1fm)" % frozen.distance_to(
+			Vector3(5.0, 0.2, 0.0)
+		)
+	)
+	# A fresh contact is worth as much as a live one -- the marker only thins out over the last
+	# stretch of its memory, so "they were here a moment ago" reads as fact and "they were here a
+	# while ago" reads as a guess. Checked in both halves, because a fade that started
+	# immediately would make every contact look untrustworthy the instant it stopped being live.
+	_expect(eyes.confidence(book[seen]) >= 1.0, "a just-lost contact is still fully trusted")
+	await _advance(0.4)
+	_expect(eyes.confidence(book[seen]) < 1.0, "an old contact fades before it goes")
+
+	await _advance(0.4)
+	_expect(not eyes.contacts_for(Team.BLUE).has(seen), "a contact is forgotten on time")
+
+	# Behind a prop, and directly below. Neither is visible, and the second is the rule the whole
+	# tunnel layer rests on.
+	await _arena(1)
+	eyes = _scene.get_node("Spotting") as Spotting
+	eyes.interval = 0.05
+	var blocked_watcher := _puppet(Team.BLUE, Vector3(11.0, 0.2, -12.5))
+	var behind := _puppet(Team.RED, Vector3(11.0, 0.2, -5.5))
+	var below := _puppet(Team.RED, Vector3(12.0, 0.2, -13.0))
+	below.set_plane(1)
+	await _advance(0.2)
+	book = eyes.contacts_for(Team.BLUE)
+	_expect(not book.has(behind), "an enemy behind a prop is not spotted")
+	_expect(not book.has(below), "an enemy on another plane is not spotted")
+
+	# And the same enemy, once they step out from behind it, is.
+	behind.global_position = Vector3(14.0, 0.2, -12.0)
+	await _advance(0.2)
+	_expect(
+		eyes.contacts_for(Team.BLUE).has(behind),
+		"the same enemy is spotted once they step into the open"
+	)
+	_expect(blocked_watcher.get_plane() == 0, "the watcher stayed on the surface")
+
+	# A carrier cannot hide, at any range, behind anything (GDD section 2).
+	await _arena(1)
+	eyes = _scene.get_node("Spotting") as Spotting
+	eyes.interval = 0.05
+	var thief := _puppet(Team.RED, _director.banner_of(Team.BLUE).global_position)
+	await _advance(0.2)
+	_expect(thief.is_carrying(), "the puppet took our banner")
+	thief.global_position = Vector3(0.0, 0.2, 34.0)
+	await _advance(0.2)
+	_expect(
+		eyes.contacts_for(Team.BLUE).has(thief),
+		"a carrier is spotted wherever they are"
+	)
 
 
 # ------------------------------------------------------------------------------ the harness

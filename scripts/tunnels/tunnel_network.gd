@@ -276,6 +276,15 @@ func cell_count(plane: int) -> int:
 	return _cells[plane].size()
 
 
+## Every dug cell on a plane, as Vector2i grid coordinates.
+##
+## For anything that has to draw or walk the whole network rather than ask about one cell: the
+## minimap today, AStar3D pathing for bots at M4. Handing back the keys costs one allocation and
+## saves the caller a five-thousand-cell scan of the arena to find a few dozen tiles.
+func dug_cells(plane: int) -> Array:
+	return _cells[clampi(plane, 0, PLANE_COUNT - 1)].keys()
+
+
 ## A shaft leading DOWN from this cell, to `plane + 1`.
 func has_shaft_down(plane: int, cell: Vector2i) -> bool:
 	return plane >= 0 and plane < PLANE_COUNT and _shafts[plane].has(cell)

@@ -35,6 +35,35 @@ your head. See the findings in the implementation plan.
 - **The flag cannot enter a tunnel.** Tunnels move mice, never objectives.
 - **Carriers can't hide.** The banner floats above your head and grass concealment switches off.
 
+### The HUD
+
+GDD §10's furniture, built now that there are systems behind it.
+
+- **Score bug, top centre** — both scores, the clock, both banners and **both crews' cheese**,
+  as one object. Cheese is lives, so "how are we doing" is one question about all of them.
+  A banner glyph per crew: solid is home, pulsing is stolen, dim is dropped. A strip appears
+  under the bug with the return countdown, and only while something is actually away.
+- **Minimap, bottom left** — the yard, the tunnels on every plane, the nests, both banners
+  and your crew. **It turns with the view**, so up on the map is up the screen; at the fixed
+  45° yaw that draws the yard as the diamond the concept art has.
+- **Crew roster, bottom right** — name, class, health, and whose banner they are carrying.
+  Your own row is flagged gold; a scruffed one shows its respawn clock.
+- **Event feed, bottom centre-left**, next to the map, stacking upward so the newest line is
+  always at the same height.
+
+**Enemies appear on the map only once your crew has seen them** — same range, same line of
+sight, and the same concealment number the grass fades you with, so sneaking past a defender
+keeps you off the map for exactly the reason it keeps you off the screen. A contact is held
+for 15s after they break away, **frozen where they were last seen** and fading, so an old
+marker reads as the guess it is. Carriers are always visible (§2). See
+[`scripts/game/spotting.gd`](scripts/game/spotting.gd).
+
+Two things on screen are ahead of their systems, deliberately, and both are honest:
+**cheese** is a real ledger (20 per crew, −1 per respawn) but nothing yet depends on running
+out — caches, spending and the zero-cheese respawn are M6, and they have to land together or
+empty is a death spiral. **Class** is a name only; the stats and abilities are M4, and every
+mouse today genuinely is a Generalist.
+
 ### Running it
 
 Open the project in Godot 4.7+ and press F5, or:
@@ -69,8 +98,12 @@ than flies when you respawn.
 ### What to fiddle with
 
 On **MatchDirector**: `crew_size` (3), `capture_limit` (3), `match_seconds` (480),
-`respawn_seconds` (6), `pickup_radius`. On a **Nest**: `radius` — how generous a capture is.
-On a **Banner**: `return_seconds` (20).
+`respawn_seconds` (6), `pickup_radius`, `starting_cheese` (20). On a **Nest**: `radius` — how
+generous a capture is. On a **Banner**: `return_seconds` (20).
+
+On **Spotting**: `sight_range` (14), `memory_seconds` (15 — how long a contact outlives the
+sighting), `reveal_opacity` (0.35 — how visible you must be to register at all), `interval`
+(0.25, which doubles as reaction time).
 
 On **Player** (and every mouse, via the shared base): `speed` (3), `acceleration` (30),
 `turn_speed` (10 — the main weight dial), `carry_penalty` (0.25 — per-class at M4, and the whole
@@ -96,7 +129,9 @@ Two headless invariant suites. Both must pass; both exit non-zero if they don't.
 
 The first builds eighteen awkward tunnel networks and asserts you cannot fall out of any of
 them. The second plays out the flag rules — steal, capture, drop, return, respawn, the flag
-underground, who a swing may hit — and checks the bots can path between the nests at all.
+underground, who a swing may hit — checks the bots can path between the nests at all, and
+checks **who may appear on the minimap**: not through a prop, not through a plane, not without
+being seen, and forgotten on time.
 
 ## Layout
 
@@ -105,9 +140,10 @@ docs/           design documents
 art/            Blender source files and shaders, imported directly by Godot
 scenes/         player, bots, maps
 scripts/actors/ the mouse itself — locomotion, health, melee, carrying
-scripts/game/   teams, nests, banners, the match rules
+scripts/game/   teams, nests, banners, the match rules, who can see whom
 scripts/ai/     bots
-scripts/        player, camera, tunnels, maps, ui, input setup
+scripts/ui/     score bug, minimap, roster, feed, and the skin they share
+scripts/        player, camera, tunnels, maps, input setup
 tools/          headless audits
 ```
 

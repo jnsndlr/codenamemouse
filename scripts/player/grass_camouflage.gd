@@ -50,6 +50,14 @@ func _ready() -> void:
 		set_process(false)
 
 
+## How visible this mouse is right now, 0..1 -- the smoothed figure actually on screen, not the
+## target. Exposed because spotting.gd decides what reaches the minimap with it: what your crew
+## can pick out has to be the same thing your eyes can pick out, or concealment means two
+## different things and neither is teachable.
+func opacity_of(mouse: Mouse) -> float:
+	return _opacity.get(mouse, 1.0)
+
+
 func _process(delta: float) -> void:
 	for node in get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
 		var mouse := node as Mouse

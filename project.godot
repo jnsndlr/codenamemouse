@@ -26,21 +26,9 @@ window/size/viewport_height=720
 
 [navigation]
 
-; Voxel resolution the navmesh is baked at, and it has to be set at mouse scale rather than
-; left at Godot's human-scale 0.25. A mouse is 0.32 across, so a quarter-metre voxel is a third
-; of the character -- gaps it fits through vanish, and every agent dimension gets rounded to
-; something that isn't what you asked for. A region whose cell size differs from the map's is
-; rejected outright, which is why this is a project setting rather than a knob on the region.
 3d/default_cell_size=0.1
 3d/default_cell_height=0.1
 
 [physics]
 
 3d/default_gravity=20.0
-
-[rendering]
-
-; MSAA off, deliberately. Antialiasing spends effort softening exactly the hard edges the
-; pixel pass exists to produce, and a smoothed depth buffer blurs the steps it detects them
-; from. Turn this back on only if the pixel pass is removed.
-anti_aliasing/quality/msaa_3d=0
