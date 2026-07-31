@@ -425,6 +425,54 @@ It found four families of bug, three of which the spike had been shipping:
 
 ---
 
+### M2.5 — Reactive grass (2–4 evenings)
+
+**Question:** does bending grass read as a *tell* — can you look across a lane and know
+someone is there, and roughly how fast they're moving?
+
+This is inserted ahead of M3, and it **reverses this plan's own deferral** of tall grass to
+post-M9 (see *What we deliberately don't build yet*). That deferral called it "a shader
+problem, not a systems problem," which was wrong on the second half. GDD §8 is explicit that
+it is the best system in the document, and for a systems reason: **it is hidden information
+that isn't a class ability.** Every class makes the stealth/speed trade, everyone can read the
+tell, and it costs no cooldown and no resource. That is a mechanic, and mechanics get tested.
+
+- A reactive grass shader, ported and hooked to player position and velocity
+- A few grass patches in the arena — patches, not a lawn; this is cover, not decoration
+- The **speed ladder (§9) drives the bend**, which is the whole point of the milestone
+
+**Done when:** standing still in grass, you feel hidden — and you can spot someone else
+crossing a patch without seeing the mouse itself.
+
+**Not in scope:** actual concealment rules (does grass really break line of sight?), Scout
+camouflage stacking, grass on any map but this one, tuning the stealth balance. This
+milestone answers whether the *tell* reads. Whether it's fair is M5's problem, when hidden
+information gets built for real.
+
+> **Transparency and the pixel pass are not independent, and finding that out cost a bug.**
+> The pixel pass repaints the whole frame by resampling a screen texture captured after the
+> **opaque** pass. Anything in the transparent queue is therefore absent from that capture
+> and gets erased — so the first concealment build made the mouse invisible everywhere, at
+> every opacity including fully solid. Dithered transparency (`TRANSPARENCY_ALPHA_HASH`)
+> stays in the opaque pass and fixes it, and also keeps the mouse in the depth buffer so the
+> pass still finds its silhouette. **Anything added later that wants to fade must dither**,
+> or it will disappear rather than fade.
+
+> **Why it goes before M3 rather than after.** The flag run is a chase across open ground, and
+> M3's question is whether that chase is tense. Grass changes what the surface *is* — it turns
+> a flat lane into cover and sightline. Building the loop on bare ground and adding cover after
+> means tuning the chase twice, and the second tune invalidates the first verdict.
+
+> **The bend should be CONTINUOUS in speed, not four discrete tiers**, and this resolves a
+> real inconsistency between the two documents. GDD §8's table lists Sprint / Run / Walk /
+> Slow, but §9's ladder is Slow / Run / Sprint / Scurry — there is no "Walk" tier on a
+> keyboard, and §9 says so itself: the stick gives a Slow-to-Run *continuum* while the
+> keyboard gets discrete keys. Driving the bend from `get_horizontal_speed()` makes both fall
+> out of one curve, and it means Scurry (§9, and absent from §8's table) is loudest for free
+> when the economy lands at M6.
+
+---
+
 ### M3 — The core loop (1 week)
 
 **Question:** is the flag run tense?
@@ -554,7 +602,11 @@ non-capsule mouse.
 - Procedural map variation (GDD §8) — one hand-built layout until the systems are proven
 - Free-form digging and free-angle placement — snapped chunks only
 - **Flowing water** — binary flooding at M8c, flow simulation post-M9
-- **Tall grass bending** (GDD §8) — a shader problem, not a systems problem. Post-M9.
+- ~~**Tall grass bending** (GDD §8) — a shader problem, not a systems problem. Post-M9.~~
+  **Reversed — it is M2.5**, ahead of the core loop. It is a systems problem: the bend is
+  hidden information every class can produce and read, which makes it a mechanic, not a
+  finish. Building the flag chase on bare ground and adding cover afterwards would mean
+  tuning the chase twice.
 - **Scout camouflage shader** — placeholder transparency until then
 - The Juggernaut and Generalist — M9 at the earliest
 - Audio beyond crude placeholders

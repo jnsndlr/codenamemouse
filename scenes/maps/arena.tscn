@@ -9,8 +9,10 @@
 [ext_resource type="Script" path="res://scripts/ui/contextual_hint.gd" id="7_hint"]
 [ext_resource type="Script" path="res://scripts/maps/rock_scatter.gd" id="8_rocks"]
 [ext_resource type="Script" path="res://scripts/player/fall_guard.gd" id="9_fall"]
-[ext_resource type="Shader" path="res://art/shaders/pixel_edges.gdshader" id="10_pixel"]
+[ext_resource type="Script" path="res://scripts/rendering/pixel_edges_effect.gd" id="10_pixel"]
 [ext_resource type="Script" path="res://scripts/ui/look_panel.gd" id="11_look"]
+[ext_resource type="Script" path="res://scripts/maps/grass_patch.gd" id="12_grass"]
+[ext_resource type="Script" path="res://scripts/player/grass_camouflage.gd" id="13_camo"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_top_color = Color(0.28, 0.44, 0.66, 1)
@@ -58,17 +60,18 @@ roughness = 1.0
 material = SubResource("Mat_earth")
 size = Vector3(130, 1, 130)
 
-[sub_resource type="ShaderMaterial" id="Mat_pixel"]
-render_priority = 127
-shader = ExtResource("10_pixel")
-shader_parameter/pixel_size = 4.0
-shader_parameter/depth_edge_strength = 0.4
-shader_parameter/normal_edge_strength = 0.3
-shader_parameter/depth_edge_threshold = 0.1
-shader_parameter/edge_dead_zone = 0.5
-shader_parameter/normal_edge_threshold = 0.25
+[sub_resource type="CompositorEffect" id="Effect_pixel"]
+script = ExtResource("10_pixel")
+pixel_size = 1.0
+depth_edge_strength = 0.4
+normal_edge_strength = 0.3
+depth_edge_threshold = 0.1
+edge_dead_zone = 0.5
+normal_edge_threshold = 0.25
+debug_view = 0
 
-[sub_resource type="QuadMesh" id="Mesh_pixel"]
+[sub_resource type="Compositor" id="Compositor_pixel"]
+compositor_effects = [SubResource("Effect_pixel")]
 
 [sub_resource type="LabelSettings" id="Label_hud"]
 font_size = 19
@@ -124,6 +127,9 @@ material = SubResource("Mat_wall")
 [node name="Rocks" type="Node3D" parent="Surface"]
 script = ExtResource("8_rocks")
 
+[node name="Grass" type="Node3D" parent="Surface"]
+script = ExtResource("12_grass")
+
 [node name="PropA" type="MeshInstance3D" parent="Surface"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 11, 0.7, -9)
 mesh = SubResource("Mesh_prop")
@@ -167,8 +173,10 @@ target = NodePath("../Player")
 zoom_idle = 11.0
 zoom_run = 12.5
 zoom_sprint = 14.0
-pixel_aligned_panning = true
-pixel_size = 4.0
+pixel_aligned_panning = false
+pixel_size = 1.0
+follow_speed = 1.0
+aim_lead = 0.0
 
 [node name="Pitch" type="Node3D" parent="CameraRig"]
 
@@ -178,12 +186,7 @@ projection = 1
 size = 11.0
 near = 0.05
 far = 200.0
-
-[node name="PixelPass" type="MeshInstance3D" parent="CameraRig/Pitch/Camera3D"]
-extra_cull_margin = 16384.0
-cast_shadow = 0
-mesh = SubResource("Mesh_pixel")
-material_override = SubResource("Mat_pixel")
+compositor = SubResource("Compositor_pixel")
 
 [node name="DigController" type="Node" parent="."]
 script = ExtResource("4_dig")
@@ -202,10 +205,17 @@ environment_path = NodePath("../WorldEnvironment")
 script = ExtResource("9_fall")
 player_path = NodePath("../Player")
 
+[node name="GrassCamouflage" type="Node" parent="."]
+script = ExtResource("13_camo")
+player_path = NodePath("../Player")
+grass_path = NodePath("../Surface/Grass")
+
 [node name="LookPanel" type="CanvasLayer" parent="."]
 script = ExtResource("11_look")
-pixel_pass_path = NodePath("../CameraRig/Pitch/Camera3D/PixelPass")
+camera_path = NodePath("../CameraRig/Pitch/Camera3D")
 camera_rig_path = NodePath("../CameraRig")
+grass_path = NodePath("../Surface/Grass")
+camouflage_path = NodePath("../GrassCamouflage")
 
 [node name="HUD" type="CanvasLayer" parent="."]
 

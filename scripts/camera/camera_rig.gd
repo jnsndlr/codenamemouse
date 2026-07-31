@@ -32,6 +32,13 @@ extends Node3D
 @export var swivel_speed: float = 9.0
 
 @export_group("Speed zoom")
+## Whether the view widens with speed at all. Off pins it at `zoom_idle` forever.
+##
+## Worth being able to switch off in one click rather than by flattening three numbers: a
+## breathing view is the kind of thing that feels great for ten seconds and tiring for ten
+## minutes, and that is only answerable by turning it off mid-play and noticing whether you
+## miss it. It also removes the moving part that fights `pixel_aligned_panning`.
+@export var speed_zoom: bool = true
 ## Orthographic view height when standing still. Smaller is more zoomed in.
 @export_range(4.0, 40.0, 0.25) var zoom_idle: float = 7.5
 ## View height at full walking speed.
@@ -46,12 +53,30 @@ extends Node3D
 @export_group("Pixel grid")
 ## Hold the rendered image still on the fat-pixel grid while the camera slides underneath it.
 ##
-## Without this the camera moves in continuous world units while the image it produces is
-## quantised into blocks, so a static edge sits in one block for a while and then jumps to the
-## next. Every straight line in the world crawls and fizzes as you walk. It is the single
-## worst artefact of rendering chunky pixels and it does not show up in a screenshot -- only
-## in motion -- which is exactly why it is worth a toggle you can flip while running.
-@export var pixel_aligned_panning: bool = true
+## OFF, and that reverses the reference project's choice for a reason specific to this game.
+##
+## What it buys is the end of edge crawl: without it the camera moves in continuous world
+## units while the image is quantised into blocks, so a static edge sits in one block for a
+## while and then flips to the next, and every straight line fizzes as you walk. What it costs
+## is that the world can then only move in whole-pixel steps, so the camera judders -- and the
+## judder scales with `pixel_size`, because that is the size of the step.
+##
+## Two things make that trade bad here rather than merely a matter of taste:
+##
+##   The camera zooms CONSTANTLY. `_camera.size` rides player speed (see the Speed zoom group),
+##   and a fat pixel is a fraction of that size -- so the grid being snapped to is resized
+##   every frame the view breathes. The rounding target then moves on its own, independently
+##   of the player, and the result is not clean pixel stepping but erratic jumping. The
+##   reference has a fixed camera that never zooms, which is why it never meets this.
+##
+##   The camera FOLLOWS. A fixed or grid-stepped camera has nothing to judder against; one
+##   that smoothly tracks a moving player spends its whole life mid-step.
+##
+## Left as a toggle rather than deleted, because it is the correct technique for a camera that
+## doesn't zoom, and the panel makes the difference a keypress away. If crawl turns out to be
+## the greater evil, the better fix is to slide the SHADER's sampling grid with the camera
+## instead of snapping the camera to the shader's grid -- same stability, no judder.
+@export var pixel_aligned_panning: bool = false
 ## Must match the pixel pass's own `pixel_size`, or the camera snaps to the wrong grid and
 ## makes the crawl worse rather than better. The look panel drives both from one slider.
 @export_range(1.0, 20.0, 1.0) var pixel_size: float = 4.0
@@ -209,7 +234,7 @@ func _current_speed() -> float:
 
 
 func _wanted_zoom() -> float:
-	if not _target.has_method("get_horizontal_speed"):
+	if not speed_zoom or not _target.has_method("get_horizontal_speed"):
 		return zoom_idle
 
 	var current := _speed_signal

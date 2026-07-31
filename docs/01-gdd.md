@@ -540,6 +540,36 @@ visible to everyone:
 > could do is Run, and half this table would only exist for controller players feathering
 > the stick.
 
+**How visible you are while in it** `[DECIDED]` — the other half, and the half that makes
+the bending worth reading. A mouse that stays fully drawn in a patch isn't concealed by
+anything, and the wake would then be a tell about someone you could already see:
+
+| In cover, moving at | Opacity |
+|---|---|
+| **Still, or Slow** | **10%** |
+| Run | ~50% |
+| **Sprint** | **80%** |
+| **Scurry** (§9, costs cheese) | **100%** |
+
+**Ten percent in thick grass is basically invisible — but it gives some chance.** That is
+the intended reading, not a number to be talked upward later. Someone who stops moving in
+deep cover should be genuinely lost, and finding them should feel like catching a flicker
+rather than like spotting a target. It is never zero, because hidden information (§3) is
+about not being *found*, never about being unhittable once you have been.
+
+> **Scurry is fully visible on purpose.** Buying speed with cheese must not also buy
+> stealth, or the economy becomes the strictly-best way to move unseen and Slow stops being
+> the stealth tier at all.
+
+> **One curve drives both the bend and the opacity.** The rung you are on decides how hard
+> the grass moves *and* how solid you are, from the same number — so you can never be
+> invisible while tearing a wake, or exposed while leaving the grass untouched. That
+> equivalence is what makes the system teachable without a tutorial: what you see happen to
+> the grass **is** what is happening to you.
+
+> **Concealment fades at the patch rim** rather than switching on at a boundary. A hard edge
+> makes the rim a line to sit exactly on; a soft one makes it a real place with real risk.
+
 This is the best system in the doc for one reason: **it's hidden information that isn't
 a class ability.** Every class gets to make the stealth/speed tradeoff, everyone can read
 the tell, and it costs no cooldowns or resources. The Scout is simply *better* at it
@@ -547,6 +577,12 @@ the tell, and it costs no cooldowns or resources. The Scout is simply *better* a
 
 > **Implementation:** a vertex shader displacing grass blades from nearby character
 > positions and velocities. Standard technique, cheap, and it looks great in motion.
+> Concealment is **plain transparency** — the mouse fades against whatever is actually behind
+> it. Getting there meant moving the pixel pass to run *after* the transparent pass; before
+> that it repainted the frame from an opaque-only capture and erased anything translucent, and
+> the two workarounds for it (dithering, recolouring toward the grass) both looked worse than
+> the thing they replaced. **Grass is worth the render-pipeline work.** Fading is now available
+> to anything that wants it, which the Scout's camouflage (§4) will.
 
 > **Each map is four floors.** No-surface zones and per-plane rock obstructions (§3)
 > mean the underground has as much designed personality as the surface — and a map isn't

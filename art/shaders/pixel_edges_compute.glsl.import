@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dcr1376erc1jf"
+path="res://.godot/imported/pixel_edges_compute.glsl-0e83c248deb0169f0e714c65628408df.res"
+
+[deps]
+
+source_file="res://art/shaders/pixel_edges_compute.glsl"
+dest_files=["res://.godot/imported/pixel_edges_compute.glsl-0e83c248deb0169f0e714c65628408df.res"]
+
+[params]
+

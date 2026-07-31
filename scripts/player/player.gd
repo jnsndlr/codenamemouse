@@ -74,6 +74,8 @@ var _aim_point: Vector3 = Vector3.ZERO
 var _stamina: float = 0.0
 var _regen_timer: float = 0.0
 var _sprinting: bool = false
+## Shared by every mesh in the model. See apply_team_color and get_body_material.
+var _body_material: StandardMaterial3D
 var _since_forward_tap: float = 999.0
 
 
@@ -81,6 +83,10 @@ func _ready() -> void:
 	apply_team_color(team_color)
 	_facing = _visual.rotation.y
 	_stamina = sprint_seconds
+	# Anything that bends grass joins this group (GDD section 8). Declared by the mouse rather
+	# than collected by the grass, so the bots at M3 and the world creatures at M8 bend it by
+	# existing rather than by being wired up.
+	add_to_group(&"grass_actor")
 
 
 ## Flat tint across every mesh in the model. Deliberately crude for now — once classes
@@ -91,8 +97,20 @@ func apply_team_color(colour: Color) -> void:
 	var material := StandardMaterial3D.new()
 	material.albedo_color = colour
 	material.roughness = 0.85
+	# Real alpha, at last. This was TRANSPARENCY_ALPHA, then a dither, then a recolour, each
+	# because the pixel pass ran before transparency and erased anything translucent. The pass
+	# is a CompositorEffect now and runs after it, so ordinary blending simply works.
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_body_material = material
 	for node in _visual.find_children("*", "MeshInstance3D", true, false):
 		(node as MeshInstance3D).material_override = material
+
+
+## The one material every part of the mouse shares, so concealment can fade the whole body
+## without walking the model. Handed out rather than proxied, for the same reason the grass
+## hands out its own: one owner for the value, and no second copy to drift.
+func get_body_material() -> StandardMaterial3D:
+	return _body_material
 
 
 ## Where the cursor currently sits on the ground plane. This is the aim source — thrown

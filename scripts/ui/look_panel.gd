@@ -34,6 +34,49 @@ const CONTROLS: Array[Dictionary] = [
 		"target": "shader"},
 	{"name": "normal_edge_threshold", "label": "normalEdgeThreshold", "min": 0.02, "max": 1.0,
 		"step": 0.01, "target": "shader"},
+	# Camera motion. Not part of the look pass, but "should the camera move at all" is a
+	# question you answer by taking each motion away separately while walking around, and
+	# there are three of them: it lags behind you (followSpeed), it leans toward the cursor
+	# (aimLead), and it breathes with your speed (speedZoom, below). Zero the first two and
+	# clear the third and the camera is welded to the player.
+	# Runs to 100 rather than to the rig's own default of 8 because the interesting end of this
+	# slider is the far one. The follow is exponential, so it approaches welded-to-the-player
+	# without ever arriving: 8 catches up on about an eighth of the gap per frame, 100 on four
+	# fifths, which is close enough to rigid to judge whether rigid is what you want.
+	{"name": "follow_speed", "label": "followSpeed", "min": 1.0, "max": 100.0, "step": 1.0,
+		"target": "rig"},
+	{"name": "aim_lead", "label": "aimLead", "min": 0.0, "max": 1.0, "step": 0.01,
+		"target": "rig"},
+	# Grass (GDD section 8). Split across two owners on purpose: how far and how hard a blade
+	# moves is a rendering number and lives on the shader, but WHICH SPEEDS produce a tell is
+	# a balance number and lives on the patch node. Tuning the second is a design decision.
+	{"name": "radius", "label": "grassRadius", "min": 0.2, "max": 3.0, "step": 0.05,
+		"target": "grass_shader"},
+	{"name": "interact_power", "label": "grassBend", "min": 0.0, "max": 0.8, "step": 0.01,
+		"target": "grass_shader"},
+	{"name": "tip_taper", "label": "tipTaper", "min": 0.0, "max": 1.0, "step": 0.05,
+		"target": "grass_shader"},
+	{"name": "wind_strength", "label": "windStrength", "min": 0.0, "max": 0.3, "step": 0.005,
+		"target": "grass_shader"},
+	{"name": "springback_seconds", "label": "springbackSecs", "min": 0.0, "max": 6.0,
+		"step": 0.1, "target": "grass"},
+	{"name": "trail_spacing", "label": "trailSpacing", "min": 0.05, "max": 1.5, "step": 0.05,
+		"target": "grass"},
+	{"name": "quiet_speed", "label": "quietSpeed", "min": 0.0, "max": 5.0, "step": 0.05,
+		"target": "grass"},
+	{"name": "loud_speed", "label": "loudSpeed", "min": 0.5, "max": 8.0, "step": 0.05,
+		"target": "grass"},
+	# The other half of the tell: how visible the mouse itself is while in cover.
+	{"name": "hidden_opacity", "label": "hiddenOpacity", "min": 0.0, "max": 1.0, "step": 0.01,
+		"target": "camo"},
+	{"name": "moving_opacity", "label": "movingOpacity", "min": 0.0, "max": 1.0, "step": 0.01,
+		"target": "camo"},
+]
+
+## Checkboxes, all of them camera-rig properties.
+const TOGGLES: Array[Dictionary] = [
+	{"name": "pixel_aligned_panning", "label": "pixelAlignedPanning"},
+	{"name": "speed_zoom", "label": "speedZoom"},
 ]
 
 ## Wide enough for "normalEdgeThreshold", which is the longest label and therefore the one that
@@ -46,25 +89,37 @@ const MARGIN: int = 12
 const GAP: float = 8.0
 const PANEL_WIDTH: float = LABEL_WIDTH + SLIDER_WIDTH + READOUT_WIDTH + GAP * 2.0 + MARGIN * 2
 
-@export var pixel_pass_path: NodePath
+@export var camera_path: NodePath
 @export var camera_rig_path: NodePath
+@export var grass_path: NodePath
+@export var camouflage_path: NodePath
 ## Whether the panel is up when the game starts. Off, because the first thing you want to see
 ## is the game, and F1 is one key.
 @export var start_visible: bool = false
 
-var _material: ShaderMaterial
+## The pixel pass is a CompositorEffect resource now, not a material -- so its tunables are
+## plain properties and the "shader" target sets them like any other object's.
+var _effect: CompositorEffect
 var _rig: Node3D
+var _grass: Node3D
+var _grass_material: ShaderMaterial
+var _camo: Node
 var _readouts: Dictionary = {}
 
 
 func _ready() -> void:
-	var pass_node := get_node_or_null(pixel_pass_path) as MeshInstance3D
+	var camera := get_node_or_null(camera_path) as Camera3D
+	if camera != null and camera.compositor != null \
+			and not camera.compositor.compositor_effects.is_empty():
+		_effect = camera.compositor.compositor_effects[0]
 	_rig = get_node_or_null(camera_rig_path) as Node3D
-	if pass_node != null:
-		_material = pass_node.material_override as ShaderMaterial
-	if _material == null:
-		push_warning("look panel: no pixel pass material at %s -- sliders will do nothing" %
-			pixel_pass_path)
+	_grass = get_node_or_null(grass_path) as Node3D
+	_camo = get_node_or_null(camouflage_path)
+	if _grass != null and _grass.has_method("get_material"):
+		_grass_material = _grass.get_material()
+	if _effect == null:
+		push_warning("look panel: no pixel pass effect on %s -- sliders will do nothing" %
+			camera_path)
 		return
 
 	_build()
@@ -98,9 +153,11 @@ func _build() -> void:
 	column.add_child(title)
 
 	for control: Dictionary in CONTROLS:
-		_add_slider(column, control)
+		if _owner_of(control) != null:
+			_add_slider(column, control)
 
-	_add_toggle(column)
+	for toggle: Dictionary in TOGGLES:
+		_add_toggle(column, toggle)
 
 	var note := Label.new()
 	note.text = "values are not saved"
@@ -122,7 +179,7 @@ func _add_slider(column: VBoxContainer, control: Dictionary) -> void:
 	slider.min_value = control["min"]
 	slider.max_value = control["max"]
 	slider.step = control["step"]
-	slider.value = _material.get_shader_parameter(control["name"])
+	slider.value = _initial(control)
 	slider.custom_minimum_size = Vector2(SLIDER_WIDTH, 0.0)
 	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(slider)
@@ -137,22 +194,61 @@ func _add_slider(column: VBoxContainer, control: Dictionary) -> void:
 	_apply(control, slider.value)
 
 
-func _add_toggle(column: VBoxContainer) -> void:
+## Whichever of the shader or the rig owns this value is the one that knows its real current
+## setting. Reading it back rather than restating it here is what stops the panel opening with
+## a slider that disagrees with what is actually on screen.
+func _initial(control: Dictionary) -> float:
+	var owner: Object = _owner_of(control)
+	if owner == null:
+		return 0.0
+	var name: String = control["name"]
+	if owner is ShaderMaterial:
+		var material := owner as ShaderMaterial
+		var value: Variant = material.get_shader_parameter(name)
+		# A ShaderMaterial only reports uniforms somebody has explicitly SET. The pixel pass
+		# has its values written into the scene file, so it answers; the grass material is
+		# built in code and carries only the shader's own declared defaults, so it returns
+		# null and the slider would open at zero -- flattening the grass the moment the panel
+		# is built. The default has to be asked of the shader itself.
+		if value == null:
+			value = RenderingServer.shader_get_parameter_default(material.shader.get_rid(), name)
+		return float(value) if value != null else 0.0
+	return float(owner.get(name))
+
+
+## Which object actually holds this value. Returns null when the scene has no such node, which
+## is how the panel stays usable in a scene with no grass rather than erroring on startup.
+func _owner_of(control: Dictionary) -> Object:
+	match control["target"]:
+		"rig", "both":
+			return _rig
+		"grass":
+			return _grass
+		"grass_shader":
+			return _grass_material
+		"camo":
+			return _camo
+		_:
+			return _effect
+
+
+func _add_toggle(column: VBoxContainer, toggle: Dictionary) -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", int(GAP))
 	column.add_child(row)
 
 	var label := Label.new()
-	label.text = "pixelAlignedPanning"
+	label.text = toggle["label"]
 	label.custom_minimum_size = Vector2(LABEL_WIDTH, 0.0)
 	row.add_child(label)
 
+	var property: String = toggle["name"]
 	var box := CheckBox.new()
-	box.button_pressed = _rig.pixel_aligned_panning if _rig != null else false
+	box.button_pressed = bool(_rig.get(property)) if _rig != null else false
 	box.disabled = _rig == null
 	box.toggled.connect(func(on: bool) -> void:
 		if _rig != null:
-			_rig.pixel_aligned_panning = on)
+			_rig.set(property, on))
 	row.add_child(box)
 
 
@@ -165,9 +261,15 @@ func _apply(control: Dictionary, value: float) -> void:
 	var target: String = control["target"]
 
 	if target == "shader" or target == "both":
-		_material.set_shader_parameter(name, value)
+		_effect.set(name, value)
+	if target == "grass_shader" and _grass_material != null:
+		_grass_material.set_shader_parameter(name, value)
 	if (target == "rig" or target == "both") and _rig != null:
 		_rig.set(name, value)
+	if target == "grass" and _grass != null:
+		_grass.set(name, value)
+	if target == "camo" and _camo != null:
+		_camo.set(name, value)
 
 	var readout: Label = _readouts.get(name)
 	if readout != null:
