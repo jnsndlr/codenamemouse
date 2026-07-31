@@ -10,10 +10,26 @@ extends Node3D
 ## steeper — 40 to 50 — because it reads better and shows more of what's in front of you.
 
 @export_group("Framing")
-## Rotation around the world Y axis. 45 puts map edges on the screen diagonals.
+## Starting rotation around the world Y axis. 45 puts map edges on the screen diagonals.
+## The view keys turn in quarter steps from here; this is only where it begins.
 @export_range(0.0, 90.0, 0.5) var yaw_degrees: float = 45.0
 ## Downward tilt. Lower sees further ahead; higher reads more like a floor plan.
-@export_range(15.0, 80.0, 0.5) var pitch_degrees: float = 40.0
+##
+## Raised from 40 for the tunnels, and it is worth knowing the exchange rate: a wall of
+## height D hides a strip of floor D / tan(pitch) wide behind it. Going 40 -> 48 shrinks that
+## by a fifth for free, on every wall in the game, which is the cheapest visibility you can
+## buy. Steeper than about 55 and the world starts reading as a floor plan.
+@export_range(15.0, 80.0, 0.5) var pitch_degrees: float = 48.0
+
+@export_group("Swivel")
+## Quarter turns, because a tunnel is always dug on the grid and a quarter turn is the only
+## rotation that keeps a corridor square to the screen.
+##
+## This is the counterpart to lowering the walls rather than an alternative to it. A trench
+## running ACROSS the view is hidden behind its own near wall along its whole length; the same
+## trench running toward the camera is open end to end. Being able to turn the world is what
+## makes that recoverable instead of just bad luck.
+@export var swivel_speed: float = 9.0
 
 @export_group("Speed zoom")
 ## Orthographic view height when standing still. Smaller is more zoomed in.
@@ -46,11 +62,17 @@ extends Node3D
 var _target: Node3D
 var _zoom: float = zoom_idle
 var _speed_signal: float = 0.0
+## Where the swivel is heading, in radians. Kept unwrapped and turned into rotation by
+## lerp_angle, which always takes the short way round -- so the ninth quarter turn is a
+## quarter turn, not two and a bit revolutions.
+var _wanted_yaw: float = 0.0
 
 
 func _ready() -> void:
 	_target = get_node_or_null(target) as Node3D
 	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	_wanted_yaw = deg_to_rad(yaw_degrees)
+	rotation.y = _wanted_yaw
 	_apply_angles()
 	_zoom = zoom_idle
 	_camera.size = _zoom
@@ -65,6 +87,7 @@ func _process(_delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	_swivel(delta)
 	if _target == null:
 		return
 
@@ -84,8 +107,25 @@ func _physics_process(delta: float) -> void:
 	_camera.size = _zoom
 
 
+## Turn the world a quarter at a time, and glide rather than snap -- a hard cut leaves you with
+## no idea which way anything went, which is the opposite of the point.
+func _swivel(delta: float) -> void:
+	if Input.is_action_just_pressed("view_left"):
+		_wanted_yaw += PI * 0.5
+	if Input.is_action_just_pressed("view_right"):
+		_wanted_yaw -= PI * 0.5
+	rotation.y = lerp_angle(rotation.y, _wanted_yaw, 1.0 - exp(-swivel_speed * delta))
+
+
+## Whether the view is still turning. Anything that reads a screen-space direction wants to
+## know, because during the turn the ground under the cursor is sliding on its own.
+func is_swivelling() -> bool:
+	return absf(angle_difference(rotation.y, _wanted_yaw)) > 0.01
+
+
+## PITCH ONLY. Yaw belongs to the swivel now, and reapplying the exported angle every frame
+## would drag the view back to 45 degrees the instant it tried to turn.
 func _apply_angles() -> void:
-	rotation_degrees.y = yaw_degrees
 	_pitch.rotation_degrees.x = -pitch_degrees
 
 

@@ -1,146 +1,167 @@
 extends Node
-## Continuous drive digging (GDD section 9): hold dig and steer, the tunnel extrudes
-## behind you. Press ramp to cut a descent to the next plane down.
+## Digging and vertical transit (GDD section 9). Point at a tile, hold the dig button, and it
+## opens. E takes whichever shaft the tile you're standing on has; F sinks one down, R breaks
+## one up.
 ##
-## Continuous input, discrete state. The player moves smoothly and steers with the cursor;
-## what gets stored is whichever grid cell they crossed into. That's the compromise the
-## implementation plan is built on -- replication stays one small message per cell, while
-## the hands feel like they're drawing rather than clacking between eight directions.
-
-## Cutting diagonally leaves two cells touching only at a corner, which is a pinch the
-## player cannot walk through. Digging one orthogonal filler turns it into an L. Without
-## this the tunnel looks continuous from above and isn't.
-const FILL_DIAGONAL_CORNERS: bool = true
+## POINT AND HOLD, rather than the drive-forward extrusion this replaced. Extruding meant the
+## tunnel went wherever you were walking, which is fast but gives you no way to say "that one"
+## -- and it shared its key with the shaft, so the tile you most wanted to dig away from was
+## the tile that had already claimed the button. Aiming at a tile is slower per cell and much
+## more deliberate, and it costs the player nothing to learn because the cursor is already the
+## steering wheel.
+##
+## THE PLANE IS STATE, not a reading taken off the player's height. It used to be derived every
+## frame, which was fine until the player was halfway down a ramp and the answer flipped under
+## them mid-dig. Nothing walks between planes now -- you are on the layer this controller last
+## put you on.
 
 @export var network_path: NodePath
 @export var player_path: NodePath
 
+@export_group("Digging")
+## Seconds of held input to open one tile. Deliberately brisk for testing; the real number is
+## a per-plane balance dial (GDD section 3 gives deeper planes longer dig times).
+@export var dig_seconds: float = 0.5
+## How far from the mouse a tile can be and still be diggable, in cells. Stops you reaching
+## across the map with the cursor -- you dig at arm's length, which is also what keeps the
+## Engineer stationary and vulnerable while they work.
+@export var dig_reach: float = 2.6
+
+@export_group("Transit")
+## How far above the destination floor the mouse is placed when it moves between layers.
+@export var arrival_lift: float = 0.05
+
 var _network: TunnelNetwork
 var _player: Node3D
-var _last_cell: Vector2i = Vector2i.MAX
-var _last_plane: int = -1
+var _plane: int = 0
+var _target: Vector2i = Vector2i.MAX
+var _progress: float = 0.0
+var _cursor: DigCursor
 
 
 func _ready() -> void:
 	_network = get_node_or_null(network_path) as TunnelNetwork
 	_player = get_node_or_null(player_path) as Node3D
+	if _network == null:
+		return
+	if _player is CollisionObject3D:
+		_network.apply_plane_collision(_player as CollisionObject3D, _plane)
+	_cursor = DigCursor.new()
+	_network.add_child(_cursor)
 
 
-func _physics_process(_delta: float) -> void:
+func get_plane() -> int:
+	return _plane
+
+
+## 0..1 while a tile is being opened, for anything that wants to draw it.
+func get_dig_progress() -> float:
+	return _progress
+
+
+func _physics_process(delta: float) -> void:
 	if _network == null or _player == null:
 		return
 
-	var plane := _network.plane_at_height(_player.global_position.y)
-	var cell := _network.world_to_cell(_player.global_position)
+	_resync_plane()
+	var standing := _network.world_to_cell(_player.global_position)
 
-	if Input.is_action_just_pressed("ramp"):
-		_cut_ramp(plane, cell)
-	if Input.is_action_just_pressed("ramp_up"):
-		_cut_ramp_up(plane, cell)
+	if Input.is_action_just_pressed("shaft_down"):
+		_network.dig_shaft_down(_plane, standing)
+	if Input.is_action_just_pressed("shaft_up"):
+		_network.dig_shaft_up(_plane, standing)
+	if Input.is_action_just_pressed("burrow"):
+		_take_shaft(standing)
+		return
 
-	# Starting a dig from the surface has to be the SAME key as continuing one. Requiring
-	# ramp-first meant holding dig on the surface did nothing whatsoever, with no feedback
-	# -- the control simply appeared broken until you happened to discover the other key.
-	# One press, on the frame it goes down, so holding it doesn't carve a row of entrances.
-	if Input.is_action_just_pressed("dig") and plane <= 0:
-		_cut_ramp(plane, cell)
-
-	if Input.is_action_pressed("dig"):
-		_extrude(plane, cell)
-	else:
-		_last_cell = Vector2i.MAX
-		_last_plane = -1
+	_update_dig(delta)
 
 
-## Open the cell AHEAD of the player, not the one they are standing in.
+## Aim, hold, open. The target is re-chosen every frame from where the cursor is, and moving
+## off a tile abandons it -- progress is a property of the tile you are pointing at, not of how
+## long the button has been down.
+func _update_dig(delta: float) -> void:
+	var wanted := _aimed_cell()
+	if wanted != _target:
+		_target = wanted
+		_progress = 0.0
+
+	var digging := _target != Vector2i.MAX and Input.is_action_pressed("dig")
+	if digging:
+		_progress += delta / maxf(dig_seconds, 0.01)
+		if _progress >= 1.0:
+			_network.dig(_plane, _target)
+			_progress = 0.0
+			# Re-aim immediately: the cell just opened, so it is no longer a valid target and
+			# holding the button should move on to the next one rather than stall.
+			_target = _aimed_cell()
+	elif not Input.is_action_pressed("dig"):
+		_progress = 0.0
+
+	_cursor.show_at(
+		_network, _plane, _target, _progress,
+		_target != Vector2i.MAX and Input.is_action_pressed("dig")
+	)
+
+
+## The cell under the cursor, if it is one this player could legally open.
 ##
-## Digging only where the player already is deadlocks instantly: a cell is dug when they
-## walk into it, but they cannot walk into solid earth, and the tunnel wall stops them at
-## the face. You burrow in, take two cells, and stop forever. The tunnel has to open in
-## front of you so there is somewhere to walk to -- which is also what "continuous drive"
-## in GDD section 9 actually means in the hands. It's Dig Dug: you push, and the ground
-## gives way ahead of you.
-func _extrude(plane: int, cell: Vector2i) -> void:
-	if plane <= 0:
-		return
+## Must touch the tunnel you already have. Without that you could stand in one corridor and
+## carve an unconnected room across the arena, which is neither snake-like (GDD section 3) nor
+## something the reachability of the network could survive.
+func _aimed_cell() -> Vector2i:
+	if _plane <= 0 or not _player.has_method("get_aim_point"):
+		return Vector2i.MAX
 
-	if plane != _last_plane:
-		_last_cell = Vector2i.MAX
-		_last_plane = plane
+	var aim: Vector3 = _player.call("get_aim_point")
+	var cell := _network.world_to_cell(aim)
+	if _network.is_dug(_plane, cell) or not _network.in_bounds(cell):
+		return Vector2i.MAX
 
-	# Always keep the cell underfoot, so descending a ramp into a fresh plane is solid.
-	_network.dig(plane, cell)
+	var here := _network.world_to_cell(_player.global_position)
+	if Vector2(cell - here).length() > dig_reach:
+		return Vector2i.MAX
 
-	if FILL_DIAGONAL_CORNERS and _last_cell != Vector2i.MAX:
-		var walked := cell - _last_cell
-		if walked.x != 0 and walked.y != 0:
-			_network.dig(plane, Vector2i(cell.x, _last_cell.y))
-	_last_cell = cell
-
-	var ahead := _octant(_facing())
-	if ahead == Vector2i.ZERO:
-		return
-	# A diagonal push needs its corner opened too, or the two cells touch only at a point
-	# and the player is walled out of the very cell they just dug.
-	if FILL_DIAGONAL_CORNERS and ahead.x != 0 and ahead.y != 0:
-		_network.dig(plane, cell + Vector2i(ahead.x, 0))
-	_network.dig(plane, cell + ahead)
+	for side: Vector2i in TunnelNetwork.SIDES:
+		if _network.is_dug(_plane, cell + side):
+			return cell
+	return Vector2i.MAX
 
 
-func _facing() -> Vector3:
-	if _player.has_method("get_facing_direction"):
-		return _player.call("get_facing_direction")
-	return Vector3.FORWARD
-
-
-## Eight-way, per GDD section 9. Anything within 22.5 degrees of an axis snaps to it.
-func _octant(direction: Vector3) -> Vector2i:
-	var flat := Vector2(direction.x, direction.z)
-	if flat.length_squared() < 0.0001:
-		return Vector2i.ZERO
-	var angle := flat.angle()
-	var sector := wrapi(roundi(angle / (PI / 4.0)), 0, 8)
-	return [
-		Vector2i(1, 0), Vector2i(1, 1), Vector2i(0, 1), Vector2i(-1, 1),
-		Vector2i(-1, 0), Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1),
-	][sector]
-
-
-## Ramps run along a cardinal direction because GridMap orientations are orthogonal. The
-## facing gets snapped to the nearest of the four, which in practice is invisible -- you
-## point roughly where you want to go and it commits.
-func _cut_ramp(plane: int, cell: Vector2i) -> void:
-	var step := _cardinal(_facing())
-	if step == Vector2i.ZERO:
-		return
-
-	# From the surface this is an entrance; from underground it's a descent.
-	if _network.dig_ramp(plane, cell, step):
-		_last_cell = Vector2i.MAX
-
-
-## Cut a ramp that RISES ahead of you, to the plane above.
+## Step into the shaft under or over you.
 ##
-## Same geometry as a descent, just authored from the bottom: a ramp is always stored on the
-## upper of the two planes it joins, so ascending from plane N means cutting a descent on
-## plane N-1 whose landing is the cell in front of you. From plane 1 that's an exit to the
-## surface, which is simply an entrance built from underneath.
-func _cut_ramp_up(plane: int, cell: Vector2i) -> void:
-	if plane <= 0:
-		return
-	var step := _cardinal(_facing())
-	if step == Vector2i.ZERO:
+## No hole is opened and nothing is dropped through: the floor stays solid and the mouse is
+## placed on the layer it arrived at. That keeps the ground something you can always run over
+## -- you enter a tunnel because you chose to, not because you walked across the wrong tile.
+func _take_shaft(cell: Vector2i) -> void:
+	var target := _network.shaft_target(_plane, cell)
+	if target < 0:
 		return
 
-	# Landing sits one cell ahead; the sloped pair runs on beyond it, descending back toward
-	# us, so walking forward takes us up.
-	if _network.dig_ramp(plane - 1, cell + step * 3, -step):
-		_last_cell = Vector2i.MAX
+	_plane = target
+	_player.global_position = (
+		_network.cell_to_world(target, cell) + Vector3.UP * arrival_lift
+	)
+	if _player is CharacterBody3D:
+		(_player as CharacterBody3D).velocity = Vector3.ZERO
+	if _player is CollisionObject3D:
+		_network.apply_plane_collision(_player as CollisionObject3D, target)
+	_target = Vector2i.MAX
+	_progress = 0.0
 
 
-func _cardinal(direction: Vector3) -> Vector2i:
-	if absf(direction.x) < 0.0001 and absf(direction.z) < 0.0001:
-		return Vector2i.ZERO
-	if absf(direction.x) > absf(direction.z):
-		return Vector2i(signi(roundi(signf(direction.x))), 0)
-	return Vector2i(0, signi(roundi(signf(direction.z))))
+## Keep the remembered plane honest if the player ends up somewhere it doesn't explain.
+##
+## Holding the plane as state is what removed the mid-transit ambiguity, but state can go stale
+## in ways a derived value never could: fall_guard respawns you on the lawn without telling
+## anyone, and the controller would go on believing you were three layers down -- masked to a
+## collision layer you had left, digging into a plane you were not on.
+func _resync_plane() -> void:
+	var expected := _network.plane_y(_plane)
+	if absf(_player.global_position.y - expected) <= TunnelNetwork.SPACING * 0.5:
+		return
+	_plane = _network.plane_at_height(_player.global_position.y)
+	if _player is CollisionObject3D:
+		_network.apply_plane_collision(_player as CollisionObject3D, _plane)
+	_target = Vector2i.MAX
+	_progress = 0.0

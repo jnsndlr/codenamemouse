@@ -135,8 +135,29 @@ is free, and neither is permanent.
 - Tunnels are built from **discrete chunks**. Each new segment **pivots off the end of
   the previous one** — pick a direction, dig, repeat. Snake-like, not free-form carving.
 - Digging is **interruptible** and leaves the Engineer stationary and vulnerable.
-- **Ramps** connect adjacent planes. An Engineer builds a ramp to descend or ascend.
-  Ramps are the only vertical transit — you can't dig straight down.
+- **Shafts** connect adjacent planes, and are the only vertical transit. An Engineer sinks
+  one downward (**F**) or breaks one upward (**R**) on the tile they're standing on, and
+  **E** takes whichever shaft the tile has. `[REVISED]` — this was ramps, which were the
+  only vertical transit precisely so you *couldn't* dig straight down.
+- **A tile can't have a shaft up and a shaft down**, so E always has exactly one
+  destination and no modifier key.
+- **Shafts keep an exclusion radius of one cell. `[DECIDED]`** No shaft may go in any of the
+  eight cells touching an existing one, diagonals included, and the rule reaches across
+  adjacent planes — a shaft is a hole in one plane's floor *and* in the ceiling below it, so
+  a floor hole beside a ceiling hole is still two mouths a stride apart in one corridor.
+  Together with the rule above, this is what keeps the old constraint's intent: you can't
+  drill a well from the lawn to the deep plane, and you can't get around that by walking it
+  down a 2×2 staircase either. To go deeper you tunnel sideways first, in the open, where it
+  costs time and can be seen — **depth stays a horizontal investment**. It is also what keeps
+  each beam of daylight legible: two mouths a cell apart merge into one bright patch, and the
+  thing that is supposed to announce *the way out is here* stops saying where.
+
+  > **Why shafts replaced ramps.** A ramp was sloped, oriented and two cells long, and hung
+  > down through the whole headroom of the plane below — so digging under one was a trap,
+  > turning one across your own corridor sealed the tunnel off, and the world had to be deep
+  > enough for a walkable slope, which made tunnels too deep to see into from above. A shaft
+  > is a flag on a flat tile. It takes no walkable space away and occupies nothing below, so
+  > digging can only ever *add* connectivity. See the M2 findings in the implementation plan.
 - **Entrances** are on the surface and are visually subtle to the enemy.
 - **Intersecting tunnels connect.** If your segment runs into an enemy tunnel, the
   networks join. That's a designed feature — accidentally breaking into their highway
@@ -699,6 +720,16 @@ Additions needed beyond the art:
 - **Depth indicator** — surface, 1, 2, or 3
 - **Sprint stamina** — personal, near the mouse rather than parked in a corner, so you
   read it without looking away from the chase. Yours only; never shown for anyone else.
+- **Contextual control hints — above the mouse's head. `[DECIDED]`** This is the one place
+  they go. A prompt that is true only right here and right now (`[E] climb up` on a shaft,
+  and whatever follows: opening a cache, hauling a body, boarding a rat) is the same kind of
+  information as stamina — personal, momentary, needed without looking away — so it lives in
+  the same place, screen-space text projected just above the mouse. Permanent bindings are
+  the opposite kind of information and stay in the corner. Mixing them is what made the first
+  E prompt invisible: a hint true on one tile in a thousand cannot share a line with six that
+  are always true, or it reads as background text and you walk over the hole. One line at a
+  time, so two contextual actions at once resolve by urgency rather than stacking.
+  Implemented in `scripts/ui/contextual_hint.gd`.
 - **Scurry ready/cooldown** — and a hard, unmissable tick on the team cheese counter the
   moment anyone spends one. The whole point of Scurry costing a life is that the team sees
   it happen (§2).

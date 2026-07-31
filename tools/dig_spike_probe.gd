@@ -1,15 +1,14 @@
 extends SceneTree
-## M2 verification harness. Builds a three-plane network, then photographs it from the
-## game camera at each focus depth so the legibility question can be looked at rather than
-## argued about.
+## M2 verification harness. Builds a three-plane network, then photographs it from the game
+## camera at each depth so the legibility question can be looked at rather than argued about.
 ##
 ##   godot --path . --resolution 1100x760 --script tools/dig_spike_probe.gd
 ##
 ## Needs a real renderer -- do NOT add --headless, it will hang on the first force_draw.
+## For correctness rather than looks, use tools/tunnel_audit.gd, which is headless and checks
+## invariants over eighteen deliberately awkward networks.
 ##
 ## Writes PNGs to user:// (on macOS, ~/Library/Application Support/Godot/app_userdata/).
-## Also asserts the thing that silently broke once already: that every plane's floor
-## actually exists in the physics world, rather than only in the render.
 
 const OUT := "user://"
 
@@ -23,11 +22,12 @@ func _initialize() -> void:
 	var network: TunnelNetwork = scene.get_node("Tunnels")
 	var player: Node3D = scene.get_node("Player")
 
-	# Entrance at the origin heading +Z, which digs the plane-1 landing for us.
-	network.dig_ramp(0, Vector2i(0, -2), Vector2i(0, 1))
+	# Entrance at the origin. Sinking a shaft opens the cell it lands in, so plane 1 starts
+	# with somewhere to stand without being told.
+	network.dig_shaft_down(0, Vector2i(0, -2))
 
-	# Plane 1: an L running east then north.
-	for z in range(0, 6):
+	# Plane 1: north, then east, then back south.
+	for z in range(-2, 6):
 		network.dig(1, Vector2i(0, z))
 	for x in range(1, 8):
 		network.dig(1, Vector2i(x, 5))
@@ -35,16 +35,16 @@ func _initialize() -> void:
 		network.dig(1, Vector2i(7, z))
 
 	# Down to plane 2 at the far end, then a corridor running back underneath plane 1.
-	network.dig_ramp(1, Vector2i(7, -3), Vector2i(0, -1))
+	network.dig_shaft_down(1, Vector2i(7, -2))
 	for x in range(7, -4, -1):
-		network.dig(2, Vector2i(x, -5))
-	for z in range(-4, 4):
+		network.dig(2, Vector2i(x, -2))
+	for z in range(-1, 5):
 		network.dig(2, Vector2i(-3, z))
 
 	# Down to plane 3 and a small chamber.
-	network.dig_ramp(2, Vector2i(-3, 4), Vector2i(0, 1))
+	network.dig_shaft_down(2, Vector2i(-3, 4))
 	for x in range(-5, 0):
-		for z in range(5, 9):
+		for z in range(4, 9):
 			network.dig(3, Vector2i(x, z))
 
 	var counts := []
@@ -52,23 +52,24 @@ func _initialize() -> void:
 		counts.append(network.cell_count(plane))
 	print("cells per plane 1/2/3: ", counts)
 
-	# Photograph from the game camera, parking the player over each plane in turn so the
-	# focus logic runs exactly as it would in play.
-	# Does the physics world actually have a floor where the mesh says there is one?
+	# Does the physics world actually have a floor where the mesh says there is one? Masked to
+	# plane 1 exactly as the player is, so this asks the question the player's body asks.
 	var space := scene.get_viewport().world_3d.direct_space_state
-	var probe := PhysicsRayQueryParameters3D.create(
-		Vector3(0.0, network.plane_y(1) + 1.0, 2.0),
-		Vector3(0.0, network.plane_y(1) - 1.0, 2.0)
-	)
+	var at := network.cell_to_world(1, Vector2i(0, 2))
+	var probe := PhysicsRayQueryParameters3D.create(at + Vector3.UP * 0.3, at + Vector3.DOWN * 0.3)
+	probe.collision_mask = TunnelNetwork.WORLD_BIT | TunnelNetwork.plane_bit(1)
 	var hit := space.intersect_ray(probe)
 	if hit.is_empty():
 		push_error("plane 1 floor has no collision -- the player will fall through it")
 	print("floor collision at (0,2): ", hit.get("position", "MISSING"))
 
+	# Photograph from the game camera, parking the player on each plane in turn so the focus
+	# logic runs exactly as it would in play. The dig controller notices the player has been
+	# moved and re-masks them to the right collision layer on its own.
 	var shots := [
 		["surface", Vector3(4.0, 0.4, -2.0)],
 		["plane1", Vector3(0.0, network.plane_y(1) + 0.2, 2.0)],
-		["plane2", Vector3(-3.0, network.plane_y(2) + 0.2, -5.0)],
+		["plane2", Vector3(-3.0, network.plane_y(2) + 0.2, -2.0)],
 		["plane3", Vector3(-3.0, network.plane_y(3) + 0.2, 6.0)],
 	]
 	for shot: Array in shots:
@@ -83,13 +84,12 @@ func _initialize() -> void:
 			shot[0], (shot[1] as Vector3).y, player.global_position.y,
 			player.is_on_floor(), network.get_focus_plane()])
 
-	# Pull the camera right back so the whole three-plane network is in one frame. This is
-	# the shot that answers "can you understand its shape", rather than "can you see the
-	# bit you're standing in".
+	# Pull the camera right back so a whole plane is in one frame. This is the shot that
+	# answers "can you understand its shape", rather than "can you see the bit you're in".
 	var rig: Node3D = scene.get_node("CameraRig")
-	rig.zoom_idle = 30.0
-	rig.zoom_run = 30.0
-	rig.zoom_sprint = 30.0
+	rig.zoom_idle = 26.0
+	rig.zoom_run = 26.0
+	rig.zoom_sprint = 26.0
 	for overview: Array in [["over1", 1, Vector3(0, 0, 2)], ["over2", 2, Vector3(-3, 0, 0)]] as Array[Array]:
 		var spot: Vector3 = overview[2]
 		player.global_position = Vector3(spot.x, network.plane_y(overview[1]) + 0.2, spot.z)

@@ -1,4 +1,4 @@
-[gd_scene load_steps=21 format=3]
+[gd_scene load_steps=22 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="Script" path="res://scripts/camera/camera_rig.gd" id="2_rig"]
@@ -6,7 +6,7 @@
 [ext_resource type="Script" path="res://scripts/tunnels/dig_controller.gd" id="4_dig"]
 [ext_resource type="Script" path="res://scripts/tunnels/depth_focus.gd" id="5_focus"]
 [ext_resource type="Script" path="res://scripts/ui/depth_indicator.gd" id="6_depth"]
-[ext_resource type="Script" path="res://scripts/tunnels/surface_holes.gd" id="7_holes"]
+[ext_resource type="Script" path="res://scripts/ui/contextual_hint.gd" id="7_hint"]
 [ext_resource type="Script" path="res://scripts/maps/rock_scatter.gd" id="8_rocks"]
 [ext_resource type="Script" path="res://scripts/player/fall_guard.gd" id="9_fall"]
 
@@ -61,6 +61,12 @@ font_size = 19
 outline_size = 5
 outline_color = Color(0, 0, 0, 0.75)
 
+[sub_resource type="LabelSettings" id="Label_prompt"]
+font_size = 26
+font_color = Color(1, 0.93, 0.7, 1)
+outline_size = 8
+outline_color = Color(0, 0, 0, 0.85)
+
 [node name="DigSpike" type="Node3D"]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
@@ -75,12 +81,10 @@ shadow_enabled = true
 
 [node name="Ground" type="CSGCombiner3D" parent="Surface"]
 use_collision = true
-script = ExtResource("7_holes")
-network_path = NodePath("../../Tunnels")
 
 [node name="Slab" type="CSGBox3D" parent="Surface/Ground"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, 0)
-size = Vector3(80, 0.5, 80)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.075, 0)
+size = Vector3(80, 0.15, 80)
 material = SubResource("Mat_ground")
 
 [node name="WallNorth" type="CSGBox3D" parent="Surface/Ground"]
@@ -134,7 +138,7 @@ mesh = SubResource("Mesh_prop")
 shape = SubResource("Shape_prop")
 
 [node name="EarthBackdrop" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -11, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -3, 0)
 mesh = SubResource("Mesh_earth")
 
 [node name="Tunnels" type="Node3D" parent="."]
@@ -169,6 +173,8 @@ script = ExtResource("5_focus")
 network_path = NodePath("../Tunnels")
 player_path = NodePath("../Player")
 surface_path = NodePath("../Surface")
+ground_slab_path = NodePath("../Surface/Ground/Slab")
+environment_path = NodePath("../WorldEnvironment")
 
 [node name="FallGuard" type="Node" parent="."]
 script = ExtResource("9_fall")
@@ -183,5 +189,13 @@ offset_right = 460.0
 offset_bottom = 130.0
 label_settings = SubResource("Label_hud")
 script = ExtResource("6_depth")
+network_path = NodePath("../../Tunnels")
+player_path = NodePath("../../Player")
+
+[node name="ContextualHint" type="Label" parent="HUD"]
+offset_right = 320.0
+offset_bottom = 44.0
+label_settings = SubResource("Label_prompt")
+script = ExtResource("7_hint")
 network_path = NodePath("../../Tunnels")
 player_path = NodePath("../../Player")

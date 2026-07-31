@@ -25,10 +25,24 @@ const KEYS: Dictionary = {
 	"strafe_left": [KEY_A],
 	"strafe_right": [KEY_D],
 	"slow": [KEY_SHIFT],
-	# M2 dig spike. Dig is a hold, per GDD section 9's continuous drive.
-	"dig": [KEY_E],
-	"ramp": [KEY_R],
-	"ramp_up": [KEY_F],
+	# E is now ONLY the way into a shaft. It used to double as dig, with the cell deciding
+	# which -- unambiguous, but it meant the one key you press while standing still was also
+	# the key you hold while steering, and digging out of a shaft cell was awkward because the
+	# tile you were on had already claimed the key.
+	"burrow": [KEY_E],
+	"shaft_down": [KEY_F],
+	"shaft_up": [KEY_R],
+	# Quarter-turn the view. Arrows rather than Q/E because both hands are already busy --
+	# left on WASD and abilities, right on the mouse, which is the steering wheel.
+	"view_left": [KEY_LEFT],
+	"view_right": [KEY_RIGHT],
+}
+
+## Digging moved to the mouse: point at a tile, hold, watch it open. The cursor is already the
+## steering wheel (GDD section 9), so it is the thing that knows where you're looking -- which
+## makes it the only sensible way to say "that tile, there".
+const MOUSE: Dictionary = {
+	"dig": [MOUSE_BUTTON_LEFT],
 }
 
 ## action -> [axis, direction]. Direction is the sign of the axis that triggers it.
@@ -45,6 +59,8 @@ const PAD_AXES: Dictionary = {
 
 const PAD_BUTTONS: Dictionary = {
 	"sprint": [JOY_BUTTON_LEFT_STICK],
+	"view_left": [JOY_BUTTON_LEFT_SHOULDER],
+	"view_right": [JOY_BUTTON_RIGHT_SHOULDER],
 }
 
 ## Actions with no keyboard binding still need to exist, or is_action_pressed() throws.
@@ -59,6 +75,13 @@ func _enter_tree() -> void:
 		for keycode: Key in KEYS[action_name]:
 			var event := InputEventKey.new()
 			event.physical_keycode = keycode
+			InputMap.action_add_event(action_name, event)
+
+	for action_name: String in MOUSE:
+		_ensure(action_name)
+		for button: MouseButton in MOUSE[action_name]:
+			var event := InputEventMouseButton.new()
+			event.button_index = button
 			InputMap.action_add_event(action_name, event)
 
 	for action_name: String in PAD_ONLY:
