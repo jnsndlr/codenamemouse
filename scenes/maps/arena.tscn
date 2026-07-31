@@ -1,4 +1,4 @@
-[gd_scene load_steps=22 format=3]
+[gd_scene load_steps=25 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="Script" path="res://scripts/camera/camera_rig.gd" id="2_rig"]
@@ -9,6 +9,8 @@
 [ext_resource type="Script" path="res://scripts/ui/contextual_hint.gd" id="7_hint"]
 [ext_resource type="Script" path="res://scripts/maps/rock_scatter.gd" id="8_rocks"]
 [ext_resource type="Script" path="res://scripts/player/fall_guard.gd" id="9_fall"]
+[ext_resource type="Shader" path="res://art/shaders/pixel_edges.gdshader" id="10_pixel"]
+[ext_resource type="Script" path="res://scripts/ui/look_panel.gd" id="11_look"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_top_color = Color(0.28, 0.44, 0.66, 1)
@@ -55,6 +57,18 @@ roughness = 1.0
 [sub_resource type="BoxMesh" id="Mesh_earth"]
 material = SubResource("Mat_earth")
 size = Vector3(130, 1, 130)
+
+[sub_resource type="ShaderMaterial" id="Mat_pixel"]
+render_priority = 127
+shader = ExtResource("10_pixel")
+shader_parameter/pixel_size = 4.0
+shader_parameter/depth_edge_strength = 0.4
+shader_parameter/normal_edge_strength = 0.3
+shader_parameter/depth_edge_threshold = 0.1
+shader_parameter/edge_dead_zone = 0.5
+shader_parameter/normal_edge_threshold = 0.25
+
+[sub_resource type="QuadMesh" id="Mesh_pixel"]
 
 [sub_resource type="LabelSettings" id="Label_hud"]
 font_size = 19
@@ -153,6 +167,8 @@ target = NodePath("../Player")
 zoom_idle = 11.0
 zoom_run = 12.5
 zoom_sprint = 14.0
+pixel_aligned_panning = true
+pixel_size = 4.0
 
 [node name="Pitch" type="Node3D" parent="CameraRig"]
 
@@ -162,6 +178,12 @@ projection = 1
 size = 11.0
 near = 0.05
 far = 200.0
+
+[node name="PixelPass" type="MeshInstance3D" parent="CameraRig/Pitch/Camera3D"]
+extra_cull_margin = 16384.0
+cast_shadow = 0
+mesh = SubResource("Mesh_pixel")
+material_override = SubResource("Mat_pixel")
 
 [node name="DigController" type="Node" parent="."]
 script = ExtResource("4_dig")
@@ -179,6 +201,11 @@ environment_path = NodePath("../WorldEnvironment")
 [node name="FallGuard" type="Node" parent="."]
 script = ExtResource("9_fall")
 player_path = NodePath("../Player")
+
+[node name="LookPanel" type="CanvasLayer" parent="."]
+script = ExtResource("11_look")
+pixel_pass_path = NodePath("../CameraRig/Pitch/Camera3D/PixelPass")
+camera_rig_path = NodePath("../CameraRig")
 
 [node name="HUD" type="CanvasLayer" parent="."]
 

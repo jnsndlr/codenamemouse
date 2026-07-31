@@ -43,6 +43,19 @@ extends Node3D
 ## How fast the view narrows. Deliberately slower, so tapping keys doesn't pump the view.
 @export var zoom_in_speed: float = 1.8
 
+@export_group("Pixel grid")
+## Hold the rendered image still on the fat-pixel grid while the camera slides underneath it.
+##
+## Without this the camera moves in continuous world units while the image it produces is
+## quantised into blocks, so a static edge sits in one block for a while and then jumps to the
+## next. Every straight line in the world crawls and fizzes as you walk. It is the single
+## worst artefact of rendering chunky pixels and it does not show up in a screenshot -- only
+## in motion -- which is exactly why it is worth a toggle you can flip while running.
+@export var pixel_aligned_panning: bool = true
+## Must match the pixel pass's own `pixel_size`, or the camera snaps to the wrong grid and
+## makes the crawl worse rather than better. The look panel drives both from one slider.
+@export_range(1.0, 20.0, 1.0) var pixel_size: float = 4.0
+
 @export_group("Follow")
 @export var target: NodePath
 ## Higher snaps to the player faster. Frame-rate independent.
@@ -60,6 +73,9 @@ extends Node3D
 @onready var _camera: Camera3D = $Pitch/Camera3D
 
 var _target: Node3D
+## The camera's standoff from the rig, before any pixel-grid correction. Captured rather than
+## hardcoded so moving the camera in the scene doesn't silently become a permanent offset.
+var _camera_rest: Vector3
 var _zoom: float = zoom_idle
 var _speed_signal: float = 0.0
 ## Where the swivel is heading, in radians. Kept unwrapped and turned into rotation by
@@ -70,6 +86,7 @@ var _wanted_yaw: float = 0.0
 
 func _ready() -> void:
 	_target = get_node_or_null(target) as Node3D
+	_camera_rest = _camera.position
 	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	_wanted_yaw = deg_to_rad(yaw_degrees)
 	rotation.y = _wanted_yaw
@@ -106,6 +123,10 @@ func _physics_process(delta: float) -> void:
 	_zoom = lerpf(_zoom, wanted, 1.0 - exp(-rate * delta))
 	_camera.size = _zoom
 
+	# Last, because it reads the zoom that was just written -- a fat pixel is a fraction of
+	# the orthographic size, so it changes width every frame the view is breathing.
+	_align_to_pixel_grid()
+
 
 ## Turn the world a quarter at a time, and glide rather than snap -- a hard cut leaves you with
 ## no idea which way anything went, which is the opposite of the point.
@@ -115,6 +136,54 @@ func _swivel(delta: float) -> void:
 	if Input.is_action_just_pressed("view_right"):
 		_wanted_yaw -= PI * 0.5
 	rotation.y = lerp_angle(rotation.y, _wanted_yaw, 1.0 - exp(-swivel_speed * delta))
+
+
+## Nudge the camera by up to half a fat pixel so the world lands on the pixel grid the shader
+## quantises to, instead of sliding under it.
+##
+## The correction goes on the CAMERA's local offset, never on the rig's position. Everything
+## else -- the follow lerp, the cursor lead, anything that later asks where the view is --
+## reads the rig, and quantising that would feed a stair-stepped position back into the
+## smoothing that produced it. The rig stays perfectly smooth and only the eye is snapped.
+##
+## Snapping along the camera's OWN right and up rather than along world axes is what makes
+## this work at 45 degrees of yaw: the grid the shader quantises to is the screen's, so the
+## grid the camera aligns to has to be the screen's as well.
+func _align_to_pixel_grid() -> void:
+	if not pixel_aligned_panning:
+		_camera.position = _camera_rest
+		return
+
+	var viewport := get_viewport()
+	if viewport == null:
+		return
+	var height: float = viewport.get_visible_rect().size.y
+	if height <= 0.0:
+		return
+
+	# World units spanned by one fat pixel. Godot's orthographic `size` is the VERTICAL extent
+	# of the view, so this is the vertical figure -- and pixels are square, so it is the
+	# horizontal one too.
+	var unit := _camera.size * pixel_size / height
+	if unit <= 0.0:
+		return
+
+	# Where the eye WOULD sit with no correction. Derived rather than read back off the node,
+	# so nothing has to flush a transform mid-frame to make it true.
+	var basis := _pitch.global_transform.basis
+	var eye := global_position + basis * _camera_rest
+
+	_camera.position = _camera_rest - Vector3(
+		_fraction(eye.dot(basis.x) / unit) * unit,
+		_fraction(eye.dot(basis.y) / unit) * unit,
+		0.0
+	)
+
+
+## Signed distance to the nearest whole number, in [-0.5, 0.5]. Nearest rather than floor, so
+## the correction is never more than half a pixel in either direction.
+func _fraction(value: float) -> float:
+	return value - roundf(value)
 
 
 ## Whether the view is still turning. Anything that reads a screen-space direction wants to

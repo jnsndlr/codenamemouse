@@ -36,6 +36,10 @@ const KEYS: Dictionary = {
 	# left on WASD and abilities, right on the mouse, which is the steering wheel.
 	"view_left": [KEY_LEFT],
 	"view_right": [KEY_RIGHT],
+	# Show/hide the look panel. Not a gameplay binding -- it lives here anyway so there is
+	# one place that answers "what is bound", and it costs nothing in a build where the
+	# panel is absent.
+	"look_panel": [KEY_F1],
 }
 
 ## Digging moved to the mouse: point at a tile, hold, watch it open. The cursor is already the

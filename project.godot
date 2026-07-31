@@ -30,4 +30,7 @@ window/size/viewport_height=720
 
 [rendering]
 
-anti_aliasing/quality/msaa_3d=2
+; MSAA off, deliberately. Antialiasing spends effort softening exactly the hard edges the
+; pixel pass exists to produce, and a smoothed depth buffer blurs the steps it detects them
+; from. Turn this back on only if the pixel pass is removed.
+anti_aliasing/quality/msaa_3d=0

@@ -86,7 +86,8 @@ func _update_dig(delta: float) -> void:
 		_target = wanted
 		_progress = 0.0
 
-	var digging := _target != Vector2i.MAX and Input.is_action_pressed("dig")
+	var held := Input.is_action_pressed("dig") and not _pointer_over_ui()
+	var digging := _target != Vector2i.MAX and held
 	if digging:
 		_progress += delta / maxf(dig_seconds, 0.01)
 		if _progress >= 1.0:
@@ -95,13 +96,22 @@ func _update_dig(delta: float) -> void:
 			# Re-aim immediately: the cell just opened, so it is no longer a valid target and
 			# holding the button should move on to the next one rather than stall.
 			_target = _aimed_cell()
-	elif not Input.is_action_pressed("dig"):
+	elif not held:
 		_progress = 0.0
 
-	_cursor.show_at(
-		_network, _plane, _target, _progress,
-		_target != Vector2i.MAX and Input.is_action_pressed("dig")
-	)
+	_cursor.show_at(_network, _plane, _target, _progress, _target != Vector2i.MAX and held)
+
+
+## Whether the cursor is over a piece of UI rather than over the world.
+##
+## Digging reads the mouse button by POLLING rather than from an input event, which is right
+## for a hold-to-act control but means it never sees the UI consume a click. Without this you
+## dig a tile every time you drag a slider on the look panel -- tuning the picture by editing
+## the level. Asking the viewport who is hovered covers any future UI for free, and the HUD
+## labels don't count because Label ignores the mouse by default.
+func _pointer_over_ui() -> bool:
+	var viewport := get_viewport()
+	return viewport != null and viewport.gui_get_hovered_control() != null
 
 
 ## The cell under the cursor, if it is one this player could legally open.
