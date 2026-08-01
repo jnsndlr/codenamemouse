@@ -88,7 +88,7 @@ func _update_dig(delta: float) -> void:
 	var held := Input.is_action_pressed("dig") and not _pointer_over_ui()
 	var digging := _target != Vector2i.MAX and held
 	if digging:
-		_progress += delta / maxf(dig_seconds, 0.01)
+		_progress += delta * _dig_rate() / maxf(dig_seconds, 0.01)
 		if _progress >= 1.0:
 			_network.dig(_plane, _target)
 			_progress = 0.0
@@ -99,6 +99,24 @@ func _update_dig(delta: float) -> void:
 		_progress = 0.0
 
 	_cursor.show_at(_network, _plane, _target, _progress, _target != Vector2i.MAX and held)
+
+
+## How fast whoever is driving opens a tile, as a multiplier on `dig_seconds`.
+##
+## THE ENGINEER IS THE DIGGER, BUT NOT THE ONLY ONE. GDD section 4 made terrain alteration the
+## Engineer's exclusive capability; this is a deliberate revision, recorded in that section. An
+## Engineer opens a tile in `dig_seconds`; everyone else takes about three times as long, which
+## is slow enough that you would not choose to tunnel as a Generalist and fast enough that you
+## CAN when it is the only way through. The alternative -- nobody else digs at all -- makes a
+## crew that has lost its Engineer unable to use a third of the map, and turns one seat into a
+## requirement rather than a choice.
+##
+## Asked of the mouse rather than looked up here, so the number arrives with whoever the
+## controller is pointed at and a mouse with no class still answers 1.0.
+func _dig_rate() -> float:
+	if _player != null and _player.has_method("get_dig_speed"):
+		return maxf(0.01, _player.call("get_dig_speed"))
+	return 1.0
 
 
 ## Whether the cursor is over a piece of UI rather than over the world.
@@ -142,26 +160,24 @@ func _aimed_cell() -> Vector2i:
 ## No hole is opened and nothing is dropped through: the floor stays solid and the mouse is
 ## placed on the layer it arrived at. That keeps the ground something you can always run over
 ## -- you enter a tunnel because you chose to, not because you walked across the wrong tile.
-func _take_shaft(cell: Vector2i) -> void:
-	var target := _network.shaft_target(_plane, cell)
-	if target < 0:
+func _take_shaft(_cell: Vector2i) -> void:
+	if TunnelTransit.destination(_network, _player, _plane) < 0:
 		return
 
-	# THE FLAG CANNOT ENTER A TUNNEL (GDD section 2, decided). Refused here, at the one place a
-	# player can choose to go under, rather than by silently dropping the banner down the hole
-	# -- a refusal you can hear is a rule you can learn, and dropping it would hand the carrier
-	# a free way to stash the objective at the bottom of a shaft.
-	if _player.has_method("is_carrying") and _player.call("is_carrying"):
-		_network.dig_refused.emit("the banner will not go underground")
+	# THE FLAG CANNOT ENTER A TUNNEL (GDD section 2, decided). The rule itself lives in
+	# TunnelTransit, which is the one door between the surface and the network and refuses
+	# everybody equally. Said out loud HERE, though, and only here: this is where a player meets
+	# it, and a refusal you can hear is a rule you can learn. A bot hitting the same wall says
+	# nothing, or the one channel that explains the controls fills up with AI chatter.
+	var why := TunnelTransit.refusal(_player)
+	if why != "":
+		_network.dig_refused.emit(why)
 		return
 
-	_plane = target
-	_player.global_position = (
-		_network.cell_to_world(target, cell) + Vector3.UP * arrival_lift
-	)
-	if _player is CharacterBody3D:
-		(_player as CharacterBody3D).velocity = Vector3.ZERO
-	_apply_plane()
+	var arrived := TunnelTransit.take(_network, _player, _plane, arrival_lift)
+	if arrived < 0:
+		return
+	_plane = arrived
 	_target = Vector2i.MAX
 	_progress = 0.0
 

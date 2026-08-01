@@ -67,50 +67,62 @@ func _draw() -> void:
 		return
 
 	var screen := get_viewport_rect().size
-	var frame := Rect2(Vector2((screen.x - width) * 0.5, top_margin), Vector2(width, height))
-	HudSkin.panel(self, frame)
-
-	var inner := frame.grow(-9.0)
-	var side_width := (inner.size.x - clock_width) * 0.5
-	_crew(Rect2(inner.position, Vector2(side_width, inner.size.y)), Team.BLUE)
-	_crew(
-		Rect2(inner.position + Vector2(side_width + clock_width, 0.0), Vector2(side_width, inner.size.y)),
-		Team.RED
+	# Every number below is written against a 1280x720 window and scaled on the way out, so the
+	# bug is the same fraction of the screen whatever size the window is.
+	var s := HudSkin.scale_for(screen)
+	var frame := Rect2(
+		Vector2((screen.x - width * s) * 0.5, top_margin * s), Vector2(width * s, height * s)
 	)
-	_clock(Rect2(inner.position + Vector2(side_width, 0.0), Vector2(clock_width, inner.size.y)))
-	_status(frame)
+	HudSkin.panel(self, frame, 10.0 * s)
+
+	var inner := frame.grow(-9.0 * s)
+	var clock := clock_width * s
+	var side_width := (inner.size.x - clock) * 0.5
+	_crew(Rect2(inner.position, Vector2(side_width, inner.size.y)), Team.BLUE, s)
+	_crew(
+		Rect2(inner.position + Vector2(side_width + clock, 0.0), Vector2(side_width, inner.size.y)),
+		Team.RED, s
+	)
+	_clock(Rect2(inner.position + Vector2(side_width, 0.0), Vector2(clock, inner.size.y)), s)
+	_status(frame, s)
 
 
 ## One crew's column: name, banner, score, stores.
 ##
 ## `outward` is the whole mirroring rule in one variable -- which way this column's contents lean
 ## and which edge is its own.
-func _crew(cell: Rect2, side: int) -> void:
+func _crew(cell: Rect2, side: int, s: float) -> void:
 	var colour := Team.color_of(side)
 	var blue := side == Team.BLUE
 	var outward := HORIZONTAL_ALIGNMENT_LEFT if blue else HORIZONTAL_ALIGNMENT_RIGHT
 	var inward := HORIZONTAL_ALIGNMENT_RIGHT if blue else HORIZONTAL_ALIGNMENT_LEFT
 
-	HudSkin.text(self, Rect2(cell.position, Vector2(cell.size.x, 17.0)), Team.name_of(side), 14, colour, outward)
+	HudSkin.text(
+		self, Rect2(cell.position, Vector2(cell.size.x, 17.0 * s)), Team.name_of(side),
+		int(14.0 * s), colour, outward
+	)
 
-	var score_row := Rect2(cell.position + Vector2(0.0, 15.0), Vector2(cell.size.x, 40.0))
-	HudSkin.text(self, score_row, str(_director.score_of(side)), 34, HudSkin.GOLD, inward)
+	var score_row := Rect2(cell.position + Vector2(0.0, 15.0 * s), Vector2(cell.size.x, 40.0 * s))
+	HudSkin.text(self, score_row, str(_director.score_of(side)), int(34.0 * s), HudSkin.GOLD, inward)
 
 	# The banner on the outer edge, so the two glyphs sit at the ends of the bug and a change in
 	# either is visible in peripheral vision rather than next to a number you are reading.
-	var flag_x := cell.position.x + 4.0 if blue else cell.end.x - 22.0
-	_banner_glyph(Vector2(flag_x, score_row.end.y - 4.0), _director.banner_of(side), colour)
+	var flag_x := cell.position.x + 4.0 * s if blue else cell.end.x - 22.0 * s
+	_banner_glyph(Vector2(flag_x, score_row.end.y - 4.0 * s), _director.banner_of(side), colour, s)
 
 	# Narrower than the column and pushed to the outer edge: a well as wide as the score above it
 	# reads as an empty field somebody forgot to fill in.
-	var stores_width := 96.0
+	var stores_width := 96.0 * s
 	var stores_x := cell.position.x if blue else cell.end.x - stores_width
-	_stores(Rect2(Vector2(stores_x, cell.position.y + 58.0), Vector2(stores_width, 22.0)), side, blue)
+	_stores(
+		Rect2(Vector2(stores_x, cell.position.y + 58.0 * s), Vector2(stores_width, 22.0 * s)),
+		side, blue, s
+	)
 
 
 ## Home is solid, stolen breathes, dropped is dim. Nothing here spells the state out -- the strip
 ## under the bug does that, and only when there is something to say.
-func _banner_glyph(foot: Vector2, banner: Banner, colour: Color) -> void:
+func _banner_glyph(foot: Vector2, banner: Banner, colour: Color, s: float) -> void:
 	var shade := colour
 	match banner.state:
 		Banner.CARRIED:
@@ -120,13 +132,13 @@ func _banner_glyph(foot: Vector2, banner: Banner, colour: Color) -> void:
 			shade.a = 0.75
 		_:
 			shade.a = 1.0
-	HudSkin.flag(self, foot, 30.0, shade)
+	HudSkin.flag(self, foot, 30.0 * s, shade)
 
 
 ## The stores. A wedge and a number, because a bare number next to a score reads as a second
 ## score, and the wedge is the whole of the difference.
-func _stores(row: Rect2, side: int, blue: bool) -> void:
-	HudSkin.well(self, row)
+func _stores(row: Rect2, side: int, blue: bool, s: float) -> void:
+	HudSkin.well(self, row, 6.0 * s)
 
 	var flash := _flash[side]
 	if flash > 0.0:
@@ -137,19 +149,24 @@ func _stores(row: Rect2, side: int, blue: bool) -> void:
 	var colour := HudSkin.GOLD.lerp(Color(1, 1, 1), flash)
 	if count <= 0:
 		colour = HudSkin.HEALTH_LOW
-	var wedge_x := row.position.x + 6.0 if blue else row.end.x - 22.0
-	HudSkin.cheese(self, Vector2(wedge_x, row.position.y + 4.0), 14.0)
+	var wedge_x := row.position.x + 6.0 * s if blue else row.end.x - 22.0 * s
+	HudSkin.cheese(self, Vector2(wedge_x, row.position.y + 4.0 * s), 14.0 * s)
 	HudSkin.text(
-		self, row.grow_side(SIDE_LEFT, -26.0).grow_side(SIDE_RIGHT, -26.0), str(count), 17, colour,
-		HORIZONTAL_ALIGNMENT_LEFT if blue else HORIZONTAL_ALIGNMENT_RIGHT
+		self, row.grow_side(SIDE_LEFT, -26.0 * s).grow_side(SIDE_RIGHT, -26.0 * s), str(count),
+		int(17.0 * s), colour, HORIZONTAL_ALIGNMENT_LEFT if blue else HORIZONTAL_ALIGNMENT_RIGHT
 	)
 
 
-func _clock(cell: Rect2) -> void:
-	HudSkin.text(self, Rect2(cell.position, Vector2(cell.size.x, 16.0)), "TIME", 12, HudSkin.TEXT_DIM, HORIZONTAL_ALIGNMENT_CENTER)
+func _clock(cell: Rect2, s: float) -> void:
+	HudSkin.text(
+		self, Rect2(cell.position, Vector2(cell.size.x, 16.0 * s)), "TIME", int(12.0 * s),
+		HudSkin.TEXT_DIM, HORIZONTAL_ALIGNMENT_CENTER
+	)
 
-	var well := Rect2(cell.position + Vector2(4.0, 16.0), Vector2(cell.size.x - 8.0, 38.0))
-	HudSkin.well(self, well)
+	var well := Rect2(
+		cell.position + Vector2(4.0 * s, 16.0 * s), Vector2(cell.size.x - 8.0 * s, 38.0 * s)
+	)
+	HudSkin.well(self, well, 6.0 * s)
 
 	var left := _director.time_left()
 	var colour := HudSkin.TEXT
@@ -157,13 +174,14 @@ func _clock(cell: Rect2) -> void:
 		colour = HudSkin.TEXT_DIM
 	elif left <= clock_urgent:
 		colour = HudSkin.TEXT.lerp(HudSkin.HEALTH_LOW, 0.4 + 0.6 * HudSkin.pulse(4.0))
-	HudSkin.text(self, well, _as_clock(left), 26, colour, HORIZONTAL_ALIGNMENT_CENTER)
+	HudSkin.text(self, well, _as_clock(left), int(26.0 * s), colour, HORIZONTAL_ALIGNMENT_CENTER)
 
 	# First to three, under the clock. The score alone doesn't say what winning is, and a match
 	# whose finish line you have to be told once is a match you explain to every new player.
 	HudSkin.text(
-		self, Rect2(cell.position + Vector2(0.0, 56.0), Vector2(cell.size.x, 22.0)),
-		"FIRST TO %d" % _director.capture_limit, 11, HudSkin.TEXT_DIM, HORIZONTAL_ALIGNMENT_CENTER
+		self, Rect2(cell.position + Vector2(0.0, 56.0 * s), Vector2(cell.size.x, 22.0 * s)),
+		"FIRST TO %d" % _director.capture_limit, int(11.0 * s), HudSkin.TEXT_DIM,
+		HORIZONTAL_ALIGNMENT_CENTER
 	)
 
 
@@ -172,7 +190,7 @@ func _clock(cell: Rect2) -> void:
 ## THE COUNTDOWN IS THE POINT. A dropped banner is a decision for both crews -- sprint for it or
 ## let it return -- and neither crew can make that call without the number. It is the one piece
 ## of match state that is invisible from looking at the field.
-func _status(frame: Rect2) -> void:
+func _status(frame: Rect2, s: float) -> void:
 	var parts: Array[String] = []
 	for side in [Team.BLUE, Team.RED]:
 		var banner := _director.banner_of(side)
@@ -189,13 +207,13 @@ func _status(frame: Rect2) -> void:
 	# Terse on purpose. The flags directly above say which banner is which, and a strip long
 	# enough to spell it out runs into the permanent bindings in the top-left corner.
 	var body := "   ".join(parts)
-	var size := HudSkin.measure(body, 14)
+	var size := HudSkin.measure(body, int(14.0 * s))
 	var strip := Rect2(
-		Vector2(frame.get_center().x - size.x * 0.5 - 16.0, frame.end.y + 3.0),
-		Vector2(size.x + 32.0, 26.0)
+		Vector2(frame.get_center().x - size.x * 0.5 - 16.0 * s, frame.end.y + 3.0 * s),
+		Vector2(size.x + 32.0 * s, 26.0 * s)
 	)
-	HudSkin.panel(self, strip, 6.0)
-	HudSkin.text(self, strip, body, 14, HudSkin.GOLD, HORIZONTAL_ALIGNMENT_CENTER)
+	HudSkin.panel(self, strip, 6.0 * s)
+	HudSkin.text(self, strip, body, int(14.0 * s), HudSkin.GOLD, HORIZONTAL_ALIGNMENT_CENTER)
 
 
 func _as_clock(seconds: float) -> String:

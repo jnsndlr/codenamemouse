@@ -24,6 +24,9 @@ const HEAD: float = 0.5
 
 @export var network_path: NodePath
 @export var player_path: NodePath
+## The swap point, if this map has one. Optional: it owns the rule about whether a class change
+## is on offer, and this file only asks. Leaving it unwired costs the prompt, not the feature.
+@export var swap_path: NodePath
 ## Clearance between the projected point and the bottom of the text, in pixels. On top of the
 ## world-space lift, because the camera's pitch squashes vertical distance on screen and the
 ## lift alone lands the text on the mouse's back.
@@ -35,12 +38,14 @@ const HEAD: float = 0.5
 
 var _network: TunnelNetwork
 var _player: Node3D
+var _swap: ClassSwap
 var _showing: float = 0.0
 
 
 func _ready() -> void:
 	_network = get_node_or_null(network_path) as TunnelNetwork
 	_player = get_node_or_null(player_path) as Node3D
+	_swap = get_node_or_null(swap_path) as ClassSwap
 	text = ""
 	modulate.a = 0.0
 
@@ -62,6 +67,13 @@ func _process(delta: float) -> void:
 		modulate.a = 0.0
 		return
 
+	# The prompt scales with the rest of the HUD. It is a Label rather than drawn text, so this is
+	# a font size rather than a multiplier, but it is the same number everything else uses.
+	var ui := HudSkin.scale_for(get_viewport_rect().size)
+	if label_settings != null and label_settings.font_size != int(26.0 * ui):
+		label_settings.font_size = int(26.0 * ui)
+		label_settings.outline_size = maxi(4, int(8.0 * ui))
+
 	# Sized to the text before it is placed, because the position is derived from the width --
 	# left at the node's authored rect it would be centred on the label, not on the mouse.
 	reset_size()
@@ -79,9 +91,12 @@ func _process(delta: float) -> void:
 
 ## What the mouse could do where it is standing, or "" for nothing.
 ##
-## One source today. As more contextual actions land this is where they are ranked -- the
-## screen has room for one line above the mouse's head, so two things being true at once has
-## to resolve to the more urgent one rather than stacking.
+## THE RANKING, which is what this function is for. The screen has room for one line above the
+## mouse's head, so two things being true at once resolves to the more urgent rather than
+## stacking. A shaft outranks the swap point because a shaft is a way OUT and you may be being
+## chased through it, while the swap point is at your own nest and will still be there in a
+## second -- and because standing on a shaft in your own nest is otherwise a prompt that flickers
+## between two offers.
 func _hint() -> String:
 	var plane := _network.plane_at_height(_player.global_position.y)
 	var here := _network.world_to_cell(_player.global_position)
@@ -91,4 +106,6 @@ func _hint() -> String:
 		return "[E]  climb down"
 	if _network.has_shaft_up(plane, here):
 		return "[E]  climb up"
+	if _swap != null:
+		return _swap.prompt()
 	return ""

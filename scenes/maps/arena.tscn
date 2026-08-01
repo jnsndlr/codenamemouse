@@ -1,4 +1,4 @@
-[gd_scene load_steps=33 format=3]
+[gd_scene load_steps=36 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="Script" path="res://scripts/game/nest.gd" id="14_nest"]
@@ -10,6 +10,9 @@
 [ext_resource type="Script" path="res://scripts/ui/minimap.gd" id="20_minimap"]
 [ext_resource type="Script" path="res://scripts/ui/roster.gd" id="21_roster"]
 [ext_resource type="Script" path="res://scripts/game/spotting.gd" id="22_spotting"]
+[ext_resource type="Script" path="res://scripts/classes/class_swap.gd" id="23_swap"]
+[ext_resource type="Script" path="res://scripts/classes/cave_in.gd" id="24_cavein"]
+[ext_resource type="Script" path="res://scripts/ui/class_bar.gd" id="25_classbar"]
 [ext_resource type="Script" path="res://scripts/camera/camera_rig.gd" id="2_rig"]
 [ext_resource type="Script" path="res://scripts/tunnels/tunnel_network.gd" id="3_network"]
 [ext_resource type="Script" path="res://scripts/tunnels/dig_controller.gd" id="4_dig"]
@@ -244,6 +247,16 @@ grass_path = NodePath("../Surface/Grass")
 script = ExtResource("22_spotting")
 camouflage_path = NodePath("../GrassCamouflage")
 
+[node name="ClassSwap" type="Node" parent="."]
+script = ExtResource("23_swap")
+player_path = NodePath("../Player")
+director_path = NodePath("../MatchDirector")
+
+[node name="CaveIn" type="Node" parent="."]
+script = ExtResource("24_cavein")
+player_path = NodePath("../Player")
+network_path = NodePath("../Tunnels")
+
 [node name="LookPanel" type="CanvasLayer" parent="."]
 script = ExtResource("11_look")
 camera_path = NodePath("../CameraRig/Pitch/Camera3D")
@@ -271,6 +284,7 @@ label_settings = SubResource("Label_prompt")
 script = ExtResource("7_hint")
 network_path = NodePath("../../Tunnels")
 player_path = NodePath("../../Player")
+swap_path = NodePath("../../ClassSwap")
 
 [node name="Match" type="Control" parent="HUD"]
 script = ExtResource("17_hud")
@@ -293,3 +307,8 @@ camera_rig_path = NodePath("../../CameraRig")
 [node name="Roster" type="Control" parent="HUD"]
 script = ExtResource("21_roster")
 director_path = NodePath("../../MatchDirector")
+
+[node name="ClassBar" type="Control" parent="HUD"]
+script = ExtResource("25_classbar")
+player_path = NodePath("../../Player")
+swap_path = NodePath("../../ClassSwap")

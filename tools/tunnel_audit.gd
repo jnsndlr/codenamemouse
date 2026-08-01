@@ -21,7 +21,10 @@ extends SceneTree
 ##                   distinct "the way out is HERE" rather than one merged bright patch.
 ##   PLANE_LAYERS    Each plane's collision is on its own layer, so a mouse only ever meets
 ##                   the geometry of the layer it's standing on.
-##   REACHABLE       Every dug cell can be got to from a surface entrance.
+##   REACHABLE       Every dug cell can be got to from a surface entrance. A rule about what
+##                   DIGGING may leave behind, not about the network at all times: the Engineer's
+##                   cave-in strands cells on purpose, which is asserted on its own terms in
+##                   `_check_collapse` and kept out of the scenarios above.
 ##   BOUNDS          No cell outside the diggable arena.
 ##   FLOOR_PHYSICS   Something solid exists under every dug cell, at the height the renderer
 ##                   claims. Guards the render/collision split.
@@ -42,9 +45,19 @@ extends SceneTree
 ## stay -- they are load-bearing for containment. Everything else is either irrelevant or
 ## actively in the way: the rock scatter's colliders would BLOCK containment casts and quietly
 ## turn a real hole into a pass, and a live player wandering the arena makes it non-deterministic.
+## WRITTEN OUT IN FULL, and it has to stay that way. This was `[...] + STRIP_MATCH`, and adding
+## two `Array[String]`s in GDScript produces an UNTYPED `Array` -- which, passed to a parameter
+## declared `Array[String]`, aborts the call at runtime. `_arena` then returned null, every check
+## below quietly did nothing to a null network, and all fourteen scenarios reported "ok" while
+## testing precisely nothing. The dig-flow check passed STRIP_MATCH directly and was the only
+## honest line in the file.
+##
+## The type is half the fix. The other half is in `_fresh_network`: a harness that cannot build
+## its subject must say so, not fall through to a clean bill of health.
 const STRIP: Array[String] = [
-	"Player", "CameraRig", "DigController", "DepthFocus", "FallGuard", "HUD", "Surface/Rocks"
-] + STRIP_MATCH
+	"Player", "CameraRig", "DigController", "DepthFocus", "FallGuard", "HUD", "Surface/Rocks",
+	"MatchDirector", "Navigation", "Nests"
+]
 
 ## The flag game, stripped from every scenario including the dig-flow one. Bots would wander
 ## through the containment probes and make them non-deterministic, and the navmesh bake costs
@@ -88,11 +101,14 @@ func _initialize() -> void:
 		["wide_chamber", _build_wide_chamber],
 		["two_entrances", _build_two_entrances],
 		["crowded_entrances_refused", _build_crowded_entrances_refused],
+		["collapsed_dead_end", _build_collapsed_dead_end],
 	]
 
 	for scenario: Array in scenarios:
 		var label: String = scenario[0]
-		await _fresh_network()
+		if not await _fresh_network():
+			_broken(label, "the arena would not build -- nothing in this scenario was tested")
+			continue
 		(scenario[1] as Callable).call()
 		for i in range(3):
 			await process_frame
@@ -100,13 +116,16 @@ func _initialize() -> void:
 		_audit(label)
 
 	await _check_dig_flow()
+	await _check_routing()
+	await _check_collapse()
 
 	print("")
 	print("=".repeat(78))
 	if _total_failures == 0:
-		print("ALL INVARIANTS HOLD across %d scenarios, plus the dig flow." % scenarios.size())
+		print("ALL INVARIANTS HOLD across %d scenarios, plus dig flow, routing and collapse."
+			% scenarios.size())
 	else:
-		print("%d failures across %d scenarios plus the dig flow." % [
+		print("%d failures across %d scenarios plus dig flow, routing and collapse." % [
 			_total_failures, scenarios.size()
 		])
 	print("=".repeat(78))
@@ -119,14 +138,24 @@ func _initialize() -> void:
 ## The REAL scene, not a bare TunnelNetwork. A bare network has no ground slab, so containment
 ## on the surface is meaningless and the lawn -- which is plane 1's ceiling, and once crushed
 ## the mouse flat -- would never be tested at all.
-func _fresh_network() -> void:
+## Returns whether there is anything to audit. CHECKED BY EVERY CALLER, because the alternative
+## is what this file did for its whole life so far: build nothing, check nothing, print ok.
+## A test that cannot fail loudly when its own scaffolding breaks is worse than no test, since it
+## also stops anyone looking.
+func _fresh_network() -> bool:
 	if _scene != null:
 		_scene.free()
+		_scene = null
 	_scene = _arena(STRIP)
-	_network = _scene.get_node("Tunnels") as TunnelNetwork
+	if _scene == null:
+		return false
+	_network = _scene.get_node_or_null("Tunnels") as TunnelNetwork
+	if _network == null:
+		return false
 	await process_frame
 	await physics_frame
 	_space = _scene.get_viewport().world_3d.direct_space_state
+	return _space != null
 
 
 ## The arena, with the named nodes removed BEFORE it enters the tree.
@@ -177,15 +206,34 @@ func _check_dig_flow() -> void:
 
 	_findings.clear()
 	var neighbour := Vector2i(0, 1)
+	var slow := Vector2i(0, -1)
 	var far := Vector2i(0, 9)
 
-	# Adjacent, within reach, undug: should open after dig_seconds of holding.
+	# Adjacent, within reach, undug: an ENGINEER should open it after dig_seconds of holding.
+	# Forty frames is two thirds of a second against a dig_seconds of 0.5.
+	player.set_class(MouseClass.ENGINEER)
 	player._aim_point = network.cell_to_world(1, neighbour)
 	Input.action_press("dig")
 	for i in range(40):
 		controller._update_dig(1.0 / 60.0)
 	if not network.is_dug(1, neighbour):
-		_fail("DIG_FLOW", "holding the dig button on an adjacent tile did not open it")
+		_fail("DIG_FLOW", "an Engineer holding on an adjacent tile did not open it")
+
+	# THE SPREAD, WHICH IS THE WHOLE POINT OF THE CLASS. Everybody can dig; the Engineer is about
+	# three times faster (GDD section 4, revised -- see the note there). Both halves are asserted
+	# because both are design: a Generalist must NOT open a tile in the time an Engineer does, or
+	# the Engineer is decorative -- and must open it eventually, or a crew that loses its Engineer
+	# is locked out of a third of the map.
+	player.set_class(MouseClass.GENERALIST)
+	player._aim_point = network.cell_to_world(1, slow)
+	for i in range(40):
+		controller._update_dig(1.0 / 60.0)
+	if network.is_dug(1, slow):
+		_fail("DIG_FLOW", "a Generalist dug as fast as an Engineer")
+	for i in range(100):
+		controller._update_dig(1.0 / 60.0)
+	if not network.is_dug(1, slow):
+		_fail("DIG_FLOW", "a Generalist could not open a tile however long it held")
 
 	# Out of reach: must stay shut no matter how long you hold.
 	player._aim_point = network.cell_to_world(1, far)
@@ -205,6 +253,287 @@ func _check_dig_flow() -> void:
 
 	print("")
 	print("-- dig_flow")
+	if _findings.is_empty():
+		print("   ok")
+		return
+	for finding: String in _findings:
+		print("   FAIL %s" % finding)
+	_total_failures += _findings.size()
+
+
+## Can something walk it? (M4)
+##
+## Every other check in this file asks whether the GEOMETRY is sound. This one asks whether the
+## routing graph agrees with that geometry, which is a different question with the same failure
+## mode -- silence. A graph that is missing an edge produces a bot that mills about on the lawn,
+## and a graph with an edge too many produces one that walks into earth; neither says anything,
+## and both look like the AI being stupid rather than the map being wrong.
+##
+## THE DIAGONAL CASE IS THE ONE TO KEEP. Walls are built on the four faces of a cell, so two
+## cells touching at a corner have no gap between them -- and an eight-way graph, which is the
+## obvious thing to write, would route straight through it. That failure is invisible from
+## above and looks exactly like a bot clipping a wall.
+func _check_routing() -> void:
+	_findings.clear()
+
+	# A corridor with a bend in it, from a mouth on the lawn.
+	if not await _fresh_network():
+		_broken("routing", "the arena would not build")
+		return
+	_descend(0, Vector2i(0, 0))
+	_drive(1, Vector2i(0, 0), Vector2i(0, 1), 8)
+	_drive(1, Vector2i(0, 7), Vector2i(1, 0), 6)
+	var graph := _network.graph()
+
+	if graph == null:
+		_fail("ROUTING", "the network has no graph at all")
+		_report_routing()
+		return
+
+	# The graph knows exactly what was dug, plus the mouths on the lawn -- no more, no less.
+	var expected := _network.shaft_cells(0).size()
+	for plane in range(1, TunnelNetwork.PLANE_COUNT):
+		expected += _network.cell_count(plane)
+	if graph.size() != expected:
+		_fail("ROUTING", "graph holds %d cells, the network has %d" % [graph.size(), expected])
+
+	var route := graph.route(0, Vector2i(0, 0), 1, Vector2i(5, 7))
+	if route.is_empty():
+		_fail("ROUTING", "no route from the entrance to the far end of its own corridor")
+	_check_steps(route, "corridor")
+
+	# Every step has to be somewhere you could actually stand.
+	for step: Dictionary in route:
+		var plane: int = step["plane"]
+		var cell: Vector2i = step["cell"]
+		if plane == 0:
+			if not _network.has_shaft_down(0, cell):
+				_fail("ROUTING", "route crosses the lawn at %v, which is not an entrance" % cell)
+		elif not _network.is_dug(plane, cell):
+			_fail("ROUTING", "route runs through undug earth at plane %d %v" % [plane, cell])
+
+	# Two corridors that never meet must not be joined by a route, however close they pass.
+	if not await _fresh_network():
+		_broken("routing", "the arena would not build")
+		return
+	_descend(0, Vector2i(0, 0))
+	_drive(1, Vector2i(0, 0), Vector2i(1, 0), 6)
+	_descend(0, Vector2i(0, 4))
+	_drive(1, Vector2i(0, 4), Vector2i(1, 0), 6)
+	graph = _network.graph()
+	if not graph.route(1, Vector2i(3, 0), 1, Vector2i(3, 4)).is_empty():
+		_fail("ROUTING", "a route was found between two corridors that do not connect")
+
+	# THE DIAGONAL. A staircase of corner-touching cells is not walkable and must not be
+	# routable -- and the two cells at the ends of it are four cells apart in plan view, so a
+	# graph that answers at all here is answering through solid earth.
+	if not await _fresh_network():
+		_broken("routing", "the arena would not build")
+		return
+	_descend(0, Vector2i(0, 0))
+	for i in range(1, 5):
+		_network.dig(1, Vector2i(i, i))
+	graph = _network.graph()
+	if not graph.route(1, Vector2i(0, 0), 1, Vector2i(4, 4)).is_empty():
+		_fail("ROUTING", "a diagonal staircase routed as if it were a corridor")
+
+	# Down two planes and back up a different shaft: the vertical edges are shafts and only
+	# shafts, and a route may use them in either direction.
+	if not await _fresh_network():
+		_broken("routing", "the arena would not build")
+		return
+	_descend(0, Vector2i(0, 0))
+	_drive(1, Vector2i(0, 0), Vector2i(0, 1), 5)
+	_descend(1, Vector2i(0, 4))
+	_drive(2, Vector2i(0, 4), Vector2i(1, 0), 5)
+	graph = _network.graph()
+	var deep := graph.route(0, Vector2i(0, 0), 2, Vector2i(4, 4))
+	if deep.is_empty():
+		_fail("ROUTING", "no route from the lawn down to the second plane")
+	_check_steps(deep, "descent")
+
+	# TWO CORRIDORS JOINED ONLY BY THE LAWN. Plane 1 has two of them here, each with its own
+	# entrance, and a route between them would have to walk across the grass. The graph must
+	# refuse: the surface is a navmesh, not a row of cells, and a graph that quietly connected
+	# two mouths would be inventing a straight line over ground it knows nothing about. Crossing
+	# the lawn is route_planner.gd's job, and it is the only thing that can see the props.
+	if not await _fresh_network():
+		_broken("routing", "the arena would not build")
+		return
+	# Every shaft here is kept clear of every other, on this plane and the ones next to it. Laid
+	# out by hand and worth checking against the exclusion rule when you edit it: a refused shaft
+	# leaves a plane of cells with nothing joining them, and the routing failure that produces
+	# looks exactly like a bug in the graph.
+	_descend(0, Vector2i(0, 0))
+	_drive(1, Vector2i(0, 0), Vector2i(1, 0), 6)
+	_descend(0, Vector2i(0, 4))
+	_drive(1, Vector2i(0, 4), Vector2i(1, 0), 4)
+	_descend(1, Vector2i(3, 4))
+	_drive(2, Vector2i(3, 4), Vector2i(1, 0), 5)
+	graph = _network.graph()
+	if not graph.route(2, Vector2i(7, 4), 1, Vector2i(5, 0)).is_empty():
+		_fail("ROUTING", "the graph routed across the lawn between two separate networks")
+	# Within one network, though, a route down and along must exist and be honest.
+	_check_steps(graph.route(0, Vector2i(0, 4), 2, Vector2i(7, 4)), "descent_two")
+
+	# THE MOUTH THAT DOESN'T WORK. The entrance nearest this starting point is (0,0), whose
+	# corridor goes nowhere near the destination; the one that gets there is further away. A
+	# planner that simply picks the closest hole strands a bot on the lawn above its quarry,
+	# which is the exact failure this milestone exists to remove.
+	var below := _network.cell_to_world(2, Vector2i(7, 4))
+	var plan := RoutePlanner.plan(_network, Vector3(6.0, 0.2, -3.0), 0, below, 2)
+	if not plan.is_empty() and (plan[0]["cell"] as Vector2i) != Vector2i(0, 4):
+		_fail("ROUTING", "the planner went down a hole that does not lead to the destination")
+	if plan.is_empty():
+		_fail("ROUTING", "the planner found no way to a destination underground")
+	elif (plan[plan.size() - 1]["at"] as Vector3).distance_to(below) > 0.01:
+		_fail("ROUTING", "the plan does not end at the destination")
+	elif int(plan[0]["plane"]) != 0:
+		_fail("ROUTING", "the plan does not start on the surface")
+
+	# LAWN TO LAWN, WHICH IS THE ONLY CASE WITH A CHOICE IN IT. A corridor between two entrances,
+	# and two points that would otherwise be a walk across the top of it.
+	#
+	# Worth knowing why the bias is turned up to force the issue: on this arena a tunnel can never
+	# win on merit, because the yard is eighty metres of open dirt and no underground route is
+	# shorter than the straight line above it. That is a map problem, not a routing one (GDD
+	# section 8, and M3 said the same thing about the midfield). The bias makes the machinery
+	# testable today, and the day the yard has a patio in the middle of it the honest comparison
+	# will start choosing tunnels on its own.
+	if not await _fresh_network():
+		_broken("routing", "the arena would not build")
+		return
+	_descend(0, Vector2i(-6, 0))
+	_drive(1, Vector2i(-6, 0), Vector2i(1, 0), 13)
+	_network.dig_shaft_up(1, Vector2i(6, 0))
+	var across := RoutePlanner.plan(
+		_network, Vector3(-7.0, 0.2, 0.0), 0, Vector3(7.0, 0.2, 0.0), 0, 0.2
+	)
+	if across.is_empty():
+		_fail("ROUTING", "no tunnel route between two entrances even at a heavy bias")
+	else:
+		_check_steps(across.slice(0, across.size() - 1), "across")
+		if int(across[0]["plane"]) != 0:
+			_fail("ROUTING", "the crossing does not start at an entrance on the lawn")
+		var surfaced := false
+		for i in range(1, across.size()):
+			if int(across[i]["plane"]) == 0 and int(across[i - 1]["plane"]) > 0:
+				surfaced = true
+		if not surfaced:
+			_fail("ROUTING", "the crossing goes underground and never comes back up")
+		if (across[across.size() - 1]["at"] as Vector3).distance_to(Vector3(7.0, 0.2, 0.0)) > 0.01:
+			_fail("ROUTING", "the crossing does not end at the destination")
+
+	# And with no thumb on the scale, the same two points are a walk. Nothing underground beats
+	# open ground in a straight line, and a planner that thought otherwise would be sending bots
+	# down holes for no reason.
+	if not RoutePlanner.plan(
+		_network, Vector3(-7.0, 0.2, 0.0), 0, Vector3(7.0, 0.2, 0.0), 0
+	).is_empty():
+		_fail("ROUTING", "a tunnel was preferred to walking straight across open ground")
+
+	if not await _fresh_network():
+		_broken("routing", "the arena would not build")
+		return
+	if not RoutePlanner.plan(
+		_network, Vector3(-8.0, 0.2, -8.0), 0, Vector3(8.0, 0.2, 8.0), 0
+	).is_empty():
+		_fail("ROUTING", "the planner routed through a network with no tunnels in it")
+
+	_report_routing()
+
+
+## Bringing a tunnel down: what goes, what stays, and what is refused. (M4)
+##
+## Collapse is the only operation in the whole system that makes the network SMALLER, and a great
+## deal of the code around it quietly assumes growth -- the routing graph, the dug mask, the wall
+## mesh and the lamps are all caches over the cell dictionary. This is the check that they all
+## heard about it.
+func _check_collapse() -> void:
+	_findings.clear()
+	if not await _fresh_network():
+		_broken("collapse", "the arena would not build")
+		return
+
+	_descend(0, Vector2i(0, 0))
+	_drive(1, Vector2i(0, 0), Vector2i(0, 1), 8)
+	var graph := _network.graph()
+	var before := _network.cell_count(1)
+	var points := graph.size()
+
+	# The cell in the middle of the corridor goes.
+	if not _network.collapse(1, Vector2i(0, 4)):
+		_fail("COLLAPSE", "a plain corridor cell refused to come down")
+	if _network.is_dug(1, Vector2i(0, 4)):
+		_fail("COLLAPSE", "the cell is still dug afterwards")
+	if _network.cell_count(1) != before - 1:
+		_fail("COLLAPSE", "the cell count did not drop by exactly one")
+	if graph.size() != points - 1:
+		_fail("COLLAPSE", "the routing graph did not lose the cell")
+	if graph.has(1, Vector2i(0, 4)):
+		_fail("COLLAPSE", "the graph still thinks you can stand there")
+
+	# AND EVERYTHING PAST IT IS CUT OFF. This is the mechanic, not a side effect: sealing a
+	# corridor is how an Engineer stops something following them, and a route that still found a
+	# way through would mean the seal did nothing.
+	if not graph.route(0, Vector2i(0, 0), 1, Vector2i(0, 7)).is_empty():
+		_fail("COLLAPSE", "a route still runs through the collapsed cell")
+	if not graph.has(1, Vector2i(0, 7)):
+		_fail("COLLAPSE", "the stranded cells were removed as well -- they should still exist")
+
+	# Twice is a no-op rather than a second hole in the counting.
+	if _network.collapse(1, Vector2i(0, 4)):
+		_fail("COLLAPSE", "collapsing the same cell twice reported success")
+
+	# A SHAFT HOLDS ITS STRETCH OPEN. Either end of a shaft is refused, or the audit's own
+	# SHAFT_ENDS invariant would start failing the moment anyone used the ability near a ladder --
+	# and in play it is a mouse pressing E and arriving inside solid ground.
+	if _network.collapse(1, Vector2i(0, 0)):
+		_fail("COLLAPSE", "the cell under an entrance came down")
+	_descend(1, Vector2i(0, 6))
+	if _network.collapse(1, Vector2i(0, 6)):
+		_fail("COLLAPSE", "a cell with a shaft leading down came down")
+	if _network.collapse(2, Vector2i(0, 6)):
+		_fail("COLLAPSE", "the cell a shaft lands on came down")
+
+	# The surface is not diggable and not collapsible either.
+	if _network.collapse(0, Vector2i(0, 0)):
+		_fail("COLLAPSE", "a piece of the lawn came down")
+
+	print("")
+	print("-- collapse")
+	if _findings.is_empty():
+		print("   ok")
+	else:
+		for finding: String in _findings:
+			print("   FAIL %s" % finding)
+		_total_failures += _findings.size()
+
+
+## Consecutive waypoints must be one step apart: a shared face on the same plane, or the same
+## cell across a plane through a shaft. Anything else is a route through earth.
+func _check_steps(route: Array[Dictionary], label: String) -> void:
+	for i in range(1, route.size()):
+		var here: Vector2i = route[i]["cell"]
+		var last: Vector2i = route[i - 1]["cell"]
+		var plane: int = route[i]["plane"]
+		var was: int = route[i - 1]["plane"]
+
+		if plane == was:
+			var gap := here - last
+			if absi(gap.x) + absi(gap.y) != 1:
+				_fail("ROUTING", "%s: %v to %v is not one step" % [label, last, here])
+			continue
+
+		if absi(plane - was) != 1 or here != last:
+			_fail("ROUTING", "%s: jumped from plane %d to %d" % [label, was, plane])
+		elif not _network.has_shaft_down(mini(plane, was), here):
+			_fail("ROUTING", "%s: changed plane at %v with no shaft there" % [label, here])
+
+
+func _report_routing() -> void:
+	print("")
+	print("-- routing")
 	if _findings.is_empty():
 		print("   ok")
 		return
@@ -363,6 +692,24 @@ func _build_two_entrances() -> void:
 	_drive(1, Vector2i(3, 0), Vector2i(0, 1), 5)
 
 
+## A corridor with its far end brought down by an Engineer (M4).
+##
+## THE POINT IS THE NINE INVARIANTS ABOVE, applied to geometry that got SMALLER. Everything else
+## in this file builds by digging, and collapse is the only operation that removes a cell -- so
+## it is the only one that can leave a wall unbuilt, a floor without collision under it, or a
+## capsule able to slide into the hole where a tile used to be. Running the whole existing suite
+## over it costs one scenario and covers all of that.
+##
+## A DEAD END, deliberately, so REACHABLE still holds. Collapsing the MIDDLE of a corridor
+## strands everything past it -- which is exactly what a cave-in is for, and is asserted on its
+## own terms in `_check_collapse` rather than here, where it would read as the network being
+## broken. REACHABLE is a rule about what DIGGING may leave behind.
+func _build_collapsed_dead_end() -> void:
+	_descend(0, Vector2i(0, 0))
+	_drive(1, Vector2i(0, 0), Vector2i(0, 1), 6)
+	_network.collapse(1, Vector2i(0, 5))
+
+
 ## Entrances crowding each other. Every cell touching the first one must be refused, including
 ## the diagonals -- a diagonal pair is still two mouths you can step between in one move.
 func _build_crowded_entrances_refused() -> void:
@@ -408,6 +755,15 @@ func _audit(label: String) -> void:
 
 func _fail(check: String, detail: String) -> void:
 	_findings.append("[%s] %s" % [check, detail])
+
+
+## The harness itself is broken. Counted as a failure rather than skipped: a scenario that did
+## not run is not a scenario that passed, and the exit code has to say so.
+func _broken(label: String, why: String) -> void:
+	print("")
+	print("-- %s" % label)
+	print("   BROKEN %s" % why)
+	_total_failures += 1
 
 
 ## Both ends of a shaft have to be somewhere you can stand: floor below, and floor above

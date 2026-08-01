@@ -444,7 +444,7 @@ tell, and it costs no cooldown and no resource. That is a mechanic, and mechanic
 **Done when:** standing still in grass, you feel hidden — and you can spot someone else
 crossing a patch without seeing the mouse itself.
 
-**Not in scope:** actual concealment rules (does grass really break line of sight?), Scout
+**Not in scope:** actual concealment rules (does grass really break line of sight?), Sneak
 camouflage stacking, grass on any map but this one, tuning the stealth balance. This
 milestone answers whether the *tell* reads. Whether it's fair is M5's problem, when hidden
 information gets built for real.
@@ -604,6 +604,116 @@ behind it.
 **Done when:** you'd rather take the tunnel than the surface route — and the choice
 feels like a real decision rather than an obvious one.
 
+#### In progress — the Engineer, and classes that mean something (landed)
+
+Four `ClassDefinition` resources in `resources/classes/`, per this plan's own data-driven
+section, copied onto a mouse by `set_class` rather than read through a reference — so grass,
+combat, carrying, the HUD and the bots all get per-class behaviour without one of them learning
+what a class is. Swap point at your own nest, **C**, cycling.
+
+- **Everyone digs; the Engineer is three times faster.** A deliberate revision of GDD §4's
+  exclusivity, recorded there. Exclusivity makes one seat a *requirement* — lose your Engineer
+  and the crew is locked out of three planes until it respawns. Speed carries the identity
+  instead, and the Engineer's Pillar-4 exclusive moves to **un**-digging: caving in behind you,
+  and barricades. That collides with the Brute's Collapse and the split is written up as a
+  `[DECIDE]` in §4 rather than quietly resolved here.
+- **`tunnel_speed` is where the classes first feel different.** Size matters underground (§3),
+  and it applies *only* below the surface — which is what makes a slow Brute read as a cork in
+  a corridor rather than as lag on the lawn.
+- **The swap rule is asked of the nest, not of a prop.** `Nest.contains` is already the capture
+  disc and the respawn point; a hand-placed swap-point object would drift away from both, and a
+  swap zone that isn't quite the capture zone is a bug you only find by playing. It also means
+  §4's "free on respawn" needs no second mechanism — you come back standing where swapping works.
+- **The dig-flow audit failed the moment classes landed, correctly.** It encoded "everyone digs
+  at one speed". It now asserts the *spread* in both directions: a Generalist must not open a
+  tile in the time an Engineer does, and must open it eventually.
+
+**The Engineer's capability landed too: the cave-in** (`scripts/classes/cave_in.gd`, `Q`).
+`TunnelNetwork.collapse` is the first and only operation that makes the network *smaller*, which
+matters more than it sounds — the routing graph, the dug mask, the wall mesh and the lamps are
+all caches over the cell dictionary, and every one of them had been written assuming growth.
+`AStar3D.remove_point` took its own edges with it, which is the second time picking a real graph
+structure over a hand-rolled adjacency list has paid for itself.
+
+- **Aimed, not automatic.** The obvious build is "seal the cell you just left, free, while
+  fleeing". Aiming it means turning to look, which means not running for a moment — the trade §9
+  already asks for around throwing while fleeing, and the thing that stops this being a free
+  escape button.
+- **A shaft cell is refused.** Either end of a shaft would leave a ladder starting or finishing
+  in solid earth — SHAFT_ENDS catches it in the audit, and in play it is a mouse pressing E and
+  arriving inside the ground.
+- **Stranding is allowed and REACHABLE had to be re-scoped to say so.** Sealing a corridor cuts
+  off everything past it; that is the mechanic. The invariant is now explicitly a rule about
+  what *digging* may leave behind, with the stranding case asserted on its own terms.
+- **The selector bar** (`scripts/ui/class_bar.gd`) appears on the same condition the swap does,
+  and the contextual hint was cut back to just the key — the bar already shows the four cards
+  and a pointer at the one you are, and saying it twice would put the smaller copy above your
+  head. Icons are drawn rather than imported, like the rest of this HUD.
+- **Scout → Sneak, Bruiser → Brute**, from the mockup, everywhere including the docs.
+- **The HUD scales with the window.** It was written in raw pixels, which is correct at exactly
+  one window size and wrong everywhere else — at 1080p the score bug had shrunk to a strip you
+  had to lean in to read. One multiplier (`HudSkin.scale_for`, the smaller of the two ratios,
+  clamped) applied to every size in every HUD file. Deliberately *not* Godot's `canvas_items`
+  stretch mode: it would do the same job for free and also render the 3D at the base resolution
+  and upscale it, which would quietly undo the pixel pass the look is built on. The HUD is drawn,
+  so the HUD can scale itself and leave the renderer alone.
+- **Roster portraits, one per class, placeholder.** A list of four names is a list you read; a
+  row of four faces is one you recognise. The headgear tells the classes apart rather than the
+  face — four differently-shaped mice would be four sets of proportions to get wrong. All of it
+  behind `_portrait`, so real art is a texture lookup and the file changes in no other way.
+
+**Bots are all Generalists for now**, deliberately. A Brute bot without Slam is just a slow
+mouse, and a Sneak without sonar is just a fragile one — class variety for the AI is worth
+having the day the abilities exist and not before.
+
+#### In progress — bots path through tunnels (landed)
+
+The centre of gravity is done. An `AStar3D` graph mirrors the dug cells (`tunnel_graph.gd`),
+kept current incrementally off two new signals rather than rebuilt; `route_planner.gd` stitches
+it to the surface navmesh; `tunnel_transit.gd` is the one door between the two, shared by the
+player's controller and the AI so the rule that *the banner cannot go down* cannot exist in two
+versions. A defender now meets you three planes down. The Engineer class, the dig-controls pass
+and per-plane obstructions are still to come.
+
+- **Four-way, and that isn't a simplification.** Walls are built on the four faces of a cell,
+  so two diagonally touching cells have no gap between them. The obvious eight-way graph routes
+  straight through that corner and into earth — invisible from above, and indistinguishable
+  from a bot clipping a wall. The graph's connectivity is the geometry's, exactly, and the audit
+  builds a diagonal staircase specifically to assert nothing routes along it.
+- **Plane 0 exists in the graph only at shaft mouths.** The surface is a navmesh, not a grid;
+  the mouths are the only place the two systems touch. A graph that connected two mouths
+  directly would be inventing a straight line across ground it knows nothing about — so it
+  refuses, and crossing the lawn stays the planner's job, because the planner is the only thing
+  that can see the props.
+- **"Go down the nearest hole" is wrong, and the audit caught it the first time it ran.** The
+  nearest entrance may open onto a corridor that goes nowhere near your destination — which
+  strands a bot on the lawn directly above its quarry, the exact failure this milestone exists
+  to remove. The few nearest mouths at each end are now tried and the cheapest connecting route
+  wins.
+- **Measure the lawn with the navmesh, not with a straight line.** The first version compared
+  the tunnel against the crow-flies distance, which is optimistic in precisely the case tunnels
+  exist for: a patio in the way makes the real walk far longer than the line, so the planner
+  would conclude the surface was fine and never go under anything. It would have made the
+  milestone's question unanswerable by construction.
+
+> **Bots never take a tunnel when both ends are above ground, and that is the correct answer to
+> a map problem.** No route under this arena is shorter than the straight line over the top of
+> it, because the yard is eighty metres of open dirt — M3 said the same thing about the midfield
+> from the other direction. Nothing in the router is disabled or biased off; it simply keeps
+> answering "walk". The comparison starts choosing tunnels the day the map has something in the
+> way, which makes **laying out a real Backyard BBQ (GDD §8) a prerequisite for M4's own
+> question**, not a polish task for later.
+
+> **The tunnel audit had been passing without testing anything.** `const STRIP: Array[String] =
+> [...] + STRIP_MATCH` yields an *untyped* array in GDScript; passed to a parameter declared
+> `Array[String]` it aborts the call at runtime, so `_arena` returned null, every check no-opped
+> on a null network, and all fourteen scenarios reported `ok`. Only the dig-flow check, which
+> passes `STRIP_MATCH` directly, was ever real. The geometry turned out to be sound when the
+> scenarios finally ran — luck, not vindication. **Both halves are fixed:** the type, and a
+> harness that reports `BROKEN` and fails the run when it cannot build its own subject. The
+> lesson generalises past this file: a test that cannot fail loudly when its own scaffolding
+> breaks is worse than no test, because it also stops anyone looking.
+
 ---
 
 ### M5 — Hidden information (1 week)
@@ -612,7 +722,7 @@ feels like a real decision rather than an obvious one.
 
 - Server-filtered per-team tunnel visibility
 - Own-tunnel wide awareness vs. enemy-tunnel line-of-sight + fog
-- Scout class with sonar
+- Sneak class with sonar
 - Minimap layer rendering
 
 **Done when:** crawling into an enemy tunnel is *frightening*.
@@ -646,13 +756,13 @@ Not perfect — playable.
 
 ---
 
-### M8 — Bruiser and the world (2 weeks)
+### M8 — Brute and the world (2 weeks)
 
 **Question:** do the counterplay web and the PvE faction pay off?
 
 Two experiments, added **separately** so you can tell which did what:
 
-**8a — Bruiser:** collapse (planes 1–2), corking, Slam. Completes the counterplay web.
+**8a — Brute:** collapse (planes 1–2), corking, Slam. Completes the counterplay web.
 Does the Engineer actually start digging deeper in response? That behavioral change is
 the proof the web works.
 
@@ -694,7 +804,7 @@ non-capsule mouse.
   hidden information every class can produce and read, which makes it a mechanic, not a
   finish. Building the flag chase on bare ground and adding cover afterwards would mean
   tuning the chase twice.
-- **Scout camouflage shader** — placeholder transparency until then
+- **Sneak camouflage shader** — placeholder transparency until then
 - The Juggernaut and Generalist — M9 at the earliest
 - Audio beyond crude placeholders
 - Client prediction — until it demonstrably hurts
@@ -745,7 +855,7 @@ entire server.
 | Bot pathing through tunnels | `AStar3D` over the same graph players use; one source of truth |
 | M3 isn't fun | That's what M3 is for. The answer is worth more than the code. |
 | Netcode rabbit hole | Listen server, no prediction until it hurts, transport behind an interface |
-| Scope creep via classes | Two classes through M5. Bruiser at M8. Generalist and Juggernaut at M9. |
+| Scope creep via classes | Two classes through M5. Brute at M8. Generalist and Juggernaut at M9. |
 | Art paralysis | Capsules through M8. No art decisions until systems are proven. |
 | Motivation over a long solo project | Every milestone is 1–2 weeks and ends in something playable |
 

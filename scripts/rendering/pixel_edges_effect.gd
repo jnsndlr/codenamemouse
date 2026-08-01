@@ -13,7 +13,7 @@ extends CompositorEffect
 ## Dithering dodges it by staying opaque, and looks like dithering. Recolouring dodges it by
 ## staying opaque, and cannot fade against anything but a known backdrop. Both are workarounds
 ## for the pass running too early. This is the pass running at the right time instead, and it
-## makes ordinary alpha work everywhere -- for the mouse now, and for the Scout's camouflage
+## makes ordinary alpha work everywhere -- for the mouse now, and for the Sneak's camouflage
 ## when M5 arrives.
 ##
 ## The cost is that a CompositorEffect is compute rather than a fragment shader: explicit

@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="ClassDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/classes/class_definition.gd" id="1_class"]
+
+[resource]
+script = ExtResource("1_class")
+display_name = "BRUTE"
+tag = "BRT"
+max_health = 160.0
+speed = 2.4
+turn_speed = 7.0
+sprint_seconds = 1.5
+attack_damage = 40.0
+carry_penalty = 0.3
+tunnel_speed = 0.35
+dig_speed = 0.35
+can_enter_tunnels = true

@@ -60,6 +60,9 @@ var _counted: Array[int] = []
 var _scale: float = 1.0
 var _origin: Vector2 = Vector2.ZERO
 var _yaw: float = 0.0
+## The HUD's own size multiplier, so markers stay the same size RELATIVE TO THE PANEL rather
+## than staying the same number of pixels while the map around them grows.
+var _ui: float = 1.0
 
 
 func _ready() -> void:
@@ -83,12 +86,16 @@ func _draw() -> void:
 	if _director == null:
 		return
 
-	var frame := Rect2(
-		Vector2(margin, get_viewport_rect().size.y - map_size - margin), Vector2(map_size, map_size)
-	)
-	HudSkin.panel(self, frame)
-	var map := frame.grow(-7.0)
-	HudSkin.well(self, map, 4.0)
+	var screen := get_viewport_rect().size
+	# Written against a 1280x720 window and scaled out, like the rest of the HUD.
+	var ui := HudSkin.scale_for(screen)
+	var side := map_size * ui
+	var edge := margin * ui
+	var frame := Rect2(Vector2(edge, screen.y - side - edge), Vector2(side, side))
+	HudSkin.panel(self, frame, 10.0 * ui)
+	var map := frame.grow(-7.0 * ui)
+	HudSkin.well(self, map, 4.0 * ui)
+	_ui = ui
 
 	# Fits the arena at any quarter turn: rotated forty-five degrees a square is its own diagonal
 	# across, so scaling to that keeps the yard inside the well however the camera is pointing.
@@ -127,7 +134,7 @@ func _ground() -> void:
 		PackedVector2Array([
 			Vector2(-e, -e), Vector2(e, -e), Vector2(e, e), Vector2(-e, e), Vector2(-e, -e)
 		]),
-		Color(0.36, 0.30, 0.20, 0.8), _pixel(1.5)
+		Color(0.36, 0.30, 0.20, 0.8), _pixel(1.5 * _ui)
 	)
 
 
@@ -138,7 +145,7 @@ func _tunnel_cells() -> void:
 		return
 	# A touch wider than a cell. Drawn at exactly one cell, adjacent tiles leave hairline seams at
 	# this scale and a corridor reads as a dotted line rather than as a route you could take.
-	var side := maxf(TunnelNetwork.CELL, _pixel(tunnel_min)) * 1.15
+	var side := maxf(TunnelNetwork.CELL, _pixel(tunnel_min * _ui)) * 1.15
 	for plane in range(TunnelNetwork.PLANE_COUNT):
 		_refresh_plane(plane)
 		if _tunnels[plane].is_empty():
@@ -169,14 +176,14 @@ func _nests() -> void:
 			continue
 		var at := _at(nest.global_position)
 		var colour := Team.color_of(side)
-		var reach := maxf(nest.radius * _scale, nest_min)
+		var reach := maxf(nest.radius * _scale, nest_min * _ui)
 		draw_rect(
 			Rect2(at - Vector2(reach, reach), Vector2(reach, reach) * 2.0),
 			Color(colour.r, colour.g, colour.b, 0.28), true
 		)
 		draw_rect(
 			Rect2(at - Vector2(reach, reach), Vector2(reach, reach) * 2.0),
-			Color(colour.r, colour.g, colour.b, 0.85), false, 1.5
+			Color(colour.r, colour.g, colour.b, 0.85), false, 1.5 * _ui
 		)
 
 
@@ -199,10 +206,10 @@ func _mice() -> void:
 		elif mouse.get_plane() > 0:
 			# Underground reads as hollow, for crew and contacts alike. Same rule twice, so a
 			# ring anywhere on this map means "not on the surface".
-			draw_arc(at, crew_dot, 0.0, TAU, 14, colour, 1.6)
+			draw_arc(at, crew_dot * _ui, 0.0, TAU, 14, colour, 1.6 * _ui)
 		else:
-			draw_circle(at, crew_dot, colour)
-			draw_arc(at, crew_dot, 0.0, TAU, 14, Color(0, 0, 0, 0.5), 1.0)
+			draw_circle(at, crew_dot * _ui, colour)
+			draw_arc(at, crew_dot * _ui, 0.0, TAU, 14, Color(0, 0, 0, 0.5), 1.0 * _ui)
 
 
 ## What your crew has seen of theirs. Filled while somebody can see them; hollow, fading, and
@@ -222,11 +229,11 @@ func _contacts() -> void:
 		var at := _at(entry["at"])
 		var shade := Color(colour.r, colour.g, colour.b, trust)
 		if entry["live"]:
-			draw_circle(at, crew_dot, shade)
+			draw_circle(at, crew_dot * _ui, shade)
 			if int(entry["plane"]) > 0:
-				draw_arc(at, crew_dot + 2.5, 0.0, TAU, 14, shade, 1.2)
+				draw_arc(at, (crew_dot + 2.5) * _ui, 0.0, TAU, 14, shade, 1.2 * _ui)
 		else:
-			draw_arc(at, crew_dot, 0.0, TAU, 14, shade, 1.8)
+			draw_arc(at, crew_dot * _ui, 0.0, TAU, 14, shade, 1.8 * _ui)
 
 
 ## Both banners, over the top of everything, because they are what the match is about. Drawn as
@@ -243,10 +250,10 @@ func _banners() -> void:
 			# A dropped banner is a clock running for both crews. It should be the thing your eye
 			# lands on when you check the map.
 			var beat := lerpf(0.25, 0.9, HudSkin.pulse(3.6))
-			draw_circle(at, banner_glyph * 0.75, Color(colour.r, colour.g, colour.b, beat * 0.5))
-			draw_arc(at, banner_glyph * 0.75, 0.0, TAU, 18, Color(colour.r, colour.g, colour.b, beat), 1.4)
+			draw_circle(at, banner_glyph * 0.75 * _ui, Color(colour.r, colour.g, colour.b, beat * 0.5))
+			draw_arc(at, banner_glyph * 0.75 * _ui, 0.0, TAU, 18, Color(colour.r, colour.g, colour.b, beat), 1.4 * _ui)
 		# The foot of the pole is the banner's actual spot; the cloth flies up and to the right.
-		HudSkin.flag(self, at + Vector2(-1.0, banner_glyph * 0.4), banner_glyph, colour)
+		HudSkin.flag(self, at + Vector2(-1.0 * _ui, banner_glyph * 0.4 * _ui), banner_glyph * _ui, colour)
 
 
 ## You, pointing where you are pointing. The heading is turned by the same yaw the ground is, so
@@ -258,12 +265,12 @@ func _wedge(at: Vector2, facing: Vector3, colour: Color) -> void:
 	ahead = ahead.normalized()
 	var across := Vector2(-ahead.y, ahead.x)
 	draw_colored_polygon(PackedVector2Array([
-		at + ahead * 7.0,
-		at - ahead * 4.0 + across * 4.2,
-		at - ahead * 4.0 - across * 4.2,
+		at + ahead * 7.0 * _ui,
+		at - ahead * 4.0 * _ui + across * 4.2 * _ui,
+		at - ahead * 4.0 * _ui - across * 4.2 * _ui,
 	]), Color(0, 0, 0, 0.55))
 	draw_colored_polygon(PackedVector2Array([
-		at + ahead * 5.5,
-		at - ahead * 3.0 + across * 3.2,
-		at - ahead * 3.0 - across * 3.2,
+		at + ahead * 5.5 * _ui,
+		at - ahead * 3.0 * _ui + across * 3.2 * _ui,
+		at - ahead * 3.0 * _ui - across * 3.2 * _ui,
 	]), colour)

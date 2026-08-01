@@ -43,10 +43,10 @@ const MOUSE_GROUP: StringName = &"mouse"
 @export_group("Crew")
 ## Set before the mouse enters the tree where possible; `set_team` handles it afterwards.
 @export_enum("Blue", "Red") var team: int = Team.BLUE
-## Which of the four this mouse is (GDD section 4). A LABEL and nothing else until M4 gives the
-## classes their stats and abilities -- see mouse_class.gd for why that is honest rather than a
-## stub. The roster reads it; nothing in this file behaves differently because of it yet.
-@export_enum("Generalist", "Bruiser", "Engineer", "Scout") var mouse_class: int = MouseClass.GENERALIST
+## Which of the four this mouse is (GDD section 4). Set it here and the stats below are
+## OVERWRITTEN from resources/classes on ready -- see `set_class`. Leave it alone and every mouse
+## is a Generalist, which is what the headless audits build.
+@export_enum("Generalist", "Engineer", "Sneak", "Brute") var mouse_class: int = MouseClass.GENERALIST
 ## What the roster calls this mouse. Blank means fall back to the node name, which is what the
 ## headless audits get -- they build mice directly and have no use for flavour.
 @export var display_name: String = ""
@@ -68,13 +68,13 @@ const MOUSE_GROUP: StringName = &"mouse"
 @export var acceleration: float = 30.0
 ## Higher stops you sooner. Above acceleration so stopping reads crisper than starting.
 @export var friction: float = 34.0
-## Radians per second the body can turn. THE weight dial. Per-class later: the Scout whips
-## around, the Bruiser commits to a heading.
+## Radians per second the body can turn. THE weight dial. Per-class later: the Sneak whips
+## around, the Brute commits to a heading.
 @export var turn_speed: float = 10.0
 
 @export_group("Carrying")
 ## How much the banner costs you, as a fraction of your speed. GDD section 2 makes this
-## PER-CLASS -- Generalist -10%, Scout -40% -- and the whole handoff play falls out of the
+## PER-CLASS -- Generalist -10%, Sneak -40% -- and the whole handoff play falls out of the
 ## spread. One number until classes land at M4, but it is already the right shape.
 @export_range(0.0, 0.8, 0.01) var carry_penalty: float = 0.25
 
@@ -144,6 +144,8 @@ var _body_material: StandardMaterial3D
 
 
 func _ready() -> void:
+	# BEFORE health is read off it, because this is what sets max_health.
+	set_class(mouse_class)
 	_health = max_health
 	if team_color.a <= 0.0:
 		team_color = Team.color_of(team)
@@ -164,6 +166,49 @@ func get_display_name() -> String:
 
 func get_class_name() -> String:
 	return MouseClass.name_of(mouse_class)
+
+
+## Become one of the four. The definition's numbers are COPIED onto this mouse's own properties
+## rather than kept behind a reference, so every system already written -- grass, combat,
+## carrying, the HUD, the bots -- gets per-class behaviour without learning what a class is, and
+## a mouse built by hand with no class at all still works.
+##
+## Health is left where it is. A swap point that healed you would make walking home a heal on a
+## cooldown, and the GDD is specific that a switch costs tempo and nothing else (section 4) --
+## the topping up you get at a nest should come from the nest, when there is one.
+func set_class(kind: int) -> void:
+	mouse_class = clampi(kind, 0, MouseClass.COUNT - 1)
+	var definition := MouseClass.definition_of(mouse_class)
+	if definition == null:
+		return
+	apply_class(definition)
+	# Clamped rather than refilled: a Sneak that swaps to a Brute does not deserve sixty free
+	# health, and a Brute at 140 that swaps to a Sneak must not walk away on double its maximum.
+	_health = minf(_health, max_health)
+
+
+## Copy a definition onto this mouse. Overridden by Player to pick up the stats only a driven
+## mouse has -- see player.gd, which owns sprint.
+func apply_class(definition: ClassDefinition) -> void:
+	max_health = definition.max_health
+	speed = definition.speed
+	turn_speed = definition.turn_speed
+	attack_damage = definition.attack_damage
+	carry_penalty = definition.carry_penalty
+
+
+## How fast this mouse opens a tile, as a multiplier on the dig controller's own timing.
+##
+## EVERYBODY DIGS; the Engineer is three times better at it. GDD section 4 made terrain the
+## Engineer's exclusive capability and this is a deliberate revision of that -- the note is in
+## the GDD. A crew without an Engineer can still get underground, slowly, in a pinch.
+func get_dig_speed() -> float:
+	return MouseClass.definition_of(mouse_class).dig_speed
+
+
+## Whether this mouse fits down a shaft at all (GDD section 4 -- the Juggernaut does not).
+func can_enter_tunnels() -> bool:
+	return MouseClass.definition_of(mouse_class).can_enter_tunnels
 
 
 func set_team(side: int) -> void:
@@ -427,6 +472,11 @@ func _tick_timers(delta: float) -> void:
 ## code saying so.
 func move_speed() -> float:
 	var top := speed * _tier_multiplier()
+	# Size matters underground (GDD section 3). Tunnels are the Sneak's highway and very nearly a
+	# wall for the Brute, who is a cork -- and the whole reason that reads as a mechanic rather
+	# than as lag is that it applies only below the surface, where you can see the walls go past.
+	if _plane > 0:
+		top *= MouseClass.definition_of(mouse_class).tunnel_speed
 	if is_carrying():
 		top *= 1.0 - carry_penalty
 	if _swing_left > 0.0:

@@ -30,6 +30,11 @@ extends SceneTree
 ##   MATCH_END       The cap ends the match; the clock names the leader.
 ##   BOTS_MOVE       Bots actually leave the nest. Covers the whole chain -- navmesh, agent,
 ##                   director, control loop -- with one number that cannot be argued with.
+##   BOTS_FOLLOW     A defender goes down a shaft after an intruder, and comes out on the right
+##                   plane. This is M4's whole claim: until it holds, a tunnel is not a route
+##                   anyone contests, it is a place the AI cannot reach. Checked end to end --
+##                   decision, route, walk, transit -- because every part of that chain fails the
+##                   same way, by the bot standing on the lawn looking fine.
 ##   SPOTTING        What the minimap is allowed to show. An enemy your crew can see appears;
 ##                   one behind a prop, one on another plane, and one nobody has laid eyes on do
 ##                   not. A contact goes stale where it was last seen and is forgotten on time.
@@ -69,6 +74,9 @@ func _initialize() -> void:
 		["match_end", _check_match_end],
 		["bots_move", _check_bots_move],
 		["spotting", _check_spotting],
+		["bots_follow", _check_bots_follow],
+		["classes", _check_classes],
+		["cave_in", _check_cave_in],
 	]
 
 	for check: Array in checks:
@@ -377,6 +385,258 @@ func _check_bots_move() -> void:
 				bot.name, home.distance_to(bot.global_position), bot.get_intent()
 			]
 		)
+
+
+## The Engineer's capability: who may use it, on what, and to whom. (M4)
+##
+## The geometry side of a collapse is tools/tunnel_audit.gd's; this is the ABILITY -- the class
+## gate, the reach, the cooldown and the mouse standing in the wrong place. All four are design
+## rather than plumbing, and the class gate especially: it is the whole of Pillar 4 for this
+## class, and a gate that silently lets everyone through is indistinguishable from one that works.
+func _check_cave_in() -> void:
+	await _arena(1)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+	var cave := _scene.get_node_or_null("CaveIn") as CaveIn
+	var player := _director.get_player()
+	if cave == null or player == null:
+		_expect(false, "the arena has a cave-in and a player")
+		return
+
+	# A corridor to stand in, and the player in the middle of it as an Engineer.
+	network.dig_shaft_down(0, Vector2i(-17, -17))
+	for x in range(-17, -10):
+		network.dig(1, Vector2i(x, -17))
+	await _advance(0.2)
+
+	# The player recomputes its aim from the real cursor every physics frame, so it comes off
+	# physics before the aim is set from here -- the same reason the dig-flow audit does it.
+	player.set_physics_process(false)
+	player.global_position = network.cell_to_world(1, Vector2i(-14, -17)) + Vector3.UP * 0.05
+	player.set_plane(1)
+	player.set_class(MouseClass.GENERALIST)
+	player.set("_aim_point", network.cell_to_world(1, Vector2i(-13, -17)))
+
+	# NOT THE GENERALIST. Everyone digs; only the Engineer un-digs.
+	_fire(cave)
+	_expect(
+		network.is_dug(1, Vector2i(-13, -17)),
+		"a Generalist cannot bring a tunnel down"
+	)
+
+	# The Engineer can, and takes whoever is standing there with it (GDD section 3).
+	player.set_class(MouseClass.ENGINEER)
+	var caught := _puppet(Team.RED, network.cell_to_world(1, Vector2i(-13, -17)) + Vector3.UP * 0.05)
+	caught.set_plane(1)
+	await _advance(0.2)
+	_fire(cave)
+	_expect(not network.is_dug(1, Vector2i(-13, -17)), "an Engineer brings the cell down")
+	_expect(caught.is_scruffed(), "and scruffs whoever was standing in it")
+	_expect(not player.is_scruffed(), "without burying the Engineer as well")
+
+	# And then has to wait. A second one on the same breath would make a corridor disappear
+	# faster than anyone could react to it.
+	player.set("_aim_point", network.cell_to_world(1, Vector2i(-15, -17)))
+	_fire(cave)
+	_expect(
+		network.is_dug(1, Vector2i(-15, -17)),
+		"a second cave-in is refused while the first is on cooldown"
+	)
+
+	# Never the cell you are standing in. Burying yourself is not a mechanic anyone asked for.
+	cave._cooldown_left = 0.0
+	player.set("_aim_point", network.cell_to_world(1, Vector2i(-14, -17)))
+	_expect(cave.target() == Vector2i.MAX, "you cannot target the cell under your own feet")
+	_fire(cave)
+	_expect(network.is_dug(1, Vector2i(-14, -17)), "and it survives if you try")
+
+	# Nor anything out of arm's reach: this removes ground with people on it.
+	player.set("_aim_point", network.cell_to_world(1, Vector2i(-11, -17)))
+	_expect(cave.target() == Vector2i.MAX, "a cell three along is out of reach")
+	_fire(cave)
+	_expect(network.is_dug(1, Vector2i(-11, -17)), "and stays up")
+
+
+## Press the ability key, the way the input map would deliver it.
+func _fire(cave: CaveIn) -> void:
+	var press := InputEventAction.new()
+	press.action = "ability"
+	press.pressed = true
+	cave._unhandled_input(press)
+
+
+## Classes are numbers on a mouse, and the swap point has a place and a price. (M4)
+##
+## WHAT THIS IS REALLY GUARDING is that the definitions actually land. `set_class` copies a
+## resource onto the mouse's own properties -- which is what lets every system written before
+## classes existed get per-class behaviour for free -- and the failure mode of a copy is that it
+## silently doesn't happen. A Sneak with 100 health looks exactly like a Sneak.
+func _check_classes() -> void:
+	await _arena(1)
+	var player := _director.get_player()
+	if player == null:
+		_expect(false, "there is a player to give a class to")
+		return
+
+	# The spread reaches the mouse, and reaches the things that read the mouse.
+	player.set_class(MouseClass.SNEAK)
+	var sneak := MouseClass.definition_of(MouseClass.SNEAK)
+	_expect(player.max_health == sneak.max_health, "a Sneak has the Sneak's health")
+	_expect(player.speed == sneak.speed, "and the Sneak's speed")
+	_expect(player.carry_penalty == sneak.carry_penalty, "and the Sneak's carry penalty")
+	_expect(
+		player.get("sprint_seconds") == sneak.sprint_seconds,
+		"and the Sneak's sprint, which only a driven mouse has"
+	)
+
+	# Health does not refill on a swap, and does not survive one either. Swapping to a Brute
+	# for sixty free health, or away from one while keeping it, would both make the swap point a
+	# combat move rather than a tempo cost.
+	player.set_class(MouseClass.BRUTE)
+	player.take_hit(150.0, Vector3.ZERO, 0.0, null)
+	var hurt := player.get_health_ratio() * player.max_health
+	player.set_class(MouseClass.SNEAK)
+	_expect(
+		player.get_health_ratio() * player.max_health <= hurt + 0.01,
+		"a swap does not heal you"
+	)
+	player.set_class(MouseClass.BRUTE)
+	player.revive_at(Vector3(0.0, 0.2, 0.0))
+	player.set_class(MouseClass.SNEAK)
+	_expect(
+		player.get_health_ratio() <= 1.0,
+		"and a swap down cannot leave you above your own maximum"
+	)
+
+	# Underground, size matters (GDD section 3): the same mouse is slower as a Brute than as a
+	# Sneak, and only below the surface.
+	player.revive_at(Vector3(0.0, 0.2, 0.0))
+	player.set_class(MouseClass.SNEAK)
+	var sneak_surface := player.move_speed()
+	player.set_plane(1)
+	var sneak_deep := player.move_speed()
+	player.set_class(MouseClass.BRUTE)
+	var brute_deep := player.move_speed()
+	player.set_plane(0)
+	_expect(brute_deep < sneak_deep, "a Brute is slower underground than a Sneak")
+	_expect(sneak_deep > sneak_surface * 0.5, "and a Sneak is not crippled by going down")
+
+	# The swap point: your own nest, and nowhere else.
+	var swap := _scene.get_node_or_null("ClassSwap") as ClassSwap
+	if swap == null:
+		_expect(false, "the arena has a swap point")
+		return
+
+	player.global_position = _director.nest_of(Team.BLUE).global_position
+	await _advance(0.1)
+	_expect(swap.available(), "you can swap standing in your own nest")
+	_expect(not swap.prompt().is_empty(), "and are told so")
+
+	player.global_position = _director.nest_of(Team.RED).global_position
+	await _advance(0.1)
+	_expect(not swap.available(), "but not in theirs")
+
+	player.global_position = Vector3(0.0, 0.2, 0.0)
+	await _advance(0.1)
+	_expect(not swap.available(), "and not in the middle of the yard")
+
+	# Flat on your back on your own nest is not shopping time. Six seconds down should cost you
+	# the six seconds, not buy you a free look at the other three classes.
+	player.global_position = _director.nest_of(Team.BLUE).global_position
+	player.take_hit(999.0, Vector3.ZERO, 0.0, null)
+	await _advance(0.1)
+	_expect(player.is_scruffed(), "the player is scruffed for this part")
+	_expect(not swap.available(), "and cannot swap class while flat on their back")
+
+
+## Does a defender actually come down after you? (M4)
+##
+## END TO END, ON PURPOSE. Every other way of testing this -- assert the graph has an edge,
+## assert the planner returns waypoints -- passes happily while the bot stands on the grass,
+## because the chain from "an intruder is in my patch" to "I am in the tunnel with them" runs
+## through a ranking, a planner, a navmesh walk and a shaft transit, and any one of them can
+## quietly decline. The only honest question is which plane the bot is standing on afterwards.
+##
+## The intruder is a puppet rather than a driven mouse: it has to STAY in the tunnel for the
+## thing being measured to mean anything, and a bot that wandered off would turn a failed follow
+## into a passed one.
+func _check_bots_follow() -> void:
+	await _arena(2)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+
+	# An entrance just outside the red nest, and a short corridor away from it.
+	var mouth := Vector2i(18, 18)
+	network.dig_shaft_down(0, mouth)
+	network.dig(1, Vector2i(18, 19))
+	network.dig(1, Vector2i(18, 20))
+	await _advance(0.2)
+
+	var hole := _director.nest_of(Team.RED).global_position.distance_to(
+		network.cell_to_world(0, mouth)
+	)
+	_expect(hole < 9.0, "the test's entrance is inside the defender's patch (%.1fm out)" % hole)
+
+	# A blue mouse standing in that corridor, under the red crew's noses.
+	var intruder := _puppet(Team.BLUE, network.cell_to_world(1, Vector2i(18, 20)) + Vector3.UP * 0.05)
+	intruder.set_plane(1)
+	await _advance(0.3)
+	_expect(intruder.get_plane() == 1, "the intruder is underground to begin with")
+
+	var defender := _bot(Team.RED, Bot.DEFENDER)
+	if defender == null:
+		_expect(false, "the red crew fielded a defender at all")
+		return
+
+	# WATCHED, NOT SAMPLED AT THE END, and that distinction cost an hour. The first version of
+	# this check advanced eight seconds and then looked: the defender was back on the lawn at its
+	# post and the check failed. It had gone down, scruffed the intruder, and walked home -- the
+	# whole behaviour under test, finished and tidied away before anybody looked. What is being
+	# asserted is that it HAPPENED, so the loop has to be watching while it does.
+	var deepest := 0
+	var closest := INF
+	for i in range(600):
+		await physics_frame
+		deepest = maxi(deepest, defender.get_plane())
+		if defender.get_plane() > 0:
+			closest = minf(closest, _flat_gap(defender, intruder))
+			if closest < 2.0:
+				break
+
+	_expect(deepest > 0, "the defender went down the shaft after the intruder")
+	_expect(
+		closest < 2.0,
+		"and got to them down there rather than stopping at the bottom of the shaft (%.1fm)"
+			% closest
+	)
+
+	# THE FLAG STILL CANNOT GO DOWN, by the same door and for everybody. The transit is shared
+	# code now (tunnel_transit.gd), so this is the one place the rule is held for bots as well.
+	var carrier := _puppet(Team.RED, network.cell_to_world(0, mouth))
+	_director.banner_of(Team.BLUE).take(carrier)
+	await _advance(0.2)
+	_expect(carrier.is_carrying(), "the puppet is holding a banner")
+	_expect(
+		TunnelTransit.take(network, carrier, 0) < 0,
+		"a carrier is refused the shaft"
+	)
+	_expect(carrier.get_plane() == 0, "and is still on the surface afterwards")
+
+
+## Distance between two mice ignoring height, so a mouse one plane below another reads as being
+## right there rather than as two thirds of a metre away.
+func _flat_gap(a: Node3D, b: Node3D) -> float:
+	return Vector2(
+		a.global_position.x - b.global_position.x, a.global_position.z - b.global_position.z
+	).length()
+
+
+## The first bot on a crew with this role, or null. Bots are spawned by the director a frame
+## late, so this is asked of the group rather than of a node path.
+func _bot(side: int, role: int) -> Bot:
+	for node in get_nodes_in_group(Mouse.MOUSE_GROUP):
+		var bot := node as Bot
+		if bot != null and bot.team == side and bot.role == role:
+			return bot
+	return null
 
 
 ## What one crew is allowed to know about the other.

@@ -27,7 +27,7 @@ const NAMES: Array[String] = ["BLUE", "RED"]
 ## TunnelNetwork owns (1 and 2..5). A mouse sits on its own crew's layer and masks the OTHER
 ## crew's, which is exactly GDD section 6's recommendation -- enemies collide, allies pass
 ## through -- expressed as two numbers instead of a rule anyone has to remember. It is also
-## what will make the Bruiser's cork work at M8 without a special case.
+## what will make the Brute's cork work at M8 without a special case.
 const LAYER_BITS: Array[int] = [1 << 6, 1 << 7]
 
 

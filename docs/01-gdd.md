@@ -40,12 +40,12 @@ Deliberately unmodified playground CTF (Pillar 1):
 |---|---|
 | **Generalist** | **-10%** — the designated runner |
 | Engineer | -25% |
-| Bruiser | -30% (already slow; the flag adds less proportionally) |
-| Scout | **-40%** (tiny mouse, big flag) |
+| Brute | -30% (already slow; the flag adds less proportionally) |
+| Sneak | **-40%** (tiny mouse, big flag) |
 
-> **The handoff play falls out of these numbers.** The Scout is the best class at
-> *stealing* the flag and the worst at *carrying* it — a fleeing Scout is slower than a
-> chasing Generalist. So the natural play becomes: Scout breaks in and grabs it,
+> **The handoff play falls out of these numbers.** The Sneak is the best class at
+> *stealing* the flag and the worst at *carrying* it — a fleeing Sneak is slower than a
+> chasing Generalist. So the natural play becomes: Sneak breaks in and grabs it,
 > Generalist meets them and runs it home. That's genuine teamwork emerging from a
 > stat table rather than from a designed "handoff mechanic." Preserve it.
 >
@@ -91,7 +91,7 @@ knows who pressed it.
 
 - Available to **every class**. It's a spend, not an ability.
 - **Multiplies your current speed** rather than setting a flat one — so it does *not*
-  erase the flag carry penalty, and a Scurrying Scout is still a worse carrier than a
+  erase the flag carry penalty, and a Scurrying Sneak is still a worse carrier than a
   Scurrying Generalist. The handoff play survives contact with the boost button. This is
   the important constraint on Scurry; don't relax it.
 - **Refills sprint stamina** on use, which is what makes it feel like a second wind rather
@@ -114,7 +114,7 @@ deformable mesh, which keeps it buildable.
 
 ### The planes
 
-| Plane | Dig time | Collapse (Bruiser) | Flooding (water) |
+| Plane | Dig time | Collapse (Brute) | Flooding (water) |
 |---|---|---|---|
 | **0 — Surface** | — | — | Puddles, slows |
 | **1 — Shallow** | Fast | **Vulnerable** | Drains fast |
@@ -123,11 +123,11 @@ deformable mesh, which keeps it buildable.
 
 **Every plane has a threat, so no depth is strictly best.** Shallow tunnels are fast to
 build and vulnerable to collapse. Deep tunnels are slow investments, safe from the
-Bruiser — but water runs downhill, and the deep network is the sump. It floods hardest
+Brute — but water runs downhill, and the deep network is the sump. It floods hardest
 and drains slowest.
 
 That inversion is the balance backbone of the whole system: the Engineer's answer to
-the Bruiser (dig deeper) is itself answered by the world (deep floods). Neither answer
+the Brute (dig deeper) is itself answered by the world (deep floods). Neither answer
 is free, and neither is permanent.
 
 ### Digging mechanics
@@ -167,7 +167,7 @@ is free, and neither is permanent.
 ### Breaching enemy networks `[DECIDED]`
 
 **Accidental unless you have detection.** You can't deliberately target an enemy tunnel
-you haven't revealed — running into one is a discovery, and a memorable one. Once Scout
+you haven't revealed — running into one is a discovery, and a memorable one. Once Sneak
 sonar has marked a segment, an Engineer *can* aim for it.
 
 When two networks meet:
@@ -213,7 +213,7 @@ The asymmetry here is the best thing in the system:
 | **In your own tunnel** | Wall outlines extend **far ahead** — you know your network intimately |
 | **In an enemy tunnel** | **Direct line of sight only**, fog of war beyond. You are crawling blind. |
 | **On the surface** | Nothing underground, unless revealed |
-| **Scout sonar active** | A pulse reveals tunnel geometry in a radius **through earth**, shared with the team |
+| **Sneak sonar active** | A pulse reveals tunnel geometry in a radius **through earth**, shared with the team |
 
 Raiding an enemy network should feel genuinely frightening — you don't know what's
 around the corner and they do.
@@ -224,24 +224,28 @@ Speed underground scales **inversely with class size**:
 
 | Class | Tunnel speed | Effect |
 |---|---|---|
-| Scout | Fastest | Tunnels are their highway |
+| Sneak | Fastest | Tunnels are their highway |
 | Generalist | Fast | Comfortable |
 | Engineer | Normal | Lives down here |
-| Bruiser | **Very slow** | Barely moves — but **plugs the tunnel completely** |
+| Brute | **Very slow** | Barely moves — but **plugs the tunnel completely** |
 | Juggernaut | **Cannot enter** | Too big. A hard, thematic constraint. |
 
-A Bruiser in a tunnel is a **cork**. Nobody gets past. Real defense at a real cost:
+A Brute in a tunnel is a **cork**. Nobody gets past. Real defense at a real cost:
 slow, out of position, and blind to the surface.
 
 ### Collapse — the counter
 
-- A **Bruiser collapses a tunnel from the surface** by slamming the ground above a
+> **The Engineer has its own, opposite version of this, and it is built (M4).** One cell, at
+> arm's length, from *inside* the tunnel — sealing the way you came. The Brute's is the one
+> described below: from above, at range, on somebody else's network. See the `[DECIDE]` in §4.
+
+- A **Brute collapses a tunnel from the surface** by slamming the ground above a
   known segment.
 - Mice caught inside are **scruffed** by the cave-in.
 - The segment is destroyed and must be re-dug.
 - **Only works on planes 1–2.** Deep tunnels are immune (see table above).
-- **Requires knowing where the tunnel is** — which is why Scout sonar feeds directly
-  into Bruiser collapse. Two classes, one combo.
+- **Requires knowing where the tunnel is** — which is why Sneak sonar feeds directly
+  into Brute collapse. Two classes, one combo.
 
 ### Rendering and legibility `[RISK]`
 
@@ -292,7 +296,7 @@ without these.
 > that runs the flag well.** Not average — the one who wins matches. That makes the
 > beginner-friendly class genuinely prestigious, which is what casual-first needs.
 
-### Bruiser — the wall
+### Brute — the wall
 
 | | |
 |---|---|
@@ -310,12 +314,43 @@ without these.
 |---|---|
 | Fantasy | The one who changes the map |
 | Stats | Low damage, medium health, medium speed |
-| **Unique capability** | **Digs tunnels and builds ramps.** Nobody else alters terrain. |
+| **Unique capability** | **Brings tunnels down and puts barriers up.** Everyone can dig; only the Engineer can *un*-dig. `[REVISED]` **Built (M4)** — `Q`, on the cell you're pointing at. |
+| Digging | **~3× faster than anyone else.** Others can manage it in a pinch. `[REVISED]` |
 | Ability | *Barricade* — destructible barrier, 2 cheese |
 | Weakness | Weakest attack in the game. Cannot win a fight, only shape one. |
 | Role | Map control, route creation, fortification |
 
-### Scout — the glass cannon
+> **`[REVISED]` Everyone digs; the Engineer is simply good at it.** This entry used to read
+> *"Digs tunnels and builds ramps. Nobody else alters terrain."* Exclusivity turned out to be
+> the wrong lever: it makes one seat a **requirement** rather than a choice, and a crew that
+> loses its Engineer is locked out of a third of the map — three whole planes — until it
+> respawns. Now the dig speed carries the identity instead. An Engineer opens a tile in about
+> half a second; everyone else takes roughly three times as long, which is slow enough that you
+> would never *choose* to tunnel as a Generalist and fast enough that you can when it's the only
+> way through. Tuned in `resources/classes/*.tres` (`dig_speed`), not in code.
+>
+> **Pillar 4 still holds, but it now rests on the other half of the fantasy.** The Engineer's
+> one-thing-nobody-else-can-do moves from *making* tunnels to **unmaking** them — caving in a
+> corridor behind you as you flee, and barricades. That is a better unique capability anyway:
+> creation is a thing you do slowly in your own time, and denial is a thing you do *at* someone.
+>
+> `[DECIDE]` **This collides with the Brute, and the Engineer's half is now built, so the
+> collision is live.** §3 gives *Collapse* to the Brute as **its** unique capability. The split
+> being worked to is **where you stand and whose tunnel it is**: the Brute collapses **from the
+> surface**, on a tunnel it has located, as an act of denial against someone else's network — it
+> needs Sneak sonar and it is the counter to a dug-in Engineer. The Engineer seals **from
+> inside**, one cell, at arm's length, in the tunnel it is standing in, as an escape. Same verb,
+> opposite situations, and neither can do the other's version. Built that way (`cave_in.gd`,
+> reach one cell, plane 1+ only, refuses shafts). If it doesn't survive contact with the Brute,
+> the Engineer's exclusive falls back to *Barricade* alone.
+>
+> **Aimed, not automatic, and that is the load-bearing detail.** "Cave in behind you" reads as
+> something that should happen to the cell you just left, for free, while running. It is aimed
+> with the cursor instead — which, since the cursor is the steering wheel (§9), means turning to
+> look at what you're sealing and therefore not running for a moment. That is the same trade §9
+> asks for around throwing while fleeing, and it is what stops this being a free escape button.
+
+### Sneak — the glass cannon
 
 | | |
 |---|---|
@@ -324,13 +359,13 @@ without these.
 | **Unique capability** | **Sonar** — pulses to reveal enemy tunnel geometry through earth, shared with the team |
 | Ability | *Fade* — hard to see while moving slowly; broken by attacking or sprinting |
 | Weakness | Dies to anything that touches them. Loses every fair fight. |
-| Role | Scout, assassin, counter-Engineer, cache raider |
+| Role | Scouting, assassin, counter-Engineer, cache raider |
 
 **Concealment model `[DECIDED]`: camouflage while stationary.** Octopus-style — a shader
-samples the surrounding terrain and blends the Scout into it. Effectiveness scales with
+samples the surrounding terrain and blends the Sneak into it. Effectiveness scales with
 cover quality: strongest in shadow and tall grass, weak in open dirt. **Moving breaks it.**
 
-This makes the Scout an *ambush* class rather than a roaming invisible threat: stop,
+This makes the Sneak an *ambush* class rather than a roaming invisible threat: stop,
 blend, wait, burst. It's fair to play against (a stationary enemy is findable, and
 movement always reveals) and it rewards map knowledge — knowing which patches of shadow
 are worth waiting in.
@@ -364,6 +399,14 @@ Not a class you pick — one you **buy**.
 This is a good structure: adaptation is always possible, never resource-gated, but
 always costs tempo.
 
+> **Built (M4).** `scripts/classes/class_swap.gd`. **C** at your own nest cycles to the next
+> class, with the prompt above your head saying what you'd become. The rule is asked of the
+> **nest itself** rather than of a swap-point prop, so it is automatically the same disc a
+> capture needs and the same one a respawn puts you on — three things that would otherwise
+> drift apart. That also means the respawn case above needs no second mechanism: you come back
+> standing in the place where swapping works. **Not while scruffed** — lying on your own nest
+> for six seconds shouldn't double as shopping time.
+
 ---
 
 ## 5. The counterplay web
@@ -374,23 +417,23 @@ Every class answers another, and the answers route through the dig system:
   Engineer digs a route (shallow = fast, deep = safe)
         │
         ▼
-  Scout sonar finds it ──────▶ reveals geometry to their team
+  Sneak sonar finds it ──────▶ reveals geometry to their team
         │                              │
         │                              ▼
-        │                    Bruiser collapses it (planes 1–2 only)
+        │                    Brute collapses it (planes 1–2 only)
         │                              │
         ▼                              ▼
   Engineer digs deeper (plane 3)  Mice inside scruffed
         │
         ▼
-  Bruiser corks the tunnel ◀──── Scout can't get past
+  Brute corks the tunnel ◀──── Sneak can't get past
         │
         ▼
   Generalist takes the surface route with the flag
 ```
 
 No hard counters — every answer costs position, cheese, time, or exposure. Note how
-**depth is the Engineer's answer to the Bruiser**, paid for in dig time.
+**depth is the Engineer's answer to the Brute**, paid for in dig time.
 
 ---
 
@@ -406,10 +449,10 @@ Simple by design (Pillar 1). Simple combat also keeps netcode sane.
 - **Displacement matters more than damage.** Slam, cave-ins, and hazards move mice around.
 - **Fully deterministic.** No crits, no random damage, no headshots.
 
-> `[DECIDE]` Team collision? Enemy collision makes Bruiser body-blocking work. Ally
+> `[DECIDE]` Team collision? Enemy collision makes Brute body-blocking work. Ally
 > collision would apply it to teammates too — interesting but frustrating.
 > Recommend: enemies collide, allies pass through. **Exception:** in tunnels, the
-> Bruiser cork should probably block allies too, or corking is meaningless.
+> Brute cork should probably block allies too, or corking is meaningless.
 
 ---
 
@@ -572,7 +615,7 @@ about not being *found*, never about being unhittable once you have been.
 
 This is the best system in the doc for one reason: **it's hidden information that isn't
 a class ability.** Every class gets to make the stealth/speed tradeoff, everyone can read
-the tell, and it costs no cooldowns or resources. The Scout is simply *better* at it
+the tell, and it costs no cooldowns or resources. The Sneak is simply *better* at it
 (camouflage stacks with grass), rather than being the only participant.
 
 > **Implementation:** a vertex shader displacing grass blades from nearby character
@@ -582,7 +625,7 @@ the tell, and it costs no cooldowns or resources. The Scout is simply *better* a
 > that it repainted the frame from an opaque-only capture and erased anything translucent, and
 > the two workarounds for it (dithering, recolouring toward the grass) both looked worse than
 > the thing they replaced. **Grass is worth the render-pipeline work.** Fading is now available
-> to anything that wants it, which the Scout's camouflage (§4) will.
+> to anything that wants it, which the Sneak's camouflage (§4) will.
 
 > **Each map is four floors.** No-surface zones and per-plane rock obstructions (§3)
 > mean the underground has as much designed personality as the surface — and a map isn't
@@ -646,16 +689,16 @@ circling someone in a scrap, peeling off from the cat, backing out of a tunnel.
 > facing, so the two can never disagree — and the turn-rate cap still supplies the weight,
 > now as a body that takes a moment to swing around rather than one pointing the wrong way.
 
-> **Turn rate is per-class, and it's free characterisation.** The Scout whips around; the
-> Bruiser commits to a heading. Costs one number per class and does real work — it's why
-> you can juke a Bruiser and can't juke a Scout.
+> **Turn rate is per-class, and it's free characterisation.** The Sneak whips around; the
+> Brute commits to a heading. Costs one number per class and does real work — it's why
+> you can juke a Brute and can't juke a Sneak.
 
 > **Double-tap W over hold-shift `[DECIDED]`.** Minecraft's approach. No extra finger, no
 > stretch, no key held for thirty seconds at a time.
 
 > **Shift is Slow `[DECIDED]`.** Also Minecraft's paradigm — crouch — and worth taking the
 > whole way: a held key, a visibly lowered posture, and a deliberate, careful feel. It's
-> the quiet tier tall grass (§8) needs, it's how a Scout sets up an ambush, and it's the
+> the quiet tier tall grass (§8) needs, it's how a Sneak sets up an ambush, and it's the
 > only way a keyboard player gets under the Run noise floor.
 >
 > Slow overrides Sprint while held, so you can't be quiet and fast. That's the point.
@@ -691,18 +734,18 @@ you can hold it and how fast it comes back — small quick mice run far, big one
 
 | Class | Sprint duration `[ASSUMED]` | Regen delay | Full refill |
 |---|---|---|---|
-| **Scout** | **6.0s** | 1.5s | 4s |
+| **Sneak** | **6.0s** | 1.5s | 4s |
 | Generalist | 4.0s | 2.0s | 6s |
 | Engineer | 3.0s | 2.5s | 7s |
-| Bruiser | **1.5s** | 4.0s | 10s |
+| Brute | **1.5s** | 4.0s | 10s |
 | **Juggernaut** | **Cannot sprint** | — | — |
 
 - **Sprint speed is a uniform multiplier** (~+40% `[ASSUMED]`) for everyone. The class dial
   is **duration**, not speed — one number per class, and it stacks with base speed so the
-  Scout ends up far and away the best sprinter without a second knob.
+  Sneak ends up far and away the best sprinter without a second knob.
 - **Stamina is personal and visible only to you.** It is not a team resource and never
   appears on the enemy's screen.
-- Sprint **breaks Scout camouflage** and leaves the loudest wake in tall grass (§8).
+- Sprint **breaks Sneak camouflage** and leaves the loudest wake in tall grass (§8).
 - `[DECIDE]` Can you sprint in a tunnel? Tight quarters argue no, and it would give the
   underground its own tempo. Cheap to try either way at M2.
 
@@ -787,9 +830,9 @@ Additions needed beyond the art:
 
 All four are core, but they don't arrive at once. Recommended order:
 
-1. **Engineer + Scout** — proves digging, sonar, and the hidden-information layer.
+1. **Engineer + Sneak** — proves digging, sonar, and the hidden-information layer.
    The riskiest and most valuable pair. If this isn't fun, nothing else matters.
-2. **Bruiser** — completes the counterplay web with collapse and corking.
+2. **Brute** — completes the counterplay web with collapse and corking.
 3. **Generalist** — simplest and best-understood; add once there's a flag game worth running.
 
 ---
@@ -802,9 +845,9 @@ All four are core, but they don't arrive at once. Recommended order:
    playtest values; the system is decided, the numbers are not. (§7)
 4. **World event density** (§7) — pure playtest.
 5. **Is the Generalist's -10% the right gap?** (§2)
-6. **Do class-specific carry penalties make Scout-steals-Generalist-runs *mandatory*
+6. **Do class-specific carry penalties make Sneak-steals-Generalist-runs *mandatory*
    rather than *natural*?** Watch for it. (§2)
-7. **Sprint stamina numbers** (§9) — the spread between Scout and Bruiser is the real
+7. **Sprint stamina numbers** (§9) — the spread between Sneak and Brute is the real
    question, not the absolute values. Pure playtest.
 8. **Is Scurry at 1 cheese too cheap?** (§2) It should feel like a decision, not a
    cooldown. If people press it on reflex, raise the cost before touching the effect.
@@ -816,7 +859,7 @@ flag cannot enter tunnels · dig via continuous drive on a snapped grid ·
 primary attack on left click, digging moved to the ability button (right click) ·
 carriers are visible because the banner rides above their head, and concealment switches off ·
 breaching is accidental unless sonar-marked · networks interleave at junctions · water
-flows from sources with current and breath · Scout camouflages while stationary ·
+flows from sources with current and breath · Sneak camouflages while stationary ·
 tall grass bends to movement · per-class flag carry penalties · obstructions are
 per-plane · maps are seeded from fixed anchors · shared + signature world events ·
 class switching free at own nest · zero cheese = 20s respawn · one currency

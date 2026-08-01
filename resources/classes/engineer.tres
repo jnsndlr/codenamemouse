@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="ClassDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/classes/class_definition.gd" id="1_class"]
+
+[resource]
+script = ExtResource("1_class")
+display_name = "ENGINEER"
+tag = "ENG"
+max_health = 95.0
+speed = 2.9
+turn_speed = 10.0
+sprint_seconds = 3.5
+attack_damage = 16.0
+carry_penalty = 0.25
+tunnel_speed = 1.0
+dig_speed = 1.0
+can_enter_tunnels = true

@@ -17,11 +17,17 @@ extends Mouse
 ## sixty times a second makes a bot standing between two equally good options vibrate, and the
 ## interval doubles as a plain reaction time -- it takes a beat to notice you.
 ##
-## SURFACE ONLY, and knowingly so. Bots learn to path through tunnels at M4, over the same
-## AStar3D graph the digging already maintains. The implementation plan is explicit that this
-## skews the STEAL (a human can walk in underneath a defender who can't follow) and not the
-## RUN -- the banner cannot go underground, so the trip home is surface either way, and the
-## trip home is what M3 is measuring.
+## IT GOES UNDERGROUND (M4). Two navigation systems, joined at the mouths: a navmesh on the lawn
+## and an AStar3D graph over the dug cells (tunnel_graph.gd), stitched into one list of waypoints
+## by route_planner.gd. Everything below the `_decide` ranking is unchanged by it -- the bot
+## still picks a destination and walks at it. What changed is that "walk at it" may now mean
+## climbing down a hole.
+##
+## THE RANKING NEVER MENTIONS TUNNELS, and that is the point. A bot does not decide to go
+## underground; it decides to chase the mouse holding its banner, and the route to that mouse
+## happens to run through a shaft. Until M4 the same decision produced a bot standing on the lawn
+## above them, which is what made digging an exploit rather than a choice -- not because the AI
+## was too stupid to follow, but because it structurally could not.
 
 enum { RAIDER, DEFENDER }
 
@@ -58,11 +64,27 @@ enum { RAIDER, DEFENDER }
 @export var waypoint_slack: float = 0.35
 ## How near the destination counts as arrived.
 @export var arrival_slack: float = 0.5
+## What a tunnel route has to beat the surface by before a bot bothers, as a multiplier on its
+## cost. 1.0 is "take whichever is genuinely shorter".
+##
+## This only ever applies when BOTH ends are on the lawn -- following someone down is not a
+## preference, it is the only way to get there. On the current arena, eighty metres of open dirt,
+## almost nothing underground wins this comparison, and that is the honest answer rather than a
+## disabled feature: tunnels pay off on a map with things in the way, which is a map problem
+## (GDD section 8) and belongs to whichever milestone first lays out a real yard.
+@export var tunnel_bias: float = 1.0
 
 @onready var _agent: NavigationAgent3D = $Agent
 
 var _director: MatchDirector
+var _network: TunnelNetwork
 var _goal: Vector3 = Vector3.ZERO
+## Which plane the destination is on. Almost always 0 -- the banners and the nests are on the
+## surface by rule -- so this is really "is the mouse I am chasing underground".
+var _goal_plane: int = 0
+## Waypoints from route_planner.gd, or empty for "walk over the grass". A change of plane between
+## consecutive waypoints is a shaft, and the one before it is the mouth to stand on.
+var _route: Array[Dictionary] = []
 var _quarry: Mouse = null
 var _since_think: float = 999.0
 ## Purely for the debug readout -- what it thinks it's doing.
@@ -86,11 +108,14 @@ func _control(delta: float) -> void:
 		if _director == null:
 			return
 
+	if _network == null:
+		_network = get_tree().get_first_node_in_group(TunnelNetwork.NETWORK_GROUP) as TunnelNetwork
+
 	_since_think += delta
 	if _since_think >= think_seconds:
 		_since_think = 0.0
 		_decide()
-		_agent.target_position = _goal
+		_plan()
 
 	_fight(delta)
 	_walk(delta)
@@ -107,6 +132,10 @@ func _decide() -> void:
 	var ours := _director.banner_of(team)
 	var theirs := _director.banner_of(Team.other(team))
 	_quarry = _pick_quarry()
+	# The default, overwritten only by the two rules that can point at a mouse. Everything else a
+	# bot wants is a banner or a nest, and neither can be underground -- one by rule (GDD
+	# section 2), the other by being a place in the yard.
+	_goal_plane = 0
 
 	# 1. Carrying it home is everything. Nothing outranks a capture in progress -- a bot that
 	#    stops mid-run to trade blows is how a steal turns into nothing.
@@ -130,6 +159,10 @@ func _decide() -> void:
 	if thief != null and not thief.is_scruffed():
 		_intent = "chasing the carrier"
 		_goal = thief.global_position
+		# A carrier cannot be underground -- both gates see to that -- so this is 0 today. Read
+		# off the mouse anyway rather than assumed, because the day something drags a carrier
+		# through a shaft, a bot that assumed will chase a hole in the lawn.
+		_goal_plane = thief.get_plane()
 		return
 
 	# 4. A defender's whole job: meet anyone who comes into the yard, and go back home when they
@@ -140,6 +173,11 @@ func _decide() -> void:
 		if intruder != null:
 			_intent = "defending"
 			_goal = intruder.global_position
+			# THE ONE THAT MATTERS. Someone crossing your patch three planes down is still
+			# crossing your patch, and until M4 a defender watched them do it from the lawn.
+			# Measured from the nest in plan view, so a tunnel does not buy an intruder distance
+			# it did not walk.
+			_goal_plane = intruder.get_plane()
 			return
 		_intent = "holding the nest"
 		_goal = _post(nest)
@@ -232,35 +270,106 @@ func _fight(delta: float) -> void:
 	swing()
 
 
+## Work out the way there, and hand the walking below a single point to head for.
+##
+## Re-planned every decision rather than kept until it fails. A route is cheap, the destination
+## is usually a mouse that is moving, and a plan held onto is a bot walking confidently to where
+## somebody used to be. It also means a tunnel dug across a bot's route is noticed within a third
+## of a second, with no invalidation machinery at all.
+func _plan() -> void:
+	_route = RoutePlanner.plan(
+		_network, global_position, get_plane(), _goal, _goal_plane, tunnel_bias
+	)
+	_aim()
+
+
+## Point the navigation agent at whatever the current leg ends with. Only meaningful on the
+## surface: underground there is no navmesh, and the graph has already done the routing.
+func _aim() -> void:
+	if get_plane() != 0:
+		return
+	var aim := _goal
+	if not _route.is_empty():
+		aim = _route[0]["at"]
+	_agent.target_position = aim
+
+
 func _walk(delta: float) -> void:
-	if global_position.distance_to(_goal) <= arrival_slack:
+	var heading := _heading()
+	if heading.is_zero_approx():
 		return
 
-	var step := _next_step()
-	step.y = global_position.y
-	var toward := step - global_position
-	toward.y = 0.0
-	if toward.length_squared() < 0.0001:
-		return
-
-	toward = toward.normalized()
-	_wish = toward
+	_wish = heading
 	# Only steer with the feet when there's nobody to look at -- otherwise the fight owns the
 	# facing and this would drag its nose back onto the path mid-scrap.
 	if _quarry == null:
-		_face_toward(toward, delta)
+		_face_toward(heading, delta)
 
 
-## The next point on the path, or the goal itself if navigation has nothing to say.
+## Which way to push this frame, or zero for "stay put".
+func _heading() -> Vector3:
+	var aim := _goal
+	var reach := arrival_slack
+	if not _route.is_empty():
+		aim = _route[0]["at"]
+		reach = waypoint_slack
+	if _flat_gap(aim) <= reach:
+		if not _route.is_empty():
+			_advance()
+		return Vector3.ZERO
+
+	var step := _next_step(aim)
+	var toward := step - global_position
+	toward.y = 0.0
+	if toward.length_squared() < 0.0001:
+		return Vector3.ZERO
+	return toward.normalized()
+
+
+## Arrived at a waypoint: drop it, and if the next one is on another plane, take the shaft that
+## must be under our feet.
+##
+## Failing to find that shaft clears the whole route rather than limping on. It means the plan
+## and the world have disagreed -- knocked off the mouth mid-transit, or the cell was never quite
+## reached -- and the next decision is a third of a second away. A bot that keeps walking a route
+## it has fallen off is the one that ends up jogging on the spot against a wall.
+func _advance() -> void:
+	_route.pop_front()
+	if _route.is_empty():
+		return
+
+	if int(_route[0]["plane"]) != get_plane():
+		if TunnelTransit.take(_network, self, get_plane(), 0.05) < 0:
+			_route.clear()
+			return
+		# Standing where that waypoint was, now: it was the far end of the shaft.
+		_route.pop_front()
+	_aim()
+
+
+## Distance to a point, ignoring height. Two waypoints on different planes are two thirds of a
+## metre apart vertically, which is enough for a straight distance check to never call the one
+## under your feet "reached".
+func _flat_gap(to: Vector3) -> float:
+	return Vector2(to.x - global_position.x, to.z - global_position.z).length()
+
+
+## The next point on the way to `aim`.
+##
+## Underground, `aim` is the adjacent cell the graph picked and there is nothing to add -- head
+## straight at it. On the surface the navmesh knows about the props and the walls, so the agent
+## gets the last word.
 ##
 ## The fallback matters more than it looks. If the navmesh failed to bake, an agent returns its
 ## own position forever and every bot stands still looking broken -- which is indistinguishable
 ## from the AI being wrong. Walking straight at the goal is visibly dumb around a wall, but it
 ## is visibly ALIVE, and tools/match_audit.gd asserts a real path exists between the nests so
 ## the failure is caught somewhere it can be read.
-func _next_step() -> Vector3:
+func _next_step(aim: Vector3) -> Vector3:
+	if get_plane() != 0:
+		return Vector3(aim.x, global_position.y, aim.z)
 	if _agent.get_navigation_map().is_valid() and not _agent.is_navigation_finished():
 		var step := _agent.get_next_path_position()
 		if step.distance_to(global_position) > 0.01:
-			return step
-	return _goal
+			return Vector3(step.x, global_position.y, step.z)
+	return Vector3(aim.x, global_position.y, aim.z)

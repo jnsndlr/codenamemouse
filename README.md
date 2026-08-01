@@ -15,15 +15,32 @@ Read these in order — they're the source of truth for what we're building and 
 | [`docs/01-gdd.md`](docs/01-gdd.md) | The **what** — digging, cheese-as-lives, classes, the world |
 | [`docs/02-implementation-plan.md`](docs/02-implementation-plan.md) | The **how** — tech, architecture, milestones M0–M9 |
 
-## Current state: M3 — the core loop
+## Current state: M4 — digging in the game (in progress)
 
 **There is a match.** Two crews of three, two banners, melee, scruffing, respawns, a clock,
-and bots that play the objective rather than each other. Digging is still there and still
-works; the banner simply cannot go underground.
+and bots that play the objective rather than each other. M3 answered its question — *is the
+flag run tense?* Yes, and it's the **chase** that does it.
 
-M3 exists to answer one question: *is the flag run tense?* Short answer: yes, and it's the
-**chase** that does it — getting scruffed two strides from your own nest with the banner over
-your head. See the findings in the implementation plan.
+**And now they follow you down.** Bots path through tunnels: an `AStar3D` graph over the dug
+cells, joined to the surface navmesh at the shaft mouths, so a defender meets an intruder three
+planes down instead of standing on the lawn above them. That was M4's centre of gravity — until
+it held, a tunnel wasn't a route anyone contested, it was somewhere the AI could not go.
+
+**And there are classes.** Four of them, as `Resource` files you can edit in the inspector —
+walk into your own nest and press **C** to cycle. The spread is real: a Sneak is fast, fragile
+and quick through a tunnel; a Brute is a wall that barely moves down there. **Everyone can
+dig, and the Engineer is about three times faster at it** — a deliberate revision of GDD §4's
+"nobody else alters terrain", because exclusivity turns one seat into a requirement and locks a
+crew out of three planes the moment its Engineer goes down.
+
+**And the Engineer can bring a tunnel down.** `Q`, on the cell you're pointing at, one at a
+time, at arm's length — sealing a corridor behind you as you go. It's aimed rather than
+automatic on purpose: the cursor is the steering wheel, so looking at what you're sealing means
+not running for a moment. Anyone standing in the cell is scruffed. Shaft cells are refused —
+either end of a ladder would be left starting in solid earth.
+
+Still to come in M4: the Engineer's *Barricade*, a dig-controls pass, and per-plane rock
+obstructions.
 
 ### The rules
 
@@ -46,10 +63,24 @@ GDD §10's furniture, built now that there are systems behind it.
 - **Minimap, bottom left** — the yard, the tunnels on every plane, the nests, both banners
   and your crew. **It turns with the view**, so up on the map is up the screen; at the fixed
   45° yaw that draws the yard as the diamond the concept art has.
-- **Crew roster, bottom right** — name, class, health, and whose banner they are carrying.
-  Your own row is flagged gold; a scruffed one shows its respawn clock.
+- **Crew roster, bottom right** — a portrait, a name, a class tag, and health in **segments**
+  rather than as a sliding bar, because the question on a roster is "how many more hits", which
+  is a number. Chunks are the crew's colour while everyone is fine and degrade through amber to
+  red. Your own row is flagged gold; a scruffed one shows its respawn clock; a carrier flies a
+  little flag in the crew colour of whatever they're holding.
 - **Event feed, bottom centre-left**, next to the map, stacking upward so the newest line is
   always at the same height.
+- **All of it scales with the window.** Every size is written against 1280×720 and multiplied by
+  `HudSkin.scale_for` on the way to the screen, so the HUD is the same fraction of the display at
+  any size — scaled by the *smaller* of the two ratios, or a short wide window grows the panels
+  until they collide across the middle. Not Godot's `canvas_items` stretch mode, which would do
+  this for free and would also drop the 3D render to the base resolution and scale it back up,
+  quietly undoing the pixel pass the whole look is built on.
+
+**The roster portraits are placeholders**, one per class — the headgear does the telling apart,
+not the face. All the drawing is in `roster.gd:_portrait`, so real art is a texture lookup in one
+function and nothing else in the file changes. Per-mouse customisation, if it happens, wants the
+same seam (M10 idea).
 
 **Enemies appear on the map only once your crew has seen them** — same range, same line of
 sight, and the same concealment number the grass fades you with, so sneaking past a defender
@@ -58,11 +89,9 @@ for 15s after they break away, **frozen where they were last seen** and fading, 
 marker reads as the guess it is. Carriers are always visible (§2). See
 [`scripts/game/spotting.gd`](scripts/game/spotting.gd).
 
-Two things on screen are ahead of their systems, deliberately, and both are honest:
-**cheese** is a real ledger (20 per crew, −1 per respawn) but nothing yet depends on running
-out — caches, spending and the zero-cheese respawn are M6, and they have to land together or
-empty is a death spiral. **Class** is a name only; the stats and abilities are M4, and every
-mouse today genuinely is a Generalist.
+One thing on screen is ahead of its system, deliberately and honestly: **cheese** is a real
+ledger (20 per crew, −1 per respawn) but nothing yet depends on running out — caches, spending
+and the zero-cheese respawn are M6, and they have to land together or empty is a death spiral.
 
 ### Running it
 
@@ -84,6 +113,8 @@ Open the project in Godot 4.7+ and press F5, or:
 | **Right click** | Dig: point at a tile next to your tunnel and hold |
 | **E** | Take the shaft under or over you |
 | **F / R** | Sink a shaft down / break one up |
+| **C** | Change class — **only while standing in your own nest**, selector slides up |
+| **Q** | **Cave-in** (Engineer) — bring down the tunnel cell you are pointing at |
 | **Arrows** | Turn the view a quarter at a time |
 
 **The cursor is the steering wheel, not a crosshair.** Movement is derived from facing, so the
@@ -105,13 +136,20 @@ On **Spotting**: `sight_range` (14), `memory_seconds` (15 — how long a contact
 sighting), `reveal_opacity` (0.35 — how visible you must be to register at all), `interval`
 (0.25, which doubles as reaction time).
 
-On **Player** (and every mouse, via the shared base): `speed` (3), `acceleration` (30),
-`turn_speed` (10 — the main weight dial), `carry_penalty` (0.25 — per-class at M4, and the whole
-handoff play falls out of the spread), `attack_damage` / `attack_reach` / `attack_knockback`.
+**Classes live in [`resources/classes/`](resources/classes)** — four `.tres` files, one per
+class. `dig_speed` (Engineer 1.0, everyone else 0.35), `tunnel_speed` (Sneak 1.25, Brute 0.35
+— and it applies *only* below the surface), `carry_penalty`, health, speed, turn rate, sprint
+duration. Editing one and pressing play is the whole tuning loop; nothing is in code.
+
+On **Player** (and every mouse, via the shared base): `acceleration` (30), `attack_reach`,
+`attack_knockback`. Note `speed`, `max_health`, `turn_speed`, `attack_damage` and
+`carry_penalty` are **overwritten from the class resource** on ready — set them there, not here.
 
 On a **Bot**: `role` (raider or defender), `defend_radius` (9 — measured from the *nest*, so a
 defender can't be lured off its post), `engage_radius` (4.5 — who it squares up to, never where
-it goes; conflating those two produced bots that brawled in the midfield and never scored).
+it goes; conflating those two produced bots that brawled in the midfield and never scored),
+`tunnel_bias` (1.0 — how much a tunnel has to beat the surface by before a bot bothers; only
+applies when *both* ends are above ground, since following someone down is not a preference).
 
 On **CameraRig**: `pitch_degrees` (48), `zoom_idle` / `zoom_run` / `zoom_sprint`, `follow_speed`.
 
@@ -127,11 +165,27 @@ Two headless invariant suites. Both must pass; both exit non-zero if they don't.
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/match_audit.gd
 ```
 
-The first builds eighteen awkward tunnel networks and asserts you cannot fall out of any of
-them. The second plays out the flag rules — steal, capture, drop, return, respawn, the flag
-underground, who a swing may hit — checks the bots can path between the nests at all, and
-checks **who may appear on the minimap**: not through a prop, not through a plane, not without
-being seen, and forgotten on time.
+The first builds fifteen awkward tunnel networks and asserts you cannot fall out of any of
+them, then checks the **routing graph agrees with the geometry** — no route through undug earth,
+no diagonal shortcut through a corner you can't fit round, no crossing between planes without a
+shaft, and no imaginary line drawn across the lawn — then brings a cell down and checks the
+network, the graph and the physics all noticed.
+
+The second plays out the flag rules — steal, capture, drop, return, respawn, the flag
+underground, who a swing may hit — checks the bots can path between the nests at all, checks a
+**defender actually goes down a shaft after an intruder**, checks the class spread reaches the
+mouse and the swap point has a place and a price, checks **only the Engineer can cave a tunnel
+in** (and on whom, and how often), and checks **who may appear on the
+minimap**: not through a prop, not through a plane, not without being seen, and forgotten on
+time.
+
+> **The tunnel audit spent its whole life passing without testing anything, and that is worth
+> knowing about.** `const STRIP: Array[String] = [...] + STRIP_MATCH` produces an *untyped*
+> array in GDScript; passing it to a parameter declared `Array[String]` aborts the call at
+> runtime, so `_arena` returned null, every check quietly did nothing to a null network, and all
+> fourteen scenarios printed `ok`. Fixed on both counts — the type, and a harness that now
+> reports `BROKEN` and fails the run when it cannot build its own subject. The geometry itself
+> turned out to be fine, which is luck rather than vindication.
 
 ## Layout
 
@@ -143,7 +197,8 @@ scripts/actors/ the mouse itself — locomotion, health, melee, carrying
 scripts/game/   teams, nests, banners, the match rules, who can see whom
 scripts/ai/     bots
 scripts/ui/     score bug, minimap, roster, feed, and the skin they share
-scripts/        player, camera, tunnels, maps, input setup
+scripts/tunnels/the network, the routing graph, shaft transit, digging
+scripts/        player, camera, maps, input setup
 tools/          headless audits
 ```
 
@@ -179,9 +234,16 @@ rather than in `project.godot`, because that file serializes input bindings as o
 unreadable line. Move them into Project Settings > Input Map when you want in-editor
 rebinding.
 
-## Next: M4 — digging in the game
+## Next: the rest of M4
 
-Is digging *fun*, not just legible? The centre of gravity is **bots pathing through tunnels**
-(`AStar3D` over the same dug cells the player digs), because until a defender can follow you
-down there, taking the tunnel isn't a decision — it's an exploit. Then the Engineer class,
-per-plane rock obstructions, and a dig-controls pass. See the implementation plan.
+Is digging *fun*, not just legible? Bots can follow you now, which was the precondition for
+asking. What's left is the Engineer class (dig, ramp, barricade), a dig-controls pass, and
+per-plane rock obstructions. See the implementation plan.
+
+**One finding already, and it isn't a routing problem.** Bots never choose a tunnel when both
+ends are above ground — because on this arena none is ever shorter. The yard is eighty metres of
+open dirt, so no underground route can beat the straight line over the top of it, and the
+planner correctly says so. Tunnels start winning that comparison the moment the map has
+something in the way — which is exactly what M3 said about the midfield: **it's a map problem**
+(GDD §8), and it belongs to whichever milestone first lays out a real Backyard BBQ. The
+machinery is held under audit in the meantime, with the comparison forced by `tunnel_bias`.

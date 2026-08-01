@@ -35,6 +35,8 @@ var _centre: Label
 var _feed: Array[Label] = []
 ## {text, age}, newest last.
 var _events: Array[Dictionary] = []
+## The scale the labels were last sized for, so the font is only rewritten when it changes.
+var _scaled: float = -1.0
 
 
 func _ready() -> void:
@@ -44,6 +46,7 @@ func _ready() -> void:
 	_centre = _label(40, Color(1.0, 0.95, 0.78))
 	for i in range(feed_lines):
 		_feed.append(_label(16, Color(0.92, 0.90, 0.84)))
+	_rescale()
 
 	_director = get_node_or_null(director_path) as MatchDirector
 	if _director == null:
@@ -61,6 +64,7 @@ func _on_event(text: String) -> void:
 func _process(delta: float) -> void:
 	if _director == null:
 		return
+	_rescale()
 	_centre.text = _centre_line()
 	_centre.reset_size()
 	var screen := get_viewport_rect().size
@@ -89,7 +93,8 @@ func _tick_feed(delta: float) -> void:
 	while not _events.is_empty() and _events[0]["age"] > feed_seconds:
 		_events.pop_front()
 
-	var bottom := get_viewport_rect().size.y - feed_bottom
+	var s := HudSkin.scale_for(get_viewport_rect().size)
+	var bottom := get_viewport_rect().size.y - feed_bottom * s
 	for i in range(_feed.size()):
 		var line := _feed[i]
 		if i >= _events.size():
@@ -104,7 +109,23 @@ func _tick_feed(delta: float) -> void:
 		# Counted back from the newest, so a line does not slide up the screen as older ones
 		# expire underneath it.
 		var from_newest := _events.size() - 1 - i
-		line.position = Vector2(feed_left, bottom - float(from_newest + 1) * feed_spacing)
+		line.position = Vector2(feed_left * s, bottom - float(from_newest + 1) * feed_spacing * s)
+
+
+## Font sizes are re-applied whenever the window changes, so a line of the feed is the same
+## fraction of the screen as the panels it sits between. Labels rather than drawn text because
+## these are the only two pieces of the HUD that are pure text -- but they still have to scale
+## with everything else, or the feed shrinks into the corner of a big window.
+func _rescale() -> void:
+	var s := HudSkin.scale_for(get_viewport_rect().size)
+	if is_equal_approx(s, _scaled):
+		return
+	_scaled = s
+	_centre.label_settings.font_size = int(40.0 * s)
+	_centre.label_settings.outline_size = maxi(4, int(10.0 * s))
+	for line in _feed:
+		line.label_settings.font_size = int(16.0 * s)
+		line.label_settings.outline_size = maxi(3, int(4.0 * s))
 
 
 func _label(font_size: int, colour: Color) -> Label:

@@ -40,8 +40,34 @@ const HEALTH_FULL: Color = Color(0.48, 0.76, 0.36)
 const HEALTH_HURT: Color = Color(0.92, 0.74, 0.26)
 const HEALTH_LOW: Color = Color(0.86, 0.31, 0.24)
 
+## The window this HUD's numbers were chosen against. Every size in every HUD file is written as
+## if the window were this, and multiplied by `scale_for` on the way to the screen.
+const REFERENCE: Vector2 = Vector2(1280.0, 720.0)
+
 static var _panel_box: StyleBoxFlat
 static var _well_box: StyleBoxFlat
+
+
+# ---------------------------------------------------------------------------------- scaling
+
+
+## How much bigger everything should be drawn in a window this size.
+##
+## THE HUD IS NOT A SET OF PIXEL SIZES, it is a set of proportions. Written in raw pixels it is
+## correct at exactly one window size and wrong everywhere else -- at 1080p the score bug had
+## shrunk to a strip you had to lean in to read, which is the specific failure that prompted
+## this. Scaling by the SMALLER of the two ratios matters: by height alone a short wide window
+## grows the panels until they collide across the middle of the screen.
+##
+## Not Godot's `canvas_items` stretch mode, which would do this for free -- and would also drop
+## the 3D render to the base resolution and scale it back up, quietly undoing the pixel pass the
+## whole look is built on (see pixel_edges_effect.gd). The HUD is drawn, so the HUD can scale
+## itself and leave the renderer alone.
+##
+## Clamped at both ends. Below about three quarters the text stops being legible at all, and past
+## two and a half the HUD is eating a game somebody is trying to play.
+static func scale_for(screen: Vector2) -> float:
+	return clampf(minf(screen.x / REFERENCE.x, screen.y / REFERENCE.y), 0.75, 2.5)
 
 
 # ---------------------------------------------------------------------------------- panels
@@ -125,6 +151,39 @@ static func bar(on: CanvasItem, rect: Rect2, fill: float, colour: Color) -> void
 	if amount <= 0.0:
 		return
 	on.draw_rect(Rect2(rect.position, Vector2(rect.size.x * amount, rect.size.y)), colour, true)
+
+
+## A health bar in chunks rather than as one sliding block.
+##
+## SEGMENTS ARE READ AS A NUMBER, a continuous bar as a proportion -- and on a roster of four
+## crewmates the question is nearly always "how many more hits", which is a number. It also makes
+## small changes visible: a bar losing three pixels reads as nothing, a segment going dark reads
+## across the room.
+##
+## The last, partial segment is drawn dimmed rather than clipped, so a crewmate on a sliver of
+## health still shows something in that slot instead of appearing to have one fewer.
+static func segments(
+	on: CanvasItem, rect: Rect2, fill: float, colour: Color, count: int = 6, gap: float = 2.0
+) -> void:
+	on.draw_rect(rect.grow(1.0), Color(0.0, 0.0, 0.0, 0.55 * colour.a), true)
+	var wide := (rect.size.x - gap * float(count - 1)) / float(count)
+	var lit := clampf(fill, 0.0, 1.0) * float(count)
+	for i in range(count):
+		var at := Rect2(rect.position + Vector2(float(i) * (wide + gap), 0.0), Vector2(wide, rect.size.y))
+		on.draw_rect(at, Color(WELL.r, WELL.g, WELL.b, 0.9 * colour.a), true)
+		var amount := clampf(lit - float(i), 0.0, 1.0)
+		if amount <= 0.0:
+			continue
+		var shade := colour
+		if amount < 1.0:
+			shade.a *= 0.45
+		on.draw_rect(at, shade, true)
+		# A lighter top edge on each lit chunk. One line, and it is most of why the bar reads as
+		# an object rather than as four rectangles.
+		on.draw_rect(
+			Rect2(at.position, Vector2(at.size.x, maxf(1.0, at.size.y * 0.28))),
+			Color(1, 1, 1, 0.22 * shade.a), true
+		)
 
 
 ## Green down to yellow down to red. Stepped rather than a gradient: the question a health bar

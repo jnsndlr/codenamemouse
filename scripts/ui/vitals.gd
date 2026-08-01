@@ -64,6 +64,9 @@ func _draw() -> void:
 		return
 
 	var player: Mouse = _director.get_player() if _director != null else null
+	# The bars over heads scale too, or they become invisible threads on a large window while the
+	# panels around the edge stay legible.
+	var ui := HudSkin.scale_for(get_viewport_rect().size)
 
 	for key: Variant in _shown.keys():
 		var mouse := key as Mouse
@@ -83,8 +86,8 @@ func _draw() -> void:
 		if fade <= 0.0:
 			continue
 
-		var at := camera.unproject_position(head) - Vector2(bar_size.x * 0.5, screen_lift)
-		_bar(at, mouse.get_health_ratio(), Team.color_of(mouse.team), fade)
+		var at := camera.unproject_position(head) - Vector2(bar_size.x * ui * 0.5, screen_lift * ui)
+		_bar(at, mouse.get_health_ratio(), Team.color_of(mouse.team), fade, ui)
 
 		# Stamina under your own bar, and only yours -- it is personal and never shown for
 		# anyone else (GDD section 9).
@@ -92,16 +95,19 @@ func _draw() -> void:
 			var stamina: float = mouse.call("get_stamina_ratio")
 			if stamina < 1.0:
 				_bar(
-					at + Vector2(0.0, bar_size.y + 2.0), stamina,
-					Color(0.85, 0.82, 0.55), fade * 0.9, bar_size.y * 0.6
+					at + Vector2(0.0, (bar_size.y + 2.0) * ui), stamina,
+					Color(0.85, 0.82, 0.55), fade * 0.9, ui, bar_size.y * 0.6
 				)
 
 
-func _bar(at: Vector2, fill: float, colour: Color, alpha: float, height: float = -1.0) -> void:
-	var tall := bar_size.y if height < 0.0 else height
-	var frame := Rect2(at, Vector2(bar_size.x, tall))
-	draw_rect(frame.grow(1.0), Color(0.0, 0.0, 0.0, 0.55 * alpha), true)
+func _bar(
+	at: Vector2, fill: float, colour: Color, alpha: float, ui: float, height: float = -1.0
+) -> void:
+	var tall := (bar_size.y if height < 0.0 else height) * ui
+	var wide := bar_size.x * ui
+	var frame := Rect2(at, Vector2(wide, tall))
+	draw_rect(frame.grow(1.0 * ui), Color(0.0, 0.0, 0.0, 0.55 * alpha), true)
 	draw_rect(
-		Rect2(at, Vector2(bar_size.x * clampf(fill, 0.0, 1.0), tall)),
+		Rect2(at, Vector2(wide * clampf(fill, 0.0, 1.0), tall)),
 		Color(colour.r, colour.g, colour.b, alpha), true
 	)

@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="ClassDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/classes/class_definition.gd" id="1_class"]
+
+[resource]
+script = ExtResource("1_class")
+display_name = "GENERALIST"
+tag = "GEN"
+max_health = 100.0
+speed = 3.0
+turn_speed = 10.0
+sprint_seconds = 4.0
+attack_damage = 26.0
+carry_penalty = 0.1
+tunnel_speed = 0.9
+dig_speed = 0.35
+can_enter_tunnels = true

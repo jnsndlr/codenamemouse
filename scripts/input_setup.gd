@@ -32,6 +32,14 @@ const KEYS: Dictionary = {
 	"burrow": [KEY_E],
 	"shaft_down": [KEY_F],
 	"shaft_up": [KEY_R],
+	# Change class, at your own nest only (GDD section 4). C for class, and it is deliberately
+	# nowhere near the movement keys: it is a thing you do while standing still at home, and a
+	# misfire mid-chase would be the worst possible moment to become a Brute.
+	"swap_class": [KEY_C],
+	# The class ability. Section 9's table reads "Right click / Q, E, F: abilities" -- right click
+	# is the dig hold, E takes a shaft and F sinks one, so Q is the one seat left at the table and
+	# it is where the Engineer's cave-in goes.
+	"ability": [KEY_Q],
 	# Quarter-turn the view. Arrows rather than Q/E because both hands are already busy --
 	# left on WASD and abilities, right on the mouse, which is the steering wheel.
 	"view_left": [KEY_LEFT],

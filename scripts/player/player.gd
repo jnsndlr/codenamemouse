@@ -26,7 +26,7 @@ extends Mouse
 
 @export_group("Sprint stamina")
 ## Seconds of sprint at full stamina. This is the per-class dial (GDD section 9) -- sprint
-## SPEED is uniform, duration is what differs. Scout 6.0, Bruiser 1.5.
+## SPEED is uniform, duration is what differs. Sneak 6.0, Brute 1.5.
 @export var sprint_seconds: float = 4.0
 ## Quiet time before stamina starts coming back.
 @export var stamina_regen_delay: float = 2.0
@@ -51,6 +51,17 @@ var _since_forward_tap: float = 999.0
 
 func _ready() -> void:
 	super()
+	_stamina = sprint_seconds
+
+
+## Sprint duration is per-class (GDD section 9: Sneak 6.0, Brute 1.5) and sprint SPEED is not.
+## Handled here rather than in the base class because a bot has no stamina to give a duration to,
+## and the stat would be a property nothing reads on three quarters of the mice in the match.
+func apply_class(definition: ClassDefinition) -> void:
+	super(definition)
+	sprint_seconds = definition.sprint_seconds
+	# Topped up, not scaled. Swapping class at your own nest is the one moment stamina is
+	# uninteresting -- you are standing still, at home, and about to walk somewhere.
 	_stamina = sprint_seconds
 
 

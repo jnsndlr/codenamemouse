@@ -17,7 +17,7 @@ extends Node
 ## mechanic, it's a cheat. It also means the thing you're looking for while crossing a lane is
 ## exactly the thing they're looking for -- which is the whole reason the tell is worth reading.
 ##
-## Deliberately NOT the Scout's camouflage (GDD section 4). That is a class ability that stacks
+## Deliberately NOT the Sneak's camouflage (GDD section 4). That is a class ability that stacks
 ## on top of this and needs its own shader. This is the floor everybody stands on.
 
 ## How much of your own colour survives when perfectly still in deep cover. Not zero: hidden

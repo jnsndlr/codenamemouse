@@ -41,6 +41,14 @@ func _process(delta: float) -> void:
 
 	_refusal_left = maxf(0.0, _refusal_left - delta)
 
+	# Scales with the rest of the HUD. This is a spike instrument in the corner, but a spike
+	# instrument you cannot read on a big monitor is not doing its job either.
+	var ui := HudSkin.scale_for(get_viewport_rect().size)
+	if label_settings != null and label_settings.font_size != int(19.0 * ui):
+		label_settings.font_size = int(19.0 * ui)
+		label_settings.outline_size = maxi(3, int(5.0 * ui))
+		size.x = 436.0 * ui
+
 	var plane := _network.plane_at_height(_player.global_position.y)
 	var counts: Array[String] = []
 	for index in range(1, TunnelNetwork.PLANE_COUNT):

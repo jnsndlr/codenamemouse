@@ -30,6 +30,18 @@ extends Node3D
 ## Why a dig didn't happen. Refusing silently is indistinguishable from the controls being
 ## broken -- the entrance key spent a whole session looking dead for exactly that reason.
 signal dig_refused(reason: String)
+## A cell was opened, or a shaft was sunk through one. The routing graph rides on these rather
+## than rescanning: a dig changes one cell out of five thousand, and a graph that rebuilds itself
+## to learn that is a graph nobody can afford to keep current.
+signal cell_opened(plane: int, cell: Vector2i)
+signal shaft_opened(plane: int, cell: Vector2i)
+## A cell was brought down. The one thing that makes the network get SMALLER, so it is the one
+## thing every cache built on top of it has to hear about.
+signal cell_collapsed(plane: int, cell: Vector2i)
+
+## So anything spawned into the match can find the network without being wired to it. Bots are
+## created at runtime and have no scene to hold a NodePath for them.
+const NETWORK_GROUP: StringName = &"tunnel_network"
 
 const PLANE_COUNT: int = 4
 const SPACING: float = TunnelChunks.PLANE_SPACING
@@ -143,9 +155,11 @@ var _mask_textures: Array[ImageTexture] = []
 var _lids: Array[MeshInstance3D] = []
 var _lamp_roots: Array[Node3D] = []
 var _focus: int = 0
+var _graph: TunnelGraph
 
 
 func _ready() -> void:
+	add_to_group(NETWORK_GROUP)
 	for plane in range(PLANE_COUNT):
 		_cells.append({})
 		_shafts.append({})
@@ -211,6 +225,9 @@ func _ready() -> void:
 
 		_build_lid(plane)
 
+	# Built last, so it subscribes to a network whose planes all exist. It keeps itself current
+	# from here on -- nothing else has to remember to tell it about a dig.
+	_graph = TunnelGraph.new(self)
 	set_focus_plane(0)
 
 
@@ -276,6 +293,19 @@ func cell_count(plane: int) -> int:
 	return _cells[plane].size()
 
 
+## The network as something you can path through (M4). Owned here rather than wired up in the
+## scene because there must be exactly one and it must never disagree with the cells -- a routing
+## graph you can forget to add to a map is a map whose bots quietly cannot follow you.
+func graph() -> TunnelGraph:
+	return _graph
+
+
+## Every cell on a plane with a shaft leading DOWN from it. At plane 0 these are the entrances:
+## the only places anyone gets underground, and therefore the only places a route can.
+func shaft_cells(plane: int) -> Array:
+	return _shafts[clampi(plane, 0, PLANE_COUNT - 1)].keys()
+
+
 ## Every dug cell on a plane, as Vector2i grid coordinates.
 ##
 ## For anything that has to draw or walk the whole network rather than ask about one cell: the
@@ -326,7 +356,51 @@ func dig(plane: int, cell: Vector2i) -> bool:
 	_mark_mask(plane, cell, true)
 	_refresh_cell(plane, cell)
 	_rebuild_walls(plane)
+	cell_opened.emit(plane, cell)
 	return true
+
+
+## Bring a cell down: the floor closes, the walls seal around it, and it is earth again.
+##
+## THE ONLY THING THAT SHRINKS THE NETWORK, which is why it gets its own signal and its own set
+## of refusals. Everything else here only ever adds, and a good deal of the code below quietly
+## assumes that -- the mask, the graph, the lamps and the wall mesh are all caches over `_cells`,
+## and all four are rebuilt from it here rather than patched.
+##
+## WHY A SHAFT CELL IS REFUSED. A shaft is a hole in one plane's floor and in the ceiling of the
+## one below, recorded once. Collapsing either end would leave a shaft that starts or finishes in
+## solid earth -- which the audit's SHAFT_ENDS invariant catches, and which in play is a mouse
+## pressing E and arriving inside the ground. Bringing the shaft down as well is a bigger design
+## decision than this is (it would let one Engineer erase an entrance the whole crew relies on),
+## so for now the answer is simply no.
+##
+## STRANDING IS ALLOWED, and is the point. Sealing a corridor can cut off everything past it, and
+## the REACHABLE invariant deliberately is not asserted against live play -- a pocket of tunnel
+## nobody can get to is exactly what a cave-in is for. Anyone caught in the cell is scruffed
+## (GDD section 3); anyone caught BEYOND it can dig their way out, slowly, or take the six
+## seconds. Both are consequences worth having.
+func collapse(plane: int, cell: Vector2i) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT or not _cells[plane].has(cell):
+		return false
+	if _shafts[plane].has(cell) or has_shaft_up(plane, cell):
+		dig_refused.emit("the shaft holds this stretch open")
+		return false
+
+	_cells[plane].erase(cell)
+	_grids[plane].set_cell_item(Vector3i(cell.x, 0, cell.y), GridMap.INVALID_CELL_ITEM)
+	_mark_mask(plane, cell, false)
+	_rebuild_walls(plane)
+	_relight(plane)
+	cell_collapsed.emit(plane, cell)
+	return true
+
+
+## Whether this cell could be brought down, without doing it. For a UI that has to say so before
+## the player commits, and for the ability's own reach test.
+func can_collapse(plane: int, cell: Vector2i) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT or not _cells[plane].has(cell):
+		return false
+	return not _shafts[plane].has(cell) and not has_shaft_up(plane, cell)
 
 
 ## Sink a shaft from `plane` down to `plane + 1`, at the cell the player is standing on.
@@ -349,6 +423,7 @@ func dig_shaft_down(plane: int, cell: Vector2i) -> bool:
 	# rebuild, which in practice meant climbing up and back down to trip set_focus_plane.
 	_relight(plane)
 	_relight(plane + 1)
+	shaft_opened.emit(plane, cell)
 	return true
 
 
