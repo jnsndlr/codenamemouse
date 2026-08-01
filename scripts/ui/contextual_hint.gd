@@ -106,6 +106,16 @@ func _hint() -> String:
 		return "[E]  climb down"
 	if _network.has_shaft_up(plane, here):
 		return "[E]  climb up"
+	# UNDER PAVING (GDD section 3), and the only line here that is a refusal rather than an offer.
+	# It belongs in this slot anyway: a no-surface zone is a rule you meet by pressing R and being
+	# told no, and finding out you are committed at the moment you wanted out is finding out too
+	# late. It stays up for the whole crossing, which is the point -- the information is the
+	# moment it CLEARS, because that is where you can come up.
+	#
+	# Plane 1 only. Deeper down there is nothing above you but more earth, and "no way up" would
+	# be true everywhere and therefore say nothing.
+	if plane == 1 and _network.is_sealed(here):
+		return "paving overhead  --  no way up"
 	if _swap != null:
 		return _swap.prompt()
 	return ""

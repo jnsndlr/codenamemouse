@@ -1,6 +1,6 @@
-[gd_resource type="Resource" script_class="ClassDefinition" load_steps=2 format=3]
+[gd_resource type="Resource" script_class="ClassDefinition" format=3 uid="uid://vtpdc7ixa4ni"]
 
-[ext_resource type="Script" path="res://scripts/classes/class_definition.gd" id="1_class"]
+[ext_resource type="Script" uid="uid://blfjmrltr4mhh" path="res://scripts/classes/class_definition.gd" id="1_class"]
 
 [resource]
 script = ExtResource("1_class")
@@ -12,6 +12,3 @@ turn_speed = 14.0
 sprint_seconds = 6.0
 attack_damage = 34.0
 carry_penalty = 0.4
-tunnel_speed = 1.25
-dig_speed = 0.35
-can_enter_tunnels = true

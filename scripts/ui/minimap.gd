@@ -46,6 +46,11 @@ extends Control
 ## Screen pixels a dug cell draws as, at minimum. Below about this a corridor stops reading as
 ## a line and starts reading as noise.
 @export var tunnel_min: float = 1.6
+## Rock your crew has found. Cool and pale against the warm dirt of the panel, the same argument
+## the seam faces make in the world -- and deliberately NOT the colour a tunnel is, because the two
+## are drawn on top of each other and the question they answer together is where a corridor had to
+## stop.
+@export var rock_color: Color = Color(0.44, 0.48, 0.55, 0.85)
 
 var _director: MatchDirector
 var _network: TunnelNetwork
@@ -105,6 +110,9 @@ func _draw() -> void:
 
 	draw_set_transform(_origin, _yaw, Vector2(_scale, _scale))
 	_ground()
+	# Under the tunnels, because a corridor is a route and a seam is the ground it was cut through
+	# -- and where the two meet, what you want to see is that the corridor stops.
+	_known_rock()
 	_tunnel_cells()
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
@@ -154,6 +162,39 @@ func _tunnel_cells() -> void:
 		var colour := Color(0.50, 0.36, 0.22, 0.85).lerp(Color(0.24, 0.18, 0.13, 0.6), depth)
 		for centre: Vector2 in _tunnels[plane]:
 			draw_rect(Rect2(centre - Vector2(side, side) * 0.5, Vector2(side, side)), colour, true)
+
+
+## The seams your crew has found, on the layer you are standing on (GDD section 3).
+##
+## ONE PLANE, NOT ALL FOUR, which is the opposite of what the tunnels do a few lines below and is
+## deliberate. Tunnels are drawn at every depth because seeing the network you have built is the
+## point of having built it; rock is drawn at one depth because its whole value is that the layouts
+## DIFFER between layers -- four of them stacked on a 200-pixel square is a grey smear that says
+## "there is rock somewhere", which is the one thing you already knew. What you want to read here
+## is "what is in my way, here, now", and the answer changes as you climb.
+##
+## YOUR CREW'S KNOWLEDGE, not the map's. The rock that has not been found is not drawn faintly or
+## drawn differently -- it is not drawn, because this panel is the one place a leak would be
+## invisible, and the same rule governs enemy contacts a few lines further down.
+func _known_rock() -> void:
+	if _network == null:
+		return
+	var player := _director.get_player()
+	if player == null:
+		return
+	var plane := player.get_plane()
+	if plane <= 0:
+		return
+
+	var side := player.team
+	# Refreshed every frame rather than cached against a count like the tunnels are: a reveal
+	# changes dozens of cells at once and the count would have to be per team as well, which is
+	# more bookkeeping than walking a dictionary of a few dozen keys once a frame.
+	var side_length := maxf(TunnelNetwork.CELL, _pixel(tunnel_min * _ui)) * 1.15
+	var box := Vector2(side_length, side_length)
+	for cell: Vector2i in _network.known_rock_cells(plane, side):
+		var centre := Vector2(cell.x, cell.y) * TunnelNetwork.CELL
+		draw_rect(Rect2(centre - box * 0.5, box), rock_color, true)
 
 
 func _refresh_plane(plane: int) -> void:

@@ -27,8 +27,10 @@ planes down instead of standing on the lawn above them. That was M4's centre of 
 it held, a tunnel wasn't a route anyone contested, it was somewhere the AI could not go.
 
 **And there are classes.** Four of them, as `Resource` files you can edit in the inspector —
-walk into your own nest and press **C** to cycle. The spread is real: a Sneak is fast, fragile
-and quick through a tunnel; a Brute is a wall that barely moves down there. **Everyone can
+walk into your own nest and press **C** to cycle. The spread is real: a Sneak is fast, fragile and
+whips around; a Brute is a wall that commits to a heading. **Nobody is slowed underground** — the
+Brute's 0.35 tunnel speed was reverted, because a class that crosses its own tunnel slower than
+everyone else crosses the lawn above it isn't a cork, it's a class locked out of the map. **Everyone can
 dig, and the Engineer is about three times faster at it** — a deliberate revision of GDD §4's
 "nobody else alters terrain", because exclusivity turns one seat into a requirement and locks a
 crew out of three planes the moment its Engineer goes down.
@@ -39,8 +41,55 @@ automatic on purpose: the cursor is the steering wheel, so looking at what you'r
 not running for a moment. Anyone standing in the cell is scruffed. Shaft cells are refused —
 either end of a ladder would be left starting in solid earth.
 
-Still to come in M4: the Engineer's *Barricade*, a dig-controls pass, and per-plane rock
-obstructions.
+**And the earth has rock in it.** Seeded seams on every plane, with a **different layout on each**
+— getting past one may mean going down a layer, round, and back up, which is what turns digging
+into a three-dimensional routing problem instead of a flat maze drawn three times. A seam is
+invisible until you dig up against it and the corridor ends in grey stone: you learn where the
+rock is by paying for the knowledge. The dig cursor goes grey and stops pulsing over one, because
+otherwise "this is rock" looks exactly like "out of reach".
+
+**And the Engineer can put a rock in your way.** `X`, on the open cell beside you: a boulder that
+blocks the corridor physically *and* leaves the routing graph, so bots plan around it rather than
+grinding against it. **Only a Brute can shift one** — three swings, and the third breaks it into
+pieces of itself that scatter, settle and fade — which finally gives the Brute a reason to be
+underground that isn't fighting. **The corridor reopens on the swing that breaks it**, not when
+the last piece stops rolling. It costs no cheese; the limits are **ten seconds
+between placements and three standing at once**, and a cleared barricade gives the slot back.
+
+**And the ground looks like ground.** Every earth surface — the lawn, the trench floors, the walls,
+the lids — carries the same world-mapped dirt grain, so they read as one material rather than as
+four coloured cards. The rocks and grass on the lawn now **disappear the moment you are under
+them**: they sit a metre above the floor you are reading and land on it from this angle, so a
+corridor was filling up with scenery that looked like it was in the tunnel and wasn't.
+
+**And the rock you've found stays found.** Dig into a seam and your crew learns the **whole
+connected vein** — drawn from then on as a cool grey sheet in the earth above your corridor, and
+marked on the minimap for the plane you're standing on. **Your crew only**: the other side still
+has to pay for its own copy of the map. The cell you spent is the price; the shape of the vein is
+what you bought. This is the first knowledge in the game one crew has and the other doesn't, which
+is M5's whole job — doing it first on rock, which never moves, is deliberate.
+
+**And there are boulders on the lawn.** Seeded lumps snapped to the dig grid, one to four cells
+each: they block movement up top and shut the earth directly under them on **plane 1 only**, so the
+way past one is to go under it. Both crews know what a boulder is sitting on from the first second
+— it's standing there in daylight — which makes it the exact counterweight to the seams, where the
+knowledge has to be bought. **A Brute breaks them, five swings per cell**, so a four-cell rock is
+twenty swings and comes apart **a quarter at a time**: you decide whether you want a gap to dig
+through or the whole thing gone. Bots re-path as soon as one falls.
+
+**And some ground you can tunnel under but not come up through.** The patio slab, the concrete
+path (GDD §3): a no-surface zone refuses a shaft that would touch the lawn and refuses nothing
+else, so a corridor runs the whole length of the paving and you simply cannot surface until you
+are clear of it. That makes a slab a **long committed crossing** — the enemy under it has to come
+up somewhere, and you know where the somewheres are. Refused in different words from the top and
+from underneath, and while you're under one the prompt above your head says so, because finding
+out you're committed at the moment you wanted out is finding out too late. The arena has a
+placeholder patio in it; the zone is a rectangle and a rule, so real paving parents underneath it
+later and nothing about the rule changes.
+
+Still to come in M4: a real Backyard BBQ layout (which is a prerequisite for the milestone's own
+question, not polish — see the plan). The dig-controls pass is **tabled** — point-and-hold works
+well enough to keep playing with, and the map is what will say whether it's the friction or the fun.
 
 ### The rules
 
@@ -114,7 +163,8 @@ Open the project in Godot 4.7+ and press F5, or:
 | **E** | Take the shaft under or over you |
 | **F / R** | Sink a shaft down / break one up |
 | **C** | Change class — **only while standing in your own nest**, selector slides up |
-| **Q** | **Cave-in** (Engineer) — bring down the tunnel cell you are pointing at |
+| **Q** | **Cave-in** (Engineer) — bring down the tunnel cell you are pointing at. The cell is boxed while you aim, warm when it will fire and cold while it cools. |
+| **X** | **Barricade** (Engineer) — wedge a boulder into the open cell you are pointing at |
 | **Arrows** | Turn the view a quarter at a time |
 
 **The cursor is the steering wheel, not a crosshair.** Movement is derived from facing, so the
@@ -132,14 +182,34 @@ On **MatchDirector**: `crew_size` (3), `capture_limit` (3), `match_seconds` (480
 `respawn_seconds` (6), `pickup_radius`, `starting_cheese` (20). On a **Nest**: `radius` — how
 generous a capture is. On a **Banner**: `return_seconds` (20).
 
+On **Tunnels**: `rock_density` (0.09 — the fraction of plane 1 that is rock), `rock_density_deeper`
+(+0.035 per plane below it), `rock_seam_cells` (3–11 per seam), `rock_nest_clearance` (6m of soft
+ground around every nest), `rock_seed`. Setting `rock_density` to 0 turns obstructions off
+entirely, which is what both audits do to every check that isn't about them.
+
+On **Barricade**: `cooldown` (10s), `max_standing` (3), `reach_cells` (1.6). On a placed boulder:
+`hits_to_clear` (3 Brute swings), `fill`, `height_fraction`.
+
+On **Surface/Boulders**: `count` (14), `spans` (the footprints on offer and their weighting — a
+repeated entry is a heavier weight), `hits_per_section` (5 Brute swings per cell), `height`
+(0.75–1.15m), `spacing_cells` (3 clear cells between boulders), `boulder_seed`. On **Tunnels**,
+`rock_top_color` is the sheet a found vein is drawn as; on the **minimap**, `rock_color` is the
+same information on the panel.
+
+On **Surface/Patio** (a `NoSurfaceZone`): `extents` — half-width and half-depth in metres, so the
+placeholder's 10 × 5 is a 20 × 10 slab. Move it, resize it, rotate it, or add a second node for a
+path; the rule follows the rectangle. `show_paving` turns off the grey box for a map whose paving
+is real geometry parented underneath.
+
 On **Spotting**: `sight_range` (14), `memory_seconds` (15 — how long a contact outlives the
 sighting), `reveal_opacity` (0.35 — how visible you must be to register at all), `interval`
 (0.25, which doubles as reaction time).
 
 **Classes live in [`resources/classes/`](resources/classes)** — four `.tres` files, one per
-class. `dig_speed` (Engineer 1.0, everyone else 0.35), `tunnel_speed` (Sneak 1.25, Brute 0.35
-— and it applies *only* below the surface), `carry_penalty`, health, speed, turn rate, sprint
-duration. Editing one and pressing play is the whole tuning loop; nothing is in code.
+class. `dig_speed` (Engineer 1.0, everyone else 0.35), `carry_penalty`, health, speed, turn rate,
+sprint duration. `tunnel_speed` is **1.0 for everybody** — nobody is slowed underground, and the
+multiplier is floored at 1.0 in code so a resource edit can't reintroduce a penalty; see GDD §3
+for why the Brute's 0.35 had to go. Editing one and pressing play is the whole tuning loop; nothing is in code.
 
 On **Player** (and every mouse, via the shared base): `acceleration` (30), `attack_reach`,
 `attack_knockback`. Note `speed`, `max_health`, `turn_speed`, `attack_damage` and
@@ -169,15 +239,28 @@ The first builds fifteen awkward tunnel networks and asserts you cannot fall out
 them, then checks the **routing graph agrees with the geometry** — no route through undug earth,
 no diagonal shortcut through a corner you can't fit round, no crossing between planes without a
 shaft, and no imaginary line drawn across the lawn — then brings a cell down and checks the
-network, the graph and the physics all noticed.
+network, the graph and the physics all noticed. Its last check is the only one that runs against a
+**generated** layout rather than a hand-built one: that rock exists, that it is laid differently on
+every plane, that no nest is walled in, that a seam refuses a dig *out loud* and refuses a shaft
+sunk onto it, and that nothing routes through one. It then checks what a crew *knows* about that
+rock: that nobody knows anything until somebody digs into a seam, that doing so reveals the whole
+connected vein and draws it, and — the assertion the feature exists for — that **the other crew
+still knows nothing**, checked through the real dig controls as well as through the rule. Then it
+lays a patio of its own and asserts the
+other kind of obstruction from both sides at once: no entrance through the paving from above, none
+broken out from below, a corridor that runs the whole way under it regardless, a shaft to the plane
+*below* that still works, and a mouth one clear metre past the edge that still works — because a
+seal that refuses everything and a seal that refuses nothing each pass half these lines.
 
 The second plays out the flag rules — steal, capture, drop, return, respawn, the flag
 underground, who a swing may hit — checks the bots can path between the nests at all, checks a
 **defender actually goes down a shaft after an intruder**, checks the class spread reaches the
 mouse and the swap point has a place and a price, checks **only the Engineer can cave a tunnel
-in** (and on whom, and how often), and checks **who may appear on the
-minimap**: not through a prop, not through a plane, not without being seen, and forgotten on
-time.
+in** (and on whom, and how often), checks a **barricade blocks the routing graph and only a Brute
+shifts it** (and the supply, and the cooldown, and that the cell comes back afterwards), checks a
+**boulder shuts the earth under it on plane 1 and not on plane 2** and that five Brute swings free
+one cell of it and leave the rest of the rock standing, and checks **who may appear on the
+minimap**: not through a prop, not through a plane, not without being seen, and forgotten on time.
 
 > **The tunnel audit spent its whole life passing without testing anything, and that is worth
 > knowing about.** `const STRIP: Array[String] = [...] + STRIP_MATCH` produces an *untyped*
@@ -236,9 +319,14 @@ rebinding.
 
 ## Next: the rest of M4
 
-Is digging *fun*, not just legible? Bots can follow you now, which was the precondition for
-asking. What's left is the Engineer class (dig, ramp, barricade), a dig-controls pass, and
-per-plane rock obstructions. See the implementation plan.
+Is digging *fun*, not just legible? Bots can follow you, the Engineer has both its capabilities,
+the earth has rock in it that your crew can map by paying for it, there are boulders to go under or
+break, and the paving refuses a mouth. What's left is **a real Backyard BBQ layout**. The
+dig-controls pass is tabled behind it. See the implementation plan.
+
+**Rock is half of that answer and the map is the other half.** Seams make the *underground* a
+three-dimensional routing problem; only props, a patio and a fence can make the *surface* one —
+and the patio's rule is now built and tested, waiting for a patio to be a rule about.
 
 **One finding already, and it isn't a routing problem.** Bots never choose a tunnel when both
 ends are above ground — because on this arena none is ever shorter. The yard is eighty metres of

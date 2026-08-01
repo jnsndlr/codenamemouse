@@ -38,6 +38,18 @@ signal shaft_opened(plane: int, cell: Vector2i)
 ## A cell was brought down. The one thing that makes the network get SMALLER, so it is the one
 ## thing every cache built on top of it has to hear about.
 signal cell_collapsed(plane: int, cell: Vector2i)
+## A dug cell somebody cannot walk through any more, and then can again -- a barricade going up
+## and coming down. Separate from `cell_collapsed` because the cell is still THERE: the floor, the
+## walls, the lamps and the mask are all unchanged, and the only thing that has to hear about it
+## is anything planning a route. Folding the two together would mean rebuilding a plane's geometry
+## every time a boulder moved.
+signal cell_blocked(plane: int, cell: Vector2i)
+signal cell_unblocked(plane: int, cell: Vector2i)
+## A crew found out where some rock is, or a boulder stopped being rock. Carries the teams affected
+## as a bit mask rather than the cells, because both things that listen -- the caps drawn in the
+## world and the minimap -- redraw a whole plane anyway, and a per-cell signal would have them
+## rebuild the same mesh forty times for one vein.
+signal rock_revealed(plane: int, teams: int)
 
 ## So anything spawned into the match can find the network without being wired to it. Bots are
 ## created at runtime and have no scene to hold a NodePath for them.
@@ -56,6 +68,10 @@ const MASK_HALF_CELLS: int = 64
 ## Bit 1 is the world: ground, arena walls, props, rocks. Everything a mouse collides with
 ## regardless of depth.
 const WORLD_BIT: int = 1
+
+## Both crews, as the bit mask `_known` stores. For the things everybody can see: a boulder is
+## rock you learn about by looking at it rather than by digging into it.
+const TEAM_BITS: int = 0b11
 
 const SIDES: Array[Vector2i] = [
 	Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)
@@ -76,6 +92,33 @@ const SIDES: Array[Vector2i] = [
 ## patch -- so the thing that is supposed to announce "a way out is HERE" stops saying where.
 @export var shaft_exclusion_cells: int = 1
 
+@export_group("Rock")
+## Per-plane rock obstructions (GDD section 3). Solid seams scattered through the earth that stop
+## horizontal digging, with A DIFFERENT LAYOUT ON EVERY PLANE -- which is the whole idea. Rock in
+## one place on every layer would be a flat maze repeated three times; rock that moves as you go
+## down makes getting past an obstruction a question of which LAYER to go around it on, and turns
+## map knowledge into four floors of map knowledge rather than one.
+##
+## A rock cell is not a new kind of thing. It is earth that can never be dug, so it is drawn by
+## the same wall the surrounding earth is (in stone, so you can see what stopped you), collides as
+## the same wall, and is invisible until somebody digs up against it -- which is exactly right for
+## a game about hidden information: you learn where the rock is by paying for the knowledge.
+@export var rock_seed: int = 20260801
+## Fraction of plane 1 that is rock. Nothing on the surface: the lawn is not diggable in the first
+## place, and a "rock" up there is just a prop.
+@export_range(0.0, 0.5, 0.01) var rock_density: float = 0.09
+## Added per plane below the first. Deeper is rockier, which gives the shallow planes a reason to
+## exist once the deep ones are faster to cross -- and it is the same direction section 3 sends
+## dig TIMES, so the two dials push the same way instead of cancelling.
+@export_range(0.0, 0.2, 0.01) var rock_density_deeper: float = 0.035
+## Cells in one seam. Seams rather than single blocked cells, because one cell is a thing you step
+## around without noticing and a seam is a thing you have to make a decision about.
+@export var rock_seam_cells: Vector2i = Vector2i(3, 11)
+## Clear ground around every nest, in metres, so a crew can always get underground at home. A crew
+## whose only entrance was blocked by generation would read as the map being broken, and it would
+## happen identically every match because the layout is seeded.
+@export var rock_nest_clearance: float = 6.0
+
 @export_group("Bounds")
 ## Half-extent of diggable ground, in cells. Walls stop you WALKING off the arena; this is
 ## what stops you tunnelling off it. Without both, a tunnel runs out from under the map and
@@ -93,6 +136,19 @@ const SIDES: Array[Vector2i] = [
 @export var lid_color: Color = Color(0.24, 0.18, 0.13)
 ## The mouth of a shaft leading down. Near-black, because it is a hole.
 @export var shaft_down_color: Color = Color(0.05, 0.03, 0.02)
+## The face of a rock seam where a tunnel runs into one. Cool and pale against the warm earth --
+## the message is "this is not the same stuff, and it is not going to open", and it has to land
+## from across a corridor with no legend to read.
+@export var rock_color: Color = Color(0.60, 0.64, 0.70)
+## The same seam seen from ABOVE, once your crew has found it -- the sheet drawn against the lid
+## over a vein you have run into (GDD section 3).
+##
+## DARKER AND COOLER THAN THE FACE, deliberately, and the difference is the message. The face is
+## lit stone you are standing in front of; this is rock read THROUGH a layer of earth, and drawing
+## it in the same grey would say the ceiling had been cut away, which it has not. It only has to
+## survive the comparison with the dirt around it, which is warm -- so the hue does the work and
+## the brightness stays low enough not to pull the eye off the corridor you are digging.
+@export var rock_top_color: Color = Color(0.34, 0.38, 0.45)
 
 @export_group("Light rays")
 ## A shaft you can climb announces itself with the light falling out of it, not with a painted
@@ -142,12 +198,36 @@ var _cells: Array[Dictionary] = []
 ## what makes E unambiguous without a modifier -- there is only ever one shaft touching a
 ## cell, so there is only ever one direction to go.
 var _shafts: Array[Dictionary] = []
+## plane -> {cell: true}: earth that will never open. Laid once at startup, and then edited by
+## exactly one thing -- a boulder on the lawn adding its footprint to plane 1, and giving it back
+## when a Brute breaks it. That was the `[DECIDE]` in GDD section 4 about destructible rock, and
+## the answer turned out to be "the rock you can SEE, and only that".
+var _rock: Array[Dictionary] = []
+## plane -> {cell: team bits}: which crews have found out that a rock cell is there. Empty for a
+## cell nobody has run into, and hidden information until they do (GDD section 3).
+##
+## A BIT MASK RATHER THAN TWO DICTIONARIES, so a boulder -- which both crews can see from the
+## first second -- is one entry rather than the same cell recorded twice under different keys.
+var _known: Array[Dictionary] = []
+## plane -> {cell: true}: dug cells something is standing in the way of. Today that is a
+## barricade; a cave-in makes a cell stop existing, which is a different thing entirely.
+var _obstructed: Array[Dictionary] = []
 var _grids: Array[GridMap] = []
 var _walls: Array[MeshInstance3D] = []
+## The faces of the wall that turned out to be stone. Drawn separately from the earth walls only
+## so they can carry a different material -- geometrically they are the same quads.
+var _rock_faces: Array[MeshInstance3D] = []
+## The tops of the seams a crew has found, one flat sheet per plane, drawn against the underside of
+## that plane's lid. Rebuilt whole when knowledge changes, which is a few times a match.
+var _rock_caps: Array[MeshInstance3D] = []
+## Whose knowledge the caps are showing. -1 until somebody asks, because a network in a headless
+## audit has no player and should draw nothing.
+var _cap_team: int = -1
 var _bodies: Array[StaticBody3D] = []
 var _shapes: Array[CollisionShape3D] = []
 var _floor_materials: Array[StandardMaterial3D] = []
 var _wall_materials: Array[StandardMaterial3D] = []
+var _rock_materials: Array[StandardMaterial3D] = []
 ## One texel per cell, per plane: 255 where dug. Read by earth_cutaway.gdshader to punch the
 ## lid above that plane. Digging writes a texel instead of rebuilding anything.
 var _mask_images: Array[Image] = []
@@ -158,16 +238,32 @@ var _focus: int = 0
 var _graph: TunnelGraph
 
 
-func _ready() -> void:
-	add_to_group(NETWORK_GROUP)
+## The cell books, before anything is drawn.
+##
+## SEPARATE FROM `_ready`, and the reason is node order rather than tidiness. Godot readies a scene
+## depth-first, so everything under `Surface` -- including the boulders, which claim cells of
+## plane 1
+## the moment they exist -- runs before this node's `_ready` does. Left in there, the first boulder
+## indexed an empty array and the failure was an out-of-range error in a file that has nothing to do
+## with boulders. `_init` runs before any of it, and these are plain dictionaries with nothing to
+## build, so there is no reason for them to wait for a renderer.
+func _init() -> void:
 	for plane in range(PLANE_COUNT):
 		_cells.append({})
 		_shafts.append({})
+		_rock.append({})
+		_known.append({})
+		_obstructed.append({})
 
+
+func _ready() -> void:
+	add_to_group(NETWORK_GROUP)
+	for plane in range(PLANE_COUNT):
 		var floor_material := _make_material(floor_color)
 		var wall_material := _make_material(wall_color)
 		_floor_materials.append(floor_material)
 		_wall_materials.append(wall_material)
+		_rock_materials.append(_make_rock_material())
 
 		var mask := Image.create_empty(
 			MASK_HALF_CELLS * 2, MASK_HALF_CELLS * 2, false, Image.FORMAT_R8
@@ -188,7 +284,7 @@ func _ready() -> void:
 		grid.cell_center_y = false
 		grid.cell_center_z = false
 		grid.mesh_library = TunnelChunks.build(
-			floor_material, _make_material(shaft_down_color)
+			floor_material, _make_material(shaft_down_color, false)
 		)
 		grid.position = Vector3(0.0, plane_y(plane), 0.0)
 		add_child(grid)
@@ -199,6 +295,23 @@ func _ready() -> void:
 		wall.position = Vector3(0.0, plane_y(plane), 0.0)
 		add_child(wall)
 		_walls.append(wall)
+
+		var stone := MeshInstance3D.new()
+		stone.name = "Rock%d" % plane
+		stone.position = Vector3(0.0, plane_y(plane), 0.0)
+		add_child(stone)
+		_rock_faces.append(stone)
+
+		# The vein seen from ABOVE, for the cells this crew has found. Sits just under the lid it
+		# is drawn against rather than at the floor, because what it represents is a body of rock
+		# filling the earth from one to the other -- and because at this camera angle a mark on the
+		# floor of a plane you cannot see into is a mark on nothing.
+		var cap := MeshInstance3D.new()
+		cap.name = "RockTop%d" % plane
+		cap.position = Vector3(0.0, plane_y(plane), 0.0)
+		cap.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(cap)
+		_rock_caps.append(cap)
 
 		var lamps := Node3D.new()
 		lamps.name = "Lamps%d" % plane
@@ -224,6 +337,8 @@ func _ready() -> void:
 		_shapes.append(shape)
 
 		_build_lid(plane)
+
+	_generate_rock()
 
 	# Built last, so it subscribes to a network whose planes all exist. It keeps itself current
 	# from here on -- nothing else has to remember to tell it about a dig.
@@ -280,6 +395,254 @@ static func plane_bit(plane: int) -> int:
 ## Set a body to collide with the world and with exactly one tunnel layer.
 func apply_plane_collision(body: CollisionObject3D, plane: int) -> void:
 	body.collision_mask = WORLD_BIT | plane_bit(clampi(plane, 0, PLANE_COUNT - 1))
+
+
+# ------------------------------------------------------------------------- rock
+
+
+## Lay the seams. Once, at startup, per plane, from a seed.
+##
+## SEEDED AND PER-PLANE, which are the two things that matter. Seeded, because a map you cannot
+## replay is a map you cannot learn (GDD section 8 wants layouts to be a recipe plus a seed), and
+## because a bug that only happens on one layout is a bug you can only reproduce by luck. Per
+## plane, because rock in the same place on every layer is a flat maze drawn three times -- the
+## point of section 3's obstructions is that going AROUND one may mean going down.
+func _generate_rock() -> void:
+	if rock_density <= 0.0:
+		return
+
+	for plane in range(1, PLANE_COUNT):
+		var rng := RandomNumberGenerator.new()
+		# A different stream per plane, derived from one dial. Sharing the generator across planes
+		# would work too, but then changing plane 1's density would silently relayout planes 2 and
+		# 3 as well, and every screenshot of the deep layers would stop being comparable.
+		rng.seed = rock_seed + plane * 7919
+
+		var span := half_extent_cells
+		var area := float((span * 2 + 1) * (span * 2 + 1))
+		var wanted := int(area * (rock_density + rock_density_deeper * float(plane - 1)))
+		var placed := 0
+		var attempts := 0
+		while placed < wanted and attempts < wanted:
+			attempts += 1
+			var start := Vector2i(rng.randi_range(-span, span), rng.randi_range(-span, span))
+			if not _rock_allowed(plane, start):
+				continue
+			placed += _grow_seam(plane, start, rng)
+
+
+## A seam, grown as a random walk rather than as a disc. A disc is a circle, and a circle in the
+## ground is the one shape that reads as placed by a level designer; a walk wanders, doubles back
+## on itself and leaves the ragged edge a mineral seam actually has.
+func _grow_seam(plane: int, start: Vector2i, rng: RandomNumberGenerator) -> int:
+	var length := rng.randi_range(rock_seam_cells.x, maxi(rock_seam_cells.x, rock_seam_cells.y))
+	var at := start
+	var laid := 0
+	for i in range(length):
+		if _rock_allowed(plane, at):
+			_rock[plane][at] = true
+			laid += 1
+		at += SIDES[rng.randi_range(0, SIDES.size() - 1)]
+		if not in_bounds(at):
+			break
+	return laid
+
+
+## Whether generation may put rock in this cell.
+##
+## The nest clearance is the load-bearing one. A crew whose ground is rock to the horizon cannot
+## get underground at home, and because the layout is seeded that would happen in exactly the same
+## place every single match -- which reads as the map being broken rather than as a hard start.
+func _rock_allowed(plane: int, cell: Vector2i) -> bool:
+	if not in_bounds(cell) or _rock[plane].has(cell):
+		return false
+	var here := Vector2(float(cell.x) * CELL, float(cell.y) * CELL)
+	if is_inside_tree() and Nest.blocks(get_tree(), here, rock_nest_clearance):
+		return false
+	return true
+
+
+## Earth that will never open, however long you hold the button.
+func is_rock(plane: int, cell: Vector2i) -> bool:
+	return plane >= 0 and plane < PLANE_COUNT and _rock[plane].has(cell)
+
+
+## Every rock cell on a plane. For the audits, and for anything that wants to draw the layout.
+func rock_cells(plane: int) -> Array:
+	return _rock[clampi(plane, 0, PLANE_COUNT - 1)].keys()
+
+
+## Rock that was not there when the map was laid: the cells under a boulder on the lawn.
+##
+## THE SAME EARTH-THAT-NEVER-OPENS, deliberately, rather than a second kind of obstruction with its
+## own queries. Digging, shafts, the wall mesh and the routing graph all already refuse rock in the
+## right places, and a boulder that used a parallel mechanism would have to be taught to each of
+## them separately -- which is four chances to miss one.
+##
+## `known` is what makes a boulder feel completely different from a seam despite being the same
+## thing underneath. A seam is hidden until somebody pays to find it; a boulder is sitting on the
+## lawn in front of you, so the crew that can see it already knows what is under it, and pretending
+## otherwise would be a puzzle about the camera rather than about the map.
+func add_rock(plane: int, cell: Vector2i, known: bool = false) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT or not in_bounds(cell):
+		return false
+	# Never over a tunnel somebody already dug. Rock arriving on top of an open corridor would make
+	# a cell that is dug AND impassable, which is a state nothing else here handles: the floor is
+	# drawn, the graph routes through it, and the dig refuses to reopen it.
+	if _cells[plane].has(cell) or _rock[plane].has(cell):
+		return false
+	_rock[plane][cell] = true
+	if known:
+		_known[plane][cell] = TEAM_BITS
+		_announce_rock(plane, TEAM_BITS)
+	return true
+
+
+## And rock that stops being rock: a boulder broken up, the earth under it ordinary again.
+func remove_rock(plane: int, cell: Vector2i) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT or not _rock[plane].has(cell):
+		return false
+	_rock[plane].erase(cell)
+	_known[plane].erase(cell)
+	# The face of the seam was drawn in stone by whichever corridors had run up against it, and it
+	# is ordinary earth now. Cheap, and only ever on a Brute's last swing.
+	_rebuild_walls(plane)
+	_announce_rock(plane, TEAM_BITS)
+	return true
+
+
+# ------------------------------------------------------------------------- what a crew knows
+
+
+## Learn where a vein goes, by running into it.
+##
+## THE WHOLE CONNECTED VEIN, not the one cell you hit. A seam is grown as a random walk and reads as
+## a single object -- the thing you have actually learned when your Engineer's shovel rings off it
+## is "this seam is here", and drip-feeding it a tile at a time would mean chipping along a wall to
+## map something you can already see the shape of. The cell is the price; the vein is the knowledge.
+##
+## PER CREW, which is the part that makes it worth storing at all. Rock is hidden information (GDD
+## section 3) and the crew that spent the digs is the crew that gets to route around it. This is the
+## first per-team knowledge in the game and it is deliberately the small one -- M5 has to do the
+## same trick for tunnels and for sightings, and doing it once on something static is how the shape
+## gets found before it matters.
+func reveal_vein(plane: int, cell: Vector2i, team: int) -> int:
+	if plane <= 0 or plane >= PLANE_COUNT or not _rock[plane].has(cell):
+		return 0
+	var bit := 1 << clampi(team, 0, 1)
+	if int(_known[plane].get(cell, 0)) & bit != 0:
+		return 0
+
+	# Flood fill over shared faces only, which is the same connectivity the walls and the routing
+	# graph use. Eight-way would join two seams that touch at a corner -- and a corner is exactly
+	# the place a mouse cannot get through, so they are not one vein to anybody who has to dig.
+	var found := 0
+	var queue: Array[Vector2i] = [cell]
+	var seen := {cell: true}
+	while not queue.is_empty():
+		var at: Vector2i = queue.pop_back()
+		if int(_known[plane].get(at, 0)) & bit == 0:
+			_known[plane][at] = int(_known[plane].get(at, 0)) | bit
+			found += 1
+		for side: Vector2i in SIDES:
+			var beside := at + side
+			if seen.has(beside) or not _rock[plane].has(beside):
+				continue
+			seen[beside] = true
+			queue.append(beside)
+
+	if found > 0:
+		_announce_rock(plane, bit)
+	return found
+
+
+## Somebody's picture of a plane changed. Redraws the caps if it was the crew being drawn for, and
+## tells everything else once.
+##
+## The rebuild is HERE rather than on a connection to this file's own signal, because a listener
+## that has to be wired up in `_ready` is a listener somebody can delete and not notice: the caps
+## would simply stop updating, which looks exactly like the reveal not working.
+func _announce_rock(plane: int, teams: int) -> void:
+	if _cap_team >= 0 and teams & (1 << _cap_team) != 0:
+		_rebuild_rock_caps(plane)
+	rock_revealed.emit(plane, teams)
+
+
+func is_rock_known(plane: int, cell: Vector2i, team: int) -> bool:
+	if plane < 0 or plane >= PLANE_COUNT:
+		return false
+	return int(_known[plane].get(cell, 0)) & (1 << clampi(team, 0, 1)) != 0
+
+
+## Every rock cell on a plane that `team` has found. For the cap mesh and the minimap -- the two
+## things that draw what a crew knows.
+func known_rock_cells(plane: int, team: int) -> Array[Vector2i]:
+	var found: Array[Vector2i] = []
+	if plane < 0 or plane >= PLANE_COUNT:
+		return found
+	var bit := 1 << clampi(team, 0, 1)
+	for cell: Vector2i in _known[plane]:
+		if int(_known[plane][cell]) & bit != 0:
+			found.append(cell)
+	return found
+
+
+# ------------------------------------------------------------------------- paving
+
+
+## Is this cell under paving -- a patio, a path, flagstones (GDD section 3)?
+##
+## THE SECOND KIND OF OBSTRUCTION, and it is nothing like the first. Rock is a property of one
+## cell on one plane and stops you digging SIDEWAYS; paving is a property of the ground above and
+## stops you only from breaking through it. So this takes no plane: the earth under a slab is
+## ordinary earth on every layer, and the one thing the answer is ever used for is refusing a
+## shaft that would touch the surface.
+##
+## Asked of the map rather than baked into a set here. The footprints are authored nodes, they
+## never move during a match, and the question is asked a few times a second at most -- caching
+## it would buy nothing and would go stale the first time a map animated a garage door.
+func is_sealed(cell: Vector2i) -> bool:
+	if not is_inside_tree():
+		return false
+	# Half a cell of margin, because a mouth is a cell wide and not a point: a shaft whose centre
+	# just clears the slab still opens a hole through its edge.
+	return NoSurfaceZone.seals(
+		get_tree(), Vector2(float(cell.x) * CELL, float(cell.y) * CELL), CELL * 0.5
+	)
+
+
+# ------------------------------------------------------------------------- obstruction
+
+
+## Something is standing in this cell that a mouse cannot get past (a barricade).
+##
+## THE CELL IS STILL DUG, and that distinction is the whole reason this is not `collapse`. The
+## floor, the walls, the lamps and the cutaway mask are all still correct and none of them is
+## rebuilt; the only thing that changes is that nothing may plan a route through here. Making a
+## barricade collapse the cell instead would have rebuilt a plane's geometry every time one went
+## up, and would have made putting one down indistinguishable from digging a fresh corridor.
+func block_cell(plane: int, cell: Vector2i) -> bool:
+	if not is_dug(plane, cell) or _obstructed[plane].has(cell):
+		return false
+	_obstructed[plane][cell] = true
+	cell_blocked.emit(plane, cell)
+	return true
+
+
+func unblock_cell(plane: int, cell: Vector2i) -> bool:
+	if plane < 0 or plane >= PLANE_COUNT or not _obstructed[plane].has(cell):
+		return false
+	_obstructed[plane].erase(cell)
+	# Only announced if the cell is still there to walk through. A barricade whose floor was caved
+	# in from under it un-blocks on the way out, and re-adding that cell to the routing graph
+	# would put back a point `collapse` had just correctly removed.
+	if is_dug(plane, cell):
+		cell_unblocked.emit(plane, cell)
+	return true
+
+
+func is_blocked(plane: int, cell: Vector2i) -> bool:
+	return plane >= 0 and plane < PLANE_COUNT and _obstructed[plane].has(cell)
 
 
 # ------------------------------------------------------------------------- queries
@@ -351,6 +714,12 @@ func dig(plane: int, cell: Vector2i) -> bool:
 	if plane <= 0 or plane >= PLANE_COUNT or _cells[plane].has(cell):
 		return false
 	if not in_bounds(cell):
+		return false
+	# Rock (GDD section 3). Said out loud, because a tile that refuses to open with no explanation
+	# is indistinguishable from a dig control that has stopped working -- which is the exact
+	# lesson the entrance key taught this file once already.
+	if _rock[plane].has(cell):
+		dig_refused.emit("solid rock -- go round it, or go under it")
 		return false
 	_cells[plane][cell] = true
 	_mark_mask(plane, cell, true)
@@ -433,6 +802,19 @@ func dig_shaft_up(plane: int, cell: Vector2i) -> bool:
 	if plane <= 0:
 		dig_refused.emit("nothing above to break into")
 		return false
+	# Rock overhead gets its own refusal. Left to the `dig` below it would come back as "no floor
+	# to sink a shaft from", which is true and useless -- the player would go looking for somewhere
+	# to stand rather than somewhere the ceiling is soft.
+	if is_rock(plane - 1, cell):
+		dig_refused.emit("rock overhead -- nothing to break into")
+		return false
+	# Paving overhead (GDD section 3) gets its own voice for the same reason rock does, and for a
+	# sharper one: this refusal is the mechanic. Coming up under a patio has to say "not HERE,
+	# keep going" -- a player who reads it as "the key is broken" learns nothing about the map,
+	# and the whole value of a no-surface zone is that you know where the enemy has to appear.
+	if plane == 1 and is_sealed(cell):
+		dig_refused.emit("paving overhead -- keep going until you're clear of it")
+		return false
 	# The cell above has to be floor to arrive on, unless it is the surface, which is
 	# everywhere. Opened first so the shaft below has somewhere to land.
 	dig(plane - 1, cell)
@@ -445,12 +827,24 @@ func _shaft_refusal(plane: int, cell: Vector2i) -> String:
 		return "nothing below to break into"
 	if not in_bounds(cell):
 		return "outside the arena"
+	# NO-SURFACE ZONES (GDD section 3), and plane 0 is the only place the rule can bite: a shaft
+	# recorded at plane 0 is a mouth on the lawn, whichever end it was cut from. Everything deeper
+	# passes straight through here, because tunnelling under a patio -- along it, and further down
+	# beneath it -- is exactly what the rule leaves you.
+	if plane == 0 and is_sealed(cell):
+		return "paved over -- there's no digging through the patio"
 	# Plane 0 is the surface: standing anywhere on it is standing on solid ground, so an
 	# entrance needs no floor cut first. Below that you have to be in a tunnel.
 	if plane > 0 and not _cells[plane].has(cell):
 		return "no floor to sink a shaft from"
 	if _shafts[plane].has(cell):
 		return "a shaft is already here"
+	# A shaft is only worth sinking if there is somewhere to arrive. Checked HERE rather than being
+	# left to the `dig` below, because that call opens the landing before the shaft is recorded --
+	# so rock underneath would give you a shaft into solid ground and trip the audit's SHAFT_ENDS
+	# rather than a refusal you can act on.
+	if _rock[plane + 1].has(cell):
+		return "rock below -- nothing to sink into"
 
 	# THE NO-STACKING RULE. A cell with a shaft above it and a shaft below it would give E
 	# two destinations and no way to choose between them without a second key. Forbidding it
@@ -511,6 +905,8 @@ func set_focus_plane(plane: int) -> void:
 		var focused := index == _focus
 		_grids[index].visible = focused
 		_walls[index].visible = focused
+		_rock_faces[index].visible = focused
+		_rock_caps[index].visible = focused
 		_lamp_roots[index].visible = focused
 		# Only the lid you are looking down through. The others would each hide the one below.
 		if _lids[index] != null:
@@ -560,6 +956,8 @@ func _build_lid(plane: int) -> void:
 	material.set_shader_parameter("cell_size", CELL)
 	material.set_shader_parameter("mask_half_cells", float(MASK_HALF_CELLS))
 	material.set_shader_parameter("albedo_color", lid_color)
+	material.set_shader_parameter("dirt", DirtTexture.shared())
+	material.set_shader_parameter("dirt_tile", DirtTexture.WORLD_TILE)
 
 	var quad := PlaneMesh.new()
 	quad.size = Vector2.ONE * float(MASK_HALF_CELLS * 2) * CELL
@@ -730,13 +1128,104 @@ func _ray_material() -> StandardMaterial3D:
 
 ## Always opaque. Focus is carried by visibility and brightness, so nothing here ever needs
 ## the transparent pass -- see set_focus_plane for why that matters.
-func _make_material(colour: Color) -> StandardMaterial3D:
+##
+## GRAIN BY DEFAULT. Flat colour at this camera distance reads as card, not as earth: nothing
+## says how big a cell is and the mouse looks like it is standing on a colour. The dirt speckle
+## is world-mapped and shared with the lawn and the lids, so a trench floor is visibly the same
+## material as the ground it is cut into. The one thing that opts out is the shaft marker, which
+## is a hole rather than a surface -- texturing it would say there is floor down there.
+func _make_material(colour: Color, grain: bool = true) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.albedo_color = colour
 	material.roughness = 0.95
 	material.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	if grain:
+		DirtTexture.apply_to(material)
 	return material
+
+
+## The face of a rock seam. Cool, pale, and FAINTLY SELF-LIT.
+##
+## The self-lighting is the load-bearing part and it took a screenshot to find out. Everything
+## down here is lit by warm lamps, so a plain grey albedo comes back off the wall as brown -- the
+## seam ended up the same colour as the earth beside it and the one thing it has to say ("this is
+## not going to open") was said in the one channel the lighting had already claimed. A little
+## emission holds the hue against the lamp, which is also how actual stone reads next to soil: it
+## doesn't take the colour of the light the way loose earth does.
+func _make_rock_material() -> StandardMaterial3D:
+	var material := _make_material(rock_color)
+	material.emission_enabled = true
+	material.emission = rock_color
+	material.emission_energy_multiplier = 0.22
+	return material
+
+
+## The top of a seam your crew has found. Unshaded, and that is the whole trick.
+##
+## It is drawn a centimetre under a lid that is itself lit by nothing much, so a shaded sheet came
+## back almost black and the vein you had paid a dig to learn about was invisible. Unshaded means
+## the colour on screen is the colour in the export, which is what you want from something that is
+## really a piece of KNOWLEDGE laid over the world rather than a surface in it -- the same argument
+## the dig cursor makes for ignoring depth.
+func _make_rock_top_material() -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = rock_top_color
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+	DirtTexture.apply_to(material)
+	return material
+
+
+## Draw the veins `team` has found, on every plane. Called by whatever knows who is looking.
+##
+## THE VIEWER IS TOLD TO THE NETWORK RATHER THAN LOOKED UP BY IT, because a network that went
+## hunting for "the player" would be a rendering object reaching into the match to find out whose
+## side it is on -- and at M7 there is no single answer to that question on a server. One caller,
+## one line, and the day this is per-client it is the caller that changes.
+func show_known_rock(team: int) -> void:
+	if team == _cap_team:
+		return
+	_cap_team = team
+	for plane in range(PLANE_COUNT):
+		_rebuild_rock_caps(plane)
+
+
+## One flat sheet per plane, over the cells this crew knows about.
+##
+## Quads rather than a GridMap or one mesh per cell: a vein is a few dozen cells, the sheet is
+## rebuilt a handful of times a match, and a single mesh means the whole thing is one draw call and
+## one material to hide when you leave the plane.
+func _rebuild_rock_caps(plane: int) -> void:
+	if plane < 0 or plane >= _rock_caps.size():
+		return
+	var cap := _rock_caps[plane]
+	if _cap_team < 0 or plane <= 0:
+		cap.mesh = null
+		return
+
+	var known := known_rock_cells(plane, _cap_team)
+	if known.is_empty():
+		cap.mesh = null
+		return
+
+	# Just under the lid, so the sheet reads as the top of a body of rock rather than as a tile on
+	# the floor. The lid itself sits a hair BELOW the next plane's floor, so this has to clear it
+	# from underneath or the two fight along every cell boundary.
+	var top := _wall_top(plane) - 0.015
+	var half := CELL * 0.5
+	var t := SurfaceTool.new()
+	t.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for cell: Vector2i in known:
+		var centre := Vector3(cell.x * CELL, top, cell.y * CELL)
+		_quad(t,
+			centre + Vector3(-half, 0.0, half), centre + Vector3(half, 0.0, half),
+			centre + Vector3(half, 0.0, -half), centre + Vector3(-half, 0.0, -half))
+	t.generate_normals()
+	var mesh := t.commit()
+	mesh.surface_set_material(0, _make_rock_top_material())
+	cap.mesh = mesh
+	cap.visible = plane == _focus
 
 
 ## Rebuild everything derived from a plane's cell set: the wall mesh and the collision trimesh.
@@ -753,10 +1242,16 @@ func _rebuild_walls(plane: int) -> void:
 	var cells: Dictionary = _cells[plane]
 	var walls := SurfaceTool.new()
 	walls.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# A second surface for the faces that turn out to be stone. Same quads, same collision, drawn
+	# apart only so they can be a different material -- which is the entire user interface for
+	# rock: you dig into a seam, the corridor ends in grey, and nothing has to explain itself.
+	var stone := SurfaceTool.new()
+	stone.begin(Mesh.PRIMITIVE_TRIANGLES)
 
 	var collision := PackedVector3Array()
 	var half := CELL * 0.5
 	var faces := 0
+	var stone_faces := 0
 	var top := _wall_top(plane)
 	var barrier := _barrier_top(plane)
 
@@ -781,10 +1276,14 @@ func _rebuild_walls(plane: int) -> void:
 			# Drawn to the lid, collided to well above it. Two heights, two jobs -- and safe
 			# to differ now that each plane collides only with its own occupant.
 			var up := Vector3(0.0, top, 0.0)
-			_quad(walls, a, b, b + up, a + up)
+			if _rock[plane].has(cell + side):
+				_quad(stone, a, b, b + up, a + up)
+				stone_faces += 1
+			else:
+				_quad(walls, a, b, b + up, a + up)
+				faces += 1
 			_collide_quad(collision,
 				a, b, Vector3(b.x, barrier, b.z), Vector3(a.x, barrier, a.z))
-			faces += 1
 
 	var mesh: ArrayMesh = null
 	if faces > 0:
@@ -793,6 +1292,13 @@ func _rebuild_walls(plane: int) -> void:
 		mesh.surface_set_material(0, _wall_materials[plane])
 
 	_walls[plane].mesh = mesh
+
+	var stone_mesh: ArrayMesh = null
+	if stone_faces > 0:
+		stone.generate_normals()
+		stone_mesh = stone.commit()
+		stone_mesh.surface_set_material(0, _rock_materials[plane])
+	_rock_faces[plane].mesh = stone_mesh
 
 	var body_shape: ConcavePolygonShape3D = null
 	if not collision.is_empty():

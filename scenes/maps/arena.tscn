@@ -1,4 +1,4 @@
-[gd_scene load_steps=36 format=3]
+[gd_scene load_steps=37 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="Script" path="res://scripts/game/nest.gd" id="14_nest"]
@@ -13,6 +13,9 @@
 [ext_resource type="Script" path="res://scripts/classes/class_swap.gd" id="23_swap"]
 [ext_resource type="Script" path="res://scripts/classes/cave_in.gd" id="24_cavein"]
 [ext_resource type="Script" path="res://scripts/ui/class_bar.gd" id="25_classbar"]
+[ext_resource type="Script" path="res://scripts/classes/barricade.gd" id="26_barricade"]
+[ext_resource type="Script" path="res://scripts/maps/no_surface_zone.gd" id="27_patio"]
+[ext_resource type="Script" path="res://scripts/maps/boulder_field.gd" id="28_boulders"]
 [ext_resource type="Script" path="res://scripts/camera/camera_rig.gd" id="2_rig"]
 [ext_resource type="Script" path="res://scripts/tunnels/tunnel_network.gd" id="3_network"]
 [ext_resource type="Script" path="res://scripts/tunnels/dig_controller.gd" id="4_dig"]
@@ -148,11 +151,20 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -40.0, 1.25, 0)
 size = Vector3(1, 2.5, 80)
 material = SubResource("Mat_wall")
 
-[node name="Rocks" type="Node3D" parent="Surface"]
+[node name="Rocks" type="Node3D" parent="Surface" groups=["surface_clutter"]]
 script = ExtResource("8_rocks")
 
-[node name="Grass" type="Node3D" parent="Surface"]
+[node name="Grass" type="Node3D" parent="Surface" groups=["surface_clutter"]]
 script = ExtResource("12_grass")
+
+[node name="Boulders" type="Node3D" parent="Surface" groups=["nav_source", "surface_clutter"]]
+script = ExtResource("28_boulders")
+network_path = NodePath("../../Tunnels")
+
+[node name="Patio" type="Node3D" parent="Surface" groups=["surface_clutter"]]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -7)
+script = ExtResource("27_patio")
+extents = Vector2(10, 5)
 
 [node name="PropA" type="MeshInstance3D" parent="Surface" groups=["nav_source"]]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 11, 0.7, -9)
@@ -254,6 +266,11 @@ director_path = NodePath("../MatchDirector")
 
 [node name="CaveIn" type="Node" parent="."]
 script = ExtResource("24_cavein")
+player_path = NodePath("../Player")
+network_path = NodePath("../Tunnels")
+
+[node name="Barricade" type="Node" parent="."]
+script = ExtResource("26_barricade")
 player_path = NodePath("../Player")
 network_path = NodePath("../Tunnels")
 

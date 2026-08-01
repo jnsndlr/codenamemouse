@@ -46,6 +46,12 @@ func _init(network: TunnelNetwork) -> void:
 	network.cell_opened.connect(_on_cell_opened)
 	network.shaft_opened.connect(_on_shaft_opened)
 	network.cell_collapsed.connect(_on_cell_collapsed)
+	# A barricade takes the cell out of the graph and putting it back is the same operation as
+	# digging it: add the point, join its neighbours. That reuse is deliberate -- a second
+	# "restore" path would be a second place for the joining rules to be got wrong, and the way
+	# you would find out is a bot refusing to walk down a corridor that is visibly clear.
+	network.cell_blocked.connect(_on_cell_collapsed)
+	network.cell_unblocked.connect(_on_cell_opened)
 	# Whatever already exists. Nothing does at startup today, but a map that ships with a dug
 	# network -- an authored burrow under the patio, say -- would otherwise be invisible to every
 	# bot in the match, and that is a bug you would hunt for in the AI.

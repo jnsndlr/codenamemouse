@@ -1,3 +1,4 @@
+class_name NavSurface
 extends NavigationRegion3D
 ## The walkable surface, baked at startup so bots can cross the yard.
 ##
@@ -19,6 +20,10 @@ extends NavigationRegion3D
 ## Nodes to include. Tagged in the scene rather than listed here, so adding a prop to the arena
 ## doesn't mean editing a script to make bots aware of it.
 const SOURCE_GROUP: StringName = &"nav_source"
+## So anything that changes the shape of the lawn can find the region without a NodePath to it.
+## Nothing did until boulders became breakable; a rock that a Brute has removed has to stop being
+## in the way for bots too, or the AI is visibly walking around thin air.
+const REGION_GROUP: StringName = &"nav_region"
 
 ## Wider than the mouse's own 0.16 capsule, so a bot aims for gaps it actually fits through
 ## rather than clipping every corner.
@@ -40,6 +45,7 @@ const SOURCE_GROUP: StringName = &"nav_source"
 
 
 func _ready() -> void:
+	add_to_group(REGION_GROUP)
 	var mesh := NavigationMesh.new()
 	# Must match the navigation map's own cell size or the region is rejected wholesale, with a
 	# server error and a navmesh that silently never appears.
@@ -79,3 +85,20 @@ func _ready() -> void:
 	# Threaded, the bots spend their first second with no map at all.
 	bake_navigation_mesh(false)
 	print("navmesh: %d polygons over the surface" % navigation_mesh.get_polygon_count())
+
+
+## The lawn changed shape: something that was in the way is not any more.
+##
+## THREADED, unlike the bake above, and the difference is what each one is racing. The startup bake
+## has to finish before the first physics frame or bots begin the match with no map; this one is
+## catching up with a rock that a Brute has already removed, so a fraction of a second of bots
+## routing around empty ground costs nothing, and the read-back this does off the GPU is a visible
+## hitch if it happens on the main thread mid-match.
+##
+## The engine's own warning about mesh read-back (see above) applies here with more force, which is
+## the argument for keeping the things that can change this way RARE. A boulder is twenty Brute
+## swings; if something cheaper ever reshapes the lawn, this wants to become a debounce.
+func rebake() -> void:
+	if is_baking():
+		return
+	bake_navigation_mesh(true)

@@ -416,6 +416,35 @@ func _resolve_swing() -> void:
 			continue
 		other.take_hit(attack_damage, global_position, attack_knockback, self)
 
+	_resolve_swing_on_breakables(forward, limit)
+
+
+## The same cone, against the things in the way rather than the people.
+##
+## A SEPARATE PASS, and separate on purpose. A barricade is not a Mouse and should not have to
+## pretend to be one to be hittable -- it has no health bar, no team, no knockback and no scruff,
+## and the one question it answers is "was that a Brute". Widening `take_hit` to cover both would
+## have made every one of those a null check.
+##
+## ONE PASS FOR EVERY BREAKABLE THING, though. This was written against barricades specifically,
+## and boulders on the lawn would have meant a second copy of it -- at which point every new
+## destructible thing costs an edit to this file, and the edit most likely to be forgotten is the
+## one that makes it hittable at all. Anything in `Breakable.GROUP` is now in the cone.
+func _resolve_swing_on_breakables(forward: Vector3, limit: float) -> void:
+	for node in get_tree().get_nodes_in_group(Breakable.GROUP):
+		var thing := node as Breakable
+		if thing == null or thing.plane != _plane:
+			continue
+		var to_it := thing.global_position - global_position
+		to_it.y = 0.0
+		# A shade more generous than against a mouse: the rock fills its cell, so its centre is
+		# further away than its face, and a swing that visibly connects should count.
+		if to_it.length() > attack_reach + 0.5:
+			continue
+		if to_it.length_squared() > 0.0001 and forward.angle_to(to_it.normalized()) > limit:
+			continue
+		thing.hit_by(self)
+
 
 # -------------------------------------------------------------------------------- the tick
 
@@ -472,11 +501,13 @@ func _tick_timers(delta: float) -> void:
 ## code saying so.
 func move_speed() -> float:
 	var top := speed * _tier_multiplier()
-	# Size matters underground (GDD section 3). Tunnels are the Sneak's highway and very nearly a
-	# wall for the Brute, who is a cork -- and the whole reason that reads as a mechanic rather
-	# than as lag is that it applies only below the surface, where you can see the walls go past.
+	# Underground speed, and it is a BONUS OR NOTHING. GDD section 3 used to scale this inversely
+	# with size, which made a Brute in its own tunnel slower than everyone else on the lawn above
+	# it -- not a cork, just a class quietly locked out of a third of the map. The floor at 1.0 is
+	# deliberately in code rather than only in the resources: a penalty here is a design decision
+	# that has already been reversed once, and a stale .tres should not be able to make it again.
 	if _plane > 0:
-		top *= MouseClass.definition_of(mouse_class).tunnel_speed
+		top *= maxf(1.0, MouseClass.definition_of(mouse_class).tunnel_speed)
 	if is_carrying():
 		top *= 1.0 - carry_penalty
 	if _swing_left > 0.0:

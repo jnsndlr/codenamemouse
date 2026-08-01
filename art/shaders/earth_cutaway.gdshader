@@ -31,6 +31,13 @@ uniform float cell_size = 1.0;
 uniform float mask_half_cells = 64.0;
 
 uniform vec3 albedo_color : source_color = vec3(0.26, 0.19, 0.14);
+// The same grain every other earth surface uses (scripts/rendering/dirt_texture.gd), mapped in
+// WORLD space so the lawn, the trench floor and the wall between them share one continuous
+// speckle rather than three that stop at each other's edges. Greyscale, so it multiplies the
+// tint above rather than replacing it. Left unset the shader draws flat colour, which is what
+// the audits get and what this looked like before.
+uniform sampler2D dirt : filter_nearest, repeat_enable, hint_default_white;
+uniform float dirt_tile = 4.0;
 uniform float surface_roughness : hint_range(0.0, 1.0) = 1.0;
 // Layers out of focus are pushed back with LIGHT, never with alpha. Alpha put the ground in
 // the transparent pass with depth-write off, which is what made the wall rims flicker as the
@@ -56,6 +63,6 @@ void fragment() {
 	if (cutting && (sample_mask(dug_here, xz) || (cut_above && sample_mask(dug_above, xz)))) {
 		discard;
 	}
-	ALBEDO = albedo_color * dim;
+	ALBEDO = albedo_color * dim * texture(dirt, xz / dirt_tile).rgb;
 	ROUGHNESS = surface_roughness;
 }

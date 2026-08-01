@@ -86,6 +86,21 @@ func _update_dig(delta: float) -> void:
 		_progress = 0.0
 
 	var held := Input.is_action_pressed("dig") and not _pointer_over_ui()
+
+	# ROCK GETS ITS OWN CURSOR (GDD section 3). A seam is refused by the network, so without this
+	# the cursor simply vanishes over it -- which is what "out of reach" and "not adjacent" and
+	# "already dug" all look like, and the player is left to guess which of the four they have hit.
+	# Pressing on it says so out loud, once per press, through the network's own refusal.
+	if _target == Vector2i.MAX:
+		var rock := _blocked_cell()
+		if rock != Vector2i.MAX:
+			if held and Input.is_action_just_pressed("dig"):
+				_network.dig(_plane, rock)
+				_learn_vein(rock)
+			_cursor.show_blocked(_network, _plane, rock)
+			_progress = 0.0
+			return
+
 	var digging := _target != Vector2i.MAX and held
 	if digging:
 		_progress += delta * _dig_rate() / maxf(dig_seconds, 0.01)
@@ -99,6 +114,27 @@ func _update_dig(delta: float) -> void:
 		_progress = 0.0
 
 	_cursor.show_at(_network, _plane, _target, _progress, _target != Vector2i.MAX and held)
+
+
+## Running into a seam teaches your crew where it goes (GDD section 3).
+##
+## HERE RATHER THAN IN `dig()`, because the network knows what the rock is and this knows who hit
+## it. Passing a team down into every dig and shaft call would put a parameter that only rock cares
+## about on four functions that mostly don't, and bots -- which never dig -- would have to supply it
+## anyway. The dig controller is already the one object that pairs a player with a cell.
+##
+## ON THE PRESS, not on the hover. The cursor already goes grey over rock you are pointing at, and
+## that is the right amount to give away for free: one cubic metre, while you look at it. Learning
+## the shape of the whole vein costs an action -- you swing at it and find out it rings.
+func _learn_vein(cell: Vector2i) -> void:
+	if _player == null:
+		return
+	# Asked of the node rather than typed, like `get_dig_speed` above it: this controller is pointed
+	# at a Node3D on purpose, so a map can drive it with something that is not a Mouse.
+	var side: Variant = _player.get("team")
+	if side == null:
+		return
+	_network.reveal_vein(_plane, cell, int(side))
 
 
 ## How fast whoever is driving opens a tile, as a multiplier on `dig_seconds`.
@@ -143,6 +179,33 @@ func _aimed_cell() -> Vector2i:
 	var aim: Vector3 = _player.call("get_aim_point")
 	var cell := _network.world_to_cell(aim)
 	if _network.is_dug(_plane, cell) or not _network.in_bounds(cell):
+		return Vector2i.MAX
+
+	var here := _network.world_to_cell(_player.global_position)
+	if Vector2(cell - here).length() > dig_reach:
+		return Vector2i.MAX
+
+	if _network.is_rock(_plane, cell):
+		return Vector2i.MAX
+
+	for side: Vector2i in TunnelNetwork.SIDES:
+		if _network.is_dug(_plane, cell + side):
+			return cell
+	return Vector2i.MAX
+
+
+## The cell under the cursor when it is rock you could otherwise have dug.
+##
+## Everything `_aimed_cell` asks except "is it soft", so the cursor only calls a seam out where the
+## alternative really was a dig. A grey box lighting up over rock across the arena would say the
+## seam mattered from there, and it doesn't -- you cannot reach it.
+func _blocked_cell() -> Vector2i:
+	if _plane <= 0 or not _player.has_method("get_aim_point"):
+		return Vector2i.MAX
+
+	var aim: Vector3 = _player.call("get_aim_point")
+	var cell := _network.world_to_cell(aim)
+	if not _network.is_rock(_plane, cell) or not _network.in_bounds(cell):
 		return Vector2i.MAX
 
 	var here := _network.world_to_cell(_player.global_position)

@@ -594,12 +594,16 @@ behind it.
 
 **Question:** is digging *fun*, not just legible?
 
-- Engineer class: dig, ramp, barricade
-- **Bots path through tunnels** via `AStar3D` over dug cells — this is now the milestone's
-  centre of gravity, since M3 already ships digging and the flag map together. Until bots
-  can follow, digging isn't a decision, it's an exploit.
+- ~~Engineer class: dig, ramp, barricade~~ **done** — dig speed, cave-in, barricade
+- ~~**Bots path through tunnels** via `AStar3D` over dug cells~~ **done** — this was the
+  milestone's centre of gravity, since M3 already ships digging and the flag map together.
+  Until bots can follow, digging isn't a decision, it's an exploit.
 - Dig controls pass (GDD §9 open question)
-- No-surface zones and per-plane rock obstructions
+- ~~per-plane rock obstructions~~ **done**, and ~~no-surface zones belong with the patio they are
+  a rule about, which makes them part of the Backyard BBQ layout~~ — **reversed, and they are done
+  too.** A zone is a footprint and a refusal; the patio is a thing you can see. Only the second
+  one is level design, and holding the first hostage to it meant the map would have arrived with
+  an untested rule bolted to it.
 
 **Done when:** you'd rather take the tunnel than the surface route — and the choice
 feels like a real decision rather than an obvious one.
@@ -617,9 +621,13 @@ what a class is. Swap point at your own nest, **C**, cycling.
   instead, and the Engineer's Pillar-4 exclusive moves to **un**-digging: caving in behind you,
   and barricades. That collides with the Brute's Collapse and the split is written up as a
   `[DECIDE]` in §4 rather than quietly resolved here.
-- **`tunnel_speed` is where the classes first feel different.** Size matters underground (§3),
-  and it applies *only* below the surface — which is what makes a slow Brute read as a cork in
-  a corridor rather than as lag on the lawn.
+- ~~**`tunnel_speed` is where the classes first feel different.**~~ **Reverted later in M4, and
+  the Brute is why.** The theory was that size should matter underground (§3) and that a slow
+  Brute would read as a cork rather than as lag, because it applied only below the surface. It
+  read as neither: at 0.35 a Brute crossing its own tunnel was slower than everyone else on the
+  lawn above it, which is a class quietly locked out of the game's signature system. Every class
+  is 1.0 now and the multiplier is floored at 1.0 in code. The cork survives as geometry — a
+  one-cell corridor plus body-blocking (§6) — which is where it always really lived.
 - **The swap rule is asked of the nest, not of a prop.** `Nest.contains` is already the capture
   disc and the respawn point; a hand-placed swap-point object would drift away from both, and a
   swap zone that isn't quite the capture zone is a bug you only find by playing. It also means
@@ -703,6 +711,205 @@ and per-plane obstructions are still to come.
 > answering "walk". The comparison starts choosing tunnels the day the map has something in the
 > way, which makes **laying out a real Backyard BBQ (GDD §8) a prerequisite for M4's own
 > question**, not a polish task for later.
+
+#### In progress — obstructions, the barricade, and earth you can see (landed)
+
+Three of M4's four bullets are done. What is left is the **dig-controls pass** — and the
+**Backyard BBQ layout**, which this plan promoted from polish to prerequisite below.
+
+**Per-plane rock obstructions (GDD §3).** Seeded seams, laid as random walks rather than discs so
+the edges are ragged, at 9% of plane 1 rising to 16% of plane 3. A rock cell is *not a new kind of
+thing* — it is earth that can never open, so it is drawn by the same wall, collides as the same
+wall, and is invisible until somebody digs up against it. That last part is the design: you learn
+where the rock is by paying for the knowledge.
+
+- **The refusal has a voice and a cursor.** The dig cursor goes grey and stops pulsing over a
+  seam, and pressing on it says why. Without that, "this is rock" looks identical to "out of
+  reach", "not adjacent" and "already dug" — the cursor simply vanishes for all four.
+- **Deeper is rockier, which is the same direction §3 already sends dig time.** Two dials pushing
+  the same way rather than cancelling: it is what keeps the shallow planes worth using once you
+  know the map.
+- **Nests keep a clear radius**, because a seeded layout that walls a crew in does it identically
+  every match, and that reads as the map being broken rather than as a hard start.
+- **The audits turn rock OFF by default**, set before the scene enters the tree because the seams
+  are laid in `_ready`. Every scenario digs at hand-picked coordinates; a seam across one of them
+  would fail a geometry invariant for a reason that is not about geometry — identically every run,
+  which is the most convincing kind of wrong answer. One new check turns it back on, and it is the
+  only check in the file that runs against a *generated* layout rather than a hand-built one.
+
+**The Engineer's Barricade.** `X`, aimed at the open cell beside you: a boulder, seeded off the
+cell so the same spot always grows the same rock. **No cheese** — ten seconds between placements,
+three standing at once, and **only a Brute can shift one**. The cheese price GDD §2 pencilled in
+is deferred rather than dropped, and the reasoning is in §4: the economy has no sinks until M6, so
+pricing against it now means tuning the ability twice.
+
+- **Three things have to agree, and two of them are silent when they don't.** The rock is
+  physical (a collider on its own plane's layer), it is *routed* (the cell leaves the `AStar3D`
+  graph), and it is removable (Brute swings only). The routing half is the one that would be easy
+  to forget and impossible to see: a bot pathing into a cell it cannot enter does not error, it
+  stands there grinding, which reads as broken AI rather than as the map having changed.
+- **Blocking is not collapsing**, and they are deliberately different operations. A barricade
+  leaves the cell dug — floor, walls, lamps and cutaway mask all unchanged and none of them
+  rebuilt. Folding it into `collapse` would have rebuilt a plane's geometry every time a boulder
+  moved, and made putting one down indistinguishable from digging a fresh corridor.
+- **It breaks into pieces of itself** (`rock_debris.gd`): the shell is cut into wedges by
+  bucketing its triangles around a handful of seed directions, and they scatter, land, settle and
+  fade over about a second. Grouping *consecutive* triangles was the obvious thing and was wrong —
+  the shell is generated ring by ring, so a run of triangles is a band that goes all the way round
+  and every shard came out a curl of orange peel. **The debris is its own node**, not an animation
+  the barricade plays before freeing itself, because the cell has to be walkable and out of the
+  blocked set on the swing that breaks it: a Brute who has just earned the corridor must not be
+  held up by a rock that is visibly in bits, and a bot re-planning mid-animation must not be told
+  a visibly clear route is shut. The rule and the picture have different lifetimes, so they are
+  different objects — and the audit asserts the cell is open *before* it advances a frame.
+- **The audit's first version of the class gate was vacuous, and caught itself.** "A Generalist
+  swinging at a barricade achieves nothing" was asserted by checking the rock was still standing —
+  which is true whether the swing was ignored, missed, or landed and left two hits to go. Deleting
+  the Brute check did not fail the test. It counts the hits now, and deleting the check fails two
+  assertions. Same lesson as the untyped-array bug below, from a different direction: a test that
+  cannot fail is worse than no test.
+
+**Earth you can see, and a lawn you can't see through.** Two look changes that are really one
+complaint — the trench read as a coloured card with the garden hovering in it.
+
+- **Every earth surface carries a dirt grain now** (`dirt_texture.gd`): a broad mottle, fine sand
+  and speckle, generated seamlessly by construction and mapped in *world* space, so the lawn, the
+  trench floor and the wall between them share one continuous speckle instead of three that stop
+  at each other's edges. Greyscale, so it multiplies each surface's own tint rather than replacing
+  it. Generated rather than imported because at this stage the grain size is a number you want to
+  change and press play; Godot's `NoiseTexture2D` was the obvious tool and is the wrong one, since
+  it generates on a thread and hands back an empty texture for the first few frames.
+- **The rocks and grass vanish the moment you are under them**, one layer sooner than the ground
+  they stand on. The ground has to stay — it is plane 1's lid. What sits on top of it does not: a
+  rock and a tuft of grass drawn over an open trench are a metre above the floor you are reading
+  and, at this camera angle, land on it. Dimming them to 20% was never going to fix that, because
+  the problem was not brightness.
+
+**And the cave-in shows where it lands** — the aimed cell in the dig cursor's own box, warm when
+the ability will fire and cold while it cools, so the cooldown lives in the world rather than only
+in a line of HUD text.
+
+> **It also outlined every cell in reach, for about an hour.** The argument was that "which ones
+> could I have picked" is worth answering alongside "which one am I on", and in a corridor it read
+> fine. In a chamber it is a bright frame around every tile on screen, and the grid it draws pulls
+> harder than the mouse standing in the middle of it. The box answers the question that matters, in
+> the one place you are already looking; the rest was noise dressed up as help.
+
+#### In progress — no-surface zones (landed)
+
+The second kind of obstruction (GDD §3), and the one the plan had filed under level design.
+`NoSurfaceZone` is an authored rectangle on the lawn; `TunnelNetwork.is_sealed` asks the map
+whether a cell is under one, and the only thing that ever acts on the answer is the shaft
+refusal at **plane 0**. Everything else — digging along under the paving, sinking from plane 1
+to plane 2 beneath it — passes straight through untouched, which is the difference between a
+no-surface zone and a wall.
+
+- **It is a rule, not a prop, and that is why it could be built before the map.** What the zone
+  owns is a footprint and a refusal. The paving it draws is a grey box; a modelled patio becomes
+  a child of it later and `show_paving` goes off. Waiting for the Backyard BBQ layout would have
+  meant the map arriving with an untested rule attached, and the rule is the part with edge cases.
+- **Plane 0 is the only place the check belongs.** A shaft is recorded once, at its upper plane,
+  whichever end it was cut from — so one test in `_shaft_refusal` covers pressing F on the patio
+  and pressing R underneath it, and there is no second copy to drift. The two get different words
+  anyway (`dig_shaft_up` says its own, the way rock overhead already does), because "you can't dig
+  through this" and "keep going until you're clear" are different pieces of advice.
+- **A mouth is a cell wide, so the seal is asked with half a cell of margin.** Without it a shaft
+  whose centre just clears the slab still takes a bite out of its edge, and the hole you are
+  refused and the hole you are allowed end up drawn a centimetre apart with nothing to tell them
+  apart. The audit's footprint is deliberately laid so its edges fall *between* cell centres, and
+  the two cells either side of the line are named rather than swept.
+- **The tell is above your head, and it is the one refusal in that slot.** The contextual hint is
+  otherwise a list of offers — `[E] climb up` — and this is "no way up". It belongs there anyway:
+  a committed crossing is only a decision if you know you are on one, and the information is the
+  moment it *clears*, because that is where you can surface.
+- **Nothing in the routing changed, and that is the check that it is designed right.** A rule that
+  can only stop a mouth from being created cannot invalidate a route, because the graph is built
+  from mouths that exist. Compare the barricade, which had to be physical, routed and removable in
+  three places at once.
+- **Both halves are asserted against each other.** A seal that refused everything would pass every
+  "was it refused?" line in the audit and be a slab of rock with better prose; a seal that refused
+  nothing would pass every "does it still work?" line. Verified by breaking it in both directions:
+  disabling the refusal fails six assertions, sealing the whole arena fails three here and
+  twenty-one elsewhere — the latter being the useful surprise, since it shows every entrance in the game now
+  goes through this test.
+- **The audits strip authored zones by type**, not by path, for the same reason they turn rock off:
+  fifteen scenarios sink shafts at hand-picked coordinates, and a patio authored across one of them
+  would fail a geometry invariant for a reason that is not about geometry. `_check_seal` places its
+  own where it wants it, so it cannot be broken by dragging the map's patio.
+- **A placeholder patio sits in the arena** at (0, −7), 20×10 metres, and the grass and rock
+  scatters now leave paving alone. It is a fixture, not a layout decision — one node to move or
+  delete when the real yard gets designed.
+
+> **The dig-controls pass is tabled, not done.** Point-and-hold works well enough to keep playing
+> with, and the map is still what will tell us whether it is the friction or the fun.
+
+#### In progress — veins you can see, and rock you can break (landed)
+
+Rock was legible at the moment it stopped you and invisible before and after. Two changes, and
+they are opposite halves of one idea: **a seam you have hit is remembered and drawn, and a boulder
+tells you what is under it before you dig at all.**
+
+- **Running into a seam reveals the whole connected vein, to your crew only.** Four-way flood fill,
+  matching the walls and the routing graph — an eight-way one would join two seams that touch at a
+  corner, and a corner is precisely where a mouse cannot get through. The cell you spent is the
+  price; the shape of the vein is what you bought.
+- **This is the game's first per-team knowledge, and that is why it was worth doing on rock.** Rock
+  never moves, so the shape of "what does this crew know" gets settled against something static
+  before M5 has to do it for tunnels and sightings, where the answer changes every second. It is
+  stored as a bit mask per cell rather than two dictionaries, so a boulder — which everybody can
+  see — is one entry and not the same cell recorded twice.
+- **Drawn as a sheet under the lid, in its own colour, unshaded.** The seam *face* is lit stone you
+  are standing in front of; the top is rock read through a layer of earth, so drawing them the same
+  grey would say the ceiling had been cut away. Unshaded because the sheet sits under a lid lit by
+  almost nothing and a shaded one came back black — it is a piece of knowledge laid over the world,
+  which is the same argument the dig cursor makes for ignoring depth.
+- **The network is TOLD who is looking rather than going to find out.** `depth_focus.gd` already
+  owns "what the local player can see of the layers"; a renderer that went hunting for "the player"
+  would be reaching into the match to ask whose side it is on, and at M7 that question has no
+  single answer on a server.
+- **Boulders are the counterweight, and they only block plane 1.** A seam charges you to find out
+  where it is; a boulder is lying in the open, so the way past it — go under — is knowledge the map
+  hands out for free. Blocking every plane would have made it a wall, and a wall you can see from
+  the lawn is just a smaller arena.
+- **A boulder is registered as ordinary rock, not as a second kind of obstruction.** Digging,
+  shafts, the wall mesh and the routing graph already refuse rock in all the right places; a
+  parallel mechanism would have had to be taught to each of them separately, which is four chances
+  to miss one. It also means the tunnel-side of a boulder needed no new code at all.
+- **Five swings per cell, and each cell is its own object.** A four-cell boulder is twenty swings
+  and opens a quarter at a time, so clearing one is a decision about how much you want rather than
+  a countdown. That fell out of giving `Breakable` the hit pool instead of the boulder — and the
+  branches and sticks that come later now arrive as objects rather than as rules.
+- **One swing pass for everything breakable.** There used to be a second pass written specifically
+  against barricades; boulders would have made a third, at which point every new destructible thing
+  costs an edit to `mouse.gd` and the edit most likely to be forgotten is the one that makes it
+  hittable at all.
+- **The navmesh rebakes when a boulder goes**, threaded, which `nav_surface.gd`'s own comment had
+  already asked for ("revisit if the map ever rebakes mid-match"). Leaving it stale is not neutral:
+  bots would keep walking around a rock a Brute spent twenty swings removing, which reads as the AI
+  refusing to use the thing you just made for it.
+
+> **The bug that cost the most was not a design question.** A `const GROUP` on `BarricadeRock`
+> shadowing the same name on its new base class made every *other* file that read
+> `BarricadeRock.GROUP` fail to parse, with "Could not resolve external class member" reported
+> against whichever file happened to touch it. It reads exactly like a cyclic-dependency error, and
+> an hour went into restructuring a dependency that was never the problem. Both files now say so.
+
+> **Node order bit too, and the fix is worth copying.** Godot readies depth-first, so everything
+> under `Surface` — including the boulders, which claim cells the moment they exist — runs before
+> the network's own `_ready`. The cell dictionaries moved to `_init`, where they cost nothing and
+> cannot be raced: they are plain dictionaries and had no reason to wait for a renderer.
+
+> **One bug found by reading, then pinned by a test.** The pieces a section throws off were
+> parented to the boulder, which frees itself once its last section is gone — so the final quarter
+> of every rock vanished instead of breaking, one time in four, in the only case that ends the
+> object. A check that stops after "break a section" never reaches it; the boulder check now breaks
+> a whole rock and asserts the debris outlives it.
+
+> **Both new checks were verified by breaking them.** A reveal that leaks to both crews fails four
+> assertions; one that reveals only the cell you hit fails three; a boulder that blocks nothing
+> underneath fails three per cell. The leak case is the one that matters — hidden information fails
+> silently and always in the direction of knowing too much, so every assertion has a mirror asking
+> what the *other* crew still must not know.
 
 > **The tunnel audit had been passing without testing anything.** `const STRIP: Array[String] =
 > [...] + STRIP_MATCH` yields an *untyped* array in GDScript; passed to a parameter declared
@@ -867,7 +1074,19 @@ entire server.
 clock, and bots that play the objective. Both audits pass (`tools/tunnel_audit.gd`,
 `tools/match_audit.gd`).
 
-Next is **M4 — digging in the game**, and its centre of gravity has already shifted, exactly as
-this plan predicted: M3 ships digging and the flag map together, so the question is no longer
-"can we integrate them" but **"can a bot follow you down there?"** Until it can, the tunnel is an
-exploit rather than a decision — the one residual cost M3 knowingly accepted.
+**M4 is most of the way through.** Classes, the cave-in, bots pathing through tunnels, per-plane
+rock, the barricade, no-surface zones, per-crew vein knowledge and breakable surface boulders have
+all landed; both audits pass, now with rock, barricade, paving, reveal and boulder invariants in
+them.
+
+**One thing is left, and one is deliberately parked.**
+
+1. **The Backyard BBQ layout (GDD §8).** This is a prerequisite for M4's own question rather than
+   polish for later, and both M3 and M4 arrived at it independently: no route under an
+   eighty-metre field of open dirt can beat the straight line over the top of it, so the planner
+   keeps correctly answering "walk", and "would you rather take the tunnel?" cannot be asked. Rock
+   makes the *underground* a routing problem; only the map can make the *surface* one — and the
+   no-surface rule the patio needs is now built and tested, waiting for a patio to be a rule about.
+2. **The dig-controls pass, tabled.** Point-and-hold is good enough to keep playing with, and the
+   map is still what will tell you whether it is the friction or the fun. Tuning it against an
+   empty yard would mean tuning it twice.

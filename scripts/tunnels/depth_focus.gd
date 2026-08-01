@@ -15,6 +15,11 @@ extends Node
 ## The cut is a RENDERING cut only. Collision is untouched, so the ground stays solid and you
 ## still enter a tunnel by choosing to, not by walking into a hole.
 
+## What sits ON the ground rather than being the ground: the rock scatter, the grass. Marked in
+## the scene rather than listed here, because "is this scenery or is this the world" is a
+## per-object question a map author answers and this file has no way to guess.
+const SURFACE_CLUTTER: StringName = &"surface_clutter"
+
 @export var network_path: NodePath
 @export var player_path: NodePath
 ## Everything that belongs to the world above: ground, walls, props, rocks.
@@ -41,6 +46,7 @@ extends Node
 var _network: TunnelNetwork
 var _player: Node3D
 var _surface: Node3D
+var _clutter: Array[Node3D] = []
 var _materials: Array[StandardMaterial3D] = []
 var _slab_material: ShaderMaterial
 var _environment: Environment
@@ -59,6 +65,10 @@ func _ready() -> void:
 		_surface_ambient = _environment.ambient_light_energy
 	_cut_the_ground()
 	_collect_surface_materials()
+	for node in get_tree().get_nodes_in_group(SURFACE_CLUTTER):
+		var scenery := node as Node3D
+		if scenery != null:
+			_clutter.append(scenery)
 
 
 ## Hand the ground slab the same cutaway shader planes 2 and 3 use on their own earth lids, so
@@ -81,6 +91,10 @@ func _cut_the_ground() -> void:
 	_slab_material.set_shader_parameter(
 		"albedo_color", source.albedo_color if source != null else Color(0.44, 0.42, 0.31)
 	)
+	# The same grain the trench floors and lids carry, so the lawn is the top of the same earth
+	# rather than a differently-made surface that happens to be brown.
+	_slab_material.set_shader_parameter("dirt", DirtTexture.shared())
+	_slab_material.set_shader_parameter("dirt_tile", DirtTexture.WORLD_TILE)
 	slab.material = _slab_material
 
 
@@ -140,10 +154,29 @@ func _process(delta: float) -> void:
 		_network.set_focus_plane(plane)
 		_last_plane = plane
 
+	# WHOSE ROCK IS DRAWN. Veins are hidden until a crew digs into one (GDD section 3), so the
+	# network has to be told which crew is looking through this camera -- it cannot go and find out
+	# for itself without a rendering object reaching into the match to ask whose side it is on, and
+	# at M7 that question has no single answer on a server. Told every frame and ignored unless it
+	# changed, which is once: this file already owns "what the local player can see of the layers",
+	# and a one-off call in `_ready` would miss the player being handed a different mouse.
+	var side: Variant = _player.get("team")
+	if side != null:
+		_network.show_known_rock(int(side))
+
 	# Below plane 1 the surface isn't dimmed, it's GONE -- you are looking down at the earth
 	# lid of your own layer, and the garden two storeys up would only float over the top of it.
 	if _surface != null:
 		_surface.visible = plane <= 1
+
+	# THE LAWN'S CLUTTER GOES THE MOMENT YOU ARE UNDER IT, one layer sooner than the ground it
+	# stands on. The ground has to stay: it is plane 1's lid, and the trench is a cut through it.
+	# What sits on top of it does not -- a rock and a tuft of grass drawn over an open trench are
+	# a metre above the floor you are reading and land on it from this angle, so the corridor
+	# fills with objects that look like they are in it and are not. Dimming them to 20% was not
+	# enough, because the problem was never brightness; it was that they are in the way.
+	for scenery: Node3D in _clutter:
+		scenery.visible = plane <= 0
 
 	var wanted := 1.0 if plane <= 0 else surface_dim_underground
 	_dim = lerpf(_dim, wanted, 1.0 - exp(-fade_speed * delta))

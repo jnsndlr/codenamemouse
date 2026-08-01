@@ -24,6 +24,11 @@ extends Node3D
 ## the countdown is read off the CONTRAST between this and the flooded part, so a bright orange
 ## un-dug wireframe would make the rising light almost invisible against it.
 @export var digging_color: Color = Color(0.85, 0.36, 0.06, 0.90)
+## A block of rock (GDD section 3). Grey and, unlike the other two, NOT pulsing: a pulse is this
+## cursor's way of saying "go on then", and the one thing this state has to say is that holding the
+## button will achieve nothing. You find out the seam is there by pointing at it, which is the same
+## way you find out a tile is out of reach.
+@export var blocked_color: Color = Color(0.72, 0.75, 0.80, 0.85)
 
 var _material: ShaderMaterial
 var _box: BoxMesh
@@ -62,6 +67,21 @@ func show_at(
 	# The hover pulse and the rising flood are the same channel of attention. Leaving the pulse
 	# running under the flood makes the countdown look like it is stuttering.
 	_material.set_shader_parameter("pulse", 0.0 if digging else 1.0)
+
+
+## Park the cursor on a cell that is never going to open. Same box, so the thing being described
+## is still a cubic metre of ground -- it is just a cubic metre of rock.
+func show_blocked(network: TunnelNetwork, plane: int, cell: Vector2i) -> void:
+	if cell == Vector2i.MAX:
+		visible = false
+		return
+
+	visible = true
+	_fit(network.wall_height)
+	global_position = network.cell_to_world(plane, cell)
+	_material.set_shader_parameter("edge_color", blocked_color)
+	_material.set_shader_parameter("progress", 0.0)
+	_material.set_shader_parameter("pulse", 0.0)
 
 
 ## Size the box to the seam being cut: one cell across, and as tall as the plane's walls, so it

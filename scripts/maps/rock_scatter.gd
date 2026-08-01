@@ -69,6 +69,11 @@ func _ready() -> void:
 		# would happen every single time and look like an AI bug.
 		if Nest.blocks(get_tree(), spot):
 			continue
+		# Nothing lies on a patio. The zone's whole job is to read as obviously not-ground from
+		# across the yard (GDD section 3), and pebbles scattered over the slab undo that faster
+		# than any amount of getting the colour right.
+		if NoSurfaceZone.seals(get_tree(), spot):
+			continue
 
 		var big := rng.randf() < large_fraction
 		var span: Vector2 = large_size if big else small_size

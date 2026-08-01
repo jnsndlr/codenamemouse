@@ -82,7 +82,7 @@ Every spend is paid in future deaths. That's the whole tension.
 | **Respawn** | 1 | Baseline. Automatic, not a choice. |
 | **Scurry** | 1 | ~2s burst of real speed, well above sprint. Personal cooldown ~15s. |
 | **Hire a Rat** | 5 | Respawn as the Juggernaut for one life (§4) |
-| **Barricade** | 2 | Engineer deploys a defensive barrier |
+| **Barricade** | ~~2~~ **0** | Engineer wedges a boulder across a tunnel. `[REVISED]` **Built free at M4**, priced in cooldown and supply instead — see §4 for why an ability should not be priced against a resource that has no sinks yet. |
 
 **Scurry is the interesting one.** Sprint is free and every mouse has it (§9) — Scurry is
 the one you *buy*. A single button that turns a losing chase into a won one, paid for with
@@ -193,10 +193,71 @@ Two distinct kinds, and the distinction matters:
 tunnel underneath them**, you just **cannot place an entrance or exit** there. A tunnel
 can run beneath the whole patio; it simply can't surface in the middle of it. These
 create long committed crossings where you know exactly where the enemy has to come up.
+**Built (M4)** — an authored footprint (`scripts/maps/no_surface_zone.gd`) that refuses
+a shaft touching plane 0 and nothing else: digging along under the paving, and sinking
+deeper beneath it, are both untouched, which is what makes it a no-*surface* zone rather
+than a wall. Refused from the lawn and from underneath in different words, and while you
+are under one the prompt above your head says so, because finding out you are committed
+at the moment you wanted out is finding out too late.
+
+> **The rule is a rectangle, not the slab.** The paving it draws is a grey box standing in
+> for real geometry, so the day a map has a modelled patio the model parents underneath and
+> nothing that enforces the rule changes. It also means the zones can be laid before the
+> map is designed, which is the order these two things actually got built in.
 
 **Rock obstructions** — solid blocks that stop horizontal digging, scattered across
 depth planes. Critically, **each plane has its own layout**: plane 2 may be blocked
-where plane 1 is open, and vice versa.
+where plane 1 is open, and vice versa. **Built (M4)** — seeded seams in
+`tunnel_network.gd`, laid as random walks rather than discs so the edges are ragged, at
+9% of plane 1 rising to 16% of plane 3. A seam refuses the dig *and says so*, a shaft
+refuses to sink onto one, and the face where a corridor meets one is drawn in stone, so
+you learn where the rock is by paying for the knowledge rather than by being told.
+
+> **Deeper is rockier, which is a second dial pointing the same way as dig time.** §3
+> already makes the deep planes slower to cut; making them more obstructed as well is what
+> keeps plane 1 worth using once you know the map. If the two ever need to disagree, this
+> is the one to move — dig time is felt every cell, rock only at the moment it stops you.
+
+> **Nests keep a clear radius.** A seeded layout that walled a crew in would do it in
+> exactly the same place every single match, which reads as the map being broken rather
+> than as a hard start.
+
+**What a seam teaches you, once you've hit it. `[DECIDED]`** Running into rock reveals the
+**whole connected vein** — not the one cell — and reveals it **to your crew only**. From then
+on it is drawn in its own colour against the earth above it, and it appears on the minimap for
+the plane you're standing on. The cell you spent is the price; the shape of the vein is what you
+bought, and the other crew still has to pay for its own copy.
+
+> **Why the vein and not the cell.** A seam is one object — it was grown as one — and chipping
+> along a wall a tile at a time to map something you can already see the shape of is bookkeeping,
+> not discovery. What you actually learn when the shovel rings is *"this seam is here"*.
+
+> **Why per crew, and why this one first.** This is the first knowledge in the game that one crew
+> has and the other doesn't, and it is deliberately the small one: rock never moves, so getting
+> the shape of per-team knowledge right here is free rehearsal for M5, which has to do it for
+> tunnels and sightings where the answer changes every second.
+
+> **The minimap shows one plane, not four.** Stacked, the layouts smear into "there is rock
+> somewhere", which is the one thing you already knew. The value of per-plane layouts is that
+> they *differ*, so the panel answers "what is in my way, here" and the answer changes as you
+> climb.
+
+**Boulders** — rock you can see. Lumps lying on the lawn that block movement above ground and
+shut the cells directly beneath them on **plane 1 only**, so the way past one is to go *under*
+it. **Built (M4)** — `boulder_field.gd` scatters them from a seed, snapped to the dig grid, one
+to four cells each. Both crews know what a boulder is sitting on from the first second, because
+it is standing there in daylight.
+
+> **They are the counterweight to the seams, which is the whole reason they exist.** A seam
+> charges you to find out where it is; a boulder tells you for free. Having only the first makes
+> "where is the rock" one question with one answer, and makes the surface tell you nothing about
+> the earth under it.
+
+> **A Brute breaks them, five swings per cell.** A four-cell boulder is twenty swings and can be
+> opened **a quarter at a time**, which makes clearing one a decision about how much you want — a
+> gap to dig through, or the rock gone — rather than a countdown you either finish or waste. It
+> also gives the Brute a second job that isn't fighting, above ground this time, and it is the
+> first of the destructible clutter (branches, sticks) the world is meant to be full of.
 
 > **Why per-plane obstructions are the good idea here.** They turn digging into a real
 > 3D routing problem rather than a flat maze repeated three times. Sometimes the only
@@ -218,20 +279,30 @@ The asymmetry here is the best thing in the system:
 Raiding an enemy network should feel genuinely frightening — you don't know what's
 around the corner and they do.
 
-### Movement — size matters
+### Movement — size matters `[REVISED]`
 
-Speed underground scales **inversely with class size**:
+~~Speed underground scales **inversely with class size**.~~ **Everyone moves at their own
+surface speed underground (M4).** Size still decides who *fits* — the Juggernaut cannot enter at
+all, which is the one hard, thematic constraint left here.
 
 | Class | Tunnel speed | Effect |
 |---|---|---|
-| Sneak | Fastest | Tunnels are their highway |
-| Generalist | Fast | Comfortable |
-| Engineer | Normal | Lives down here |
-| Brute | **Very slow** | Barely moves — but **plugs the tunnel completely** |
+| Sneak / Generalist / Engineer / Brute | **Normal** | The tunnel is a route, not a class tax |
 | Juggernaut | **Cannot enter** | Too big. A hard, thematic constraint. |
 
-A Brute in a tunnel is a **cork**. Nobody gets past. Real defense at a real cost:
-slow, out of position, and blind to the surface.
+> **Why the penalty went, and it was the Brute that killed it.** At 0.35 a Brute crossing its own
+> tunnel was slower than everyone else was on the lawn *above* it. That does not read as a cork,
+> it reads as a class quietly locked out of a third of the map: the tunnel stops being a route it
+> can use and becomes a place it gets caught. Digging is the signature system, and a class tax on
+> using it is the wrong shape of trade — the Brute already pays for its bulk in turn rate, sprint
+> duration and carry penalty, and every one of those applies *everywhere* rather than taking a
+> map away.
+>
+> **The cork survives, as geometry rather than as speed.** A corridor is one cell wide and mice
+> body-block the other crew (§6), so a Brute standing in one is still a plug — it just gets to
+> arrive at the plug in a reasonable amount of time. `Mouse.move_speed` floors the multiplier at
+> 1.0, so a class can still be made *faster* underground if that ever earns its keep; it cannot be
+> made slower by editing a resource.
 
 ### Collapse — the counter
 
@@ -304,9 +375,16 @@ without these.
 | Stats | High health, slow, heavy damage |
 | **Unique capability** | **Collapses tunnels** from the surface (planes 1–2) |
 | Ability | *Slam* — short-range knockback; **makes carriers drop the flag** |
+| **Shifts rock** | **Built (M4)** — the only class that breaks a barricade (3 swings) or a boulder (**5 per cell**, so a four-cell rock is 20 and comes apart a quarter at a time). Anyone else may swing at one all day. |
 | Underground | Very slow, but **plugs a tunnel completely** |
 | Weakness | Cannot chase, cannot flank, exposed in open ground |
 | Role | Nest defense, chokepoints, tunnel denial, sabotage |
+
+> **Breaking things is a role, not a one-off.** Barricades and boulders share one interface
+> (`scripts/classes/breakable.gd`), so the branches, sticks and other destructible clutter the
+> yard is meant to be full of arrive as new objects rather than as new rules — and the swing that
+> resolves them is already written. Each object carries its own hit pool, which is what lets a
+> big thing come apart in pieces instead of on one long timer.
 
 ### Engineer — the digger
 
@@ -316,7 +394,7 @@ without these.
 | Stats | Low damage, medium health, medium speed |
 | **Unique capability** | **Brings tunnels down and puts barriers up.** Everyone can dig; only the Engineer can *un*-dig. `[REVISED]` **Built (M4)** — `Q`, on the cell you're pointing at. |
 | Digging | **~3× faster than anyone else.** Others can manage it in a pinch. `[REVISED]` |
-| Ability | *Barricade* — destructible barrier, 2 cheese |
+| Ability | *Barricade* — a boulder heaved across a tunnel. `[REVISED]` **Built (M4)** — `X`, aimed at the open cell beside you. **No cheese**: ten seconds between placements, three standing at once, and **only a Brute can shift one**. |
 | Weakness | Weakest attack in the game. Cannot win a fight, only shape one. |
 | Role | Map control, route creation, fortification |
 
@@ -344,6 +422,27 @@ without these.
 > reach one cell, plane 1+ only, refuses shafts). If it doesn't survive contact with the Brute,
 > the Engineer's exclusive falls back to *Barricade* alone.
 >
+> `[REVISED]` **Barricade costs no cheese, and the price is cooldown and supply instead.** This
+> entry, and §2's spending table, put it at 2 cheese. The economy does not exist until M6 and the
+> cheese ledger currently has nothing that spends it, so pricing an ability against it now would
+> mean tuning the ability twice — once against a resource with no sinks, and again when the sinks
+> arrive and the number turns out to mean something else. **Ten seconds between placements and
+> three standing at once** are limits you feel in the moment rather than in an account balance,
+> and they are what shape the play: an Engineer working against a Brute has a live budget rather
+> than an ammunition count, because a cleared barricade gives the slot back. When M6 lands, cheese
+> can be added on top if the ability turns out to be too cheap — that is a much easier
+> conversation than unpicking a price nobody has ever paid.
+>
+> **The Brute is the counter, and this is where §5's web gets its second real edge.** Nobody else
+> shifts a barricade, which gives the Brute a reason to be underground that is not fighting, and
+> makes an Engineer's seal something the other crew answers with a *class choice* rather than with
+> patience. It is also the first thing in the game one class builds and another removes.
+>
+> **A barricade is not a cave-in, and the difference is the point.** A cave-in is permanent,
+> instant, kills the corridor and buries whoever is standing there. A barricade is a delay: the
+> corridor still exists, you can see down it, and it comes back. Denial and tempo, from one class,
+> on two keys.
+
 > **Aimed, not automatic, and that is the load-bearing detail.** "Cave in behind you" reads as
 > something that should happen to the cell you just left, for free, while running. It is aimed
 > with the cursor instead — which, since the cursor is the steering wheel (§9), means turning to
@@ -669,7 +768,7 @@ W/S/A/D are relative to **your facing**, not to the camera.
 | **A / D** | Sidestep left/right — still facing forward |
 | **Double-tap W** | **Sprint** (below). Hold on the second tap. |
 | **Left click** | Primary attack, in the direction you're facing |
-| **Right click / Q, E, F** | Abilities |
+| **Right click / Q, E, F, X** | Abilities. `[REVISED]` **X was added at M4** — Q is the cave-in and E and F both turned out to be shafts, so the table had run out of seats for the Engineer's second capability. |
 | **Space** | **Scurry** — the cheese boost (§2) `[ASSUMED]` |
 | **Shift (hold)** | **Slow** — the quiet tier. Minecraft's crouch, and it should feel like it. |
 | **Tab** | Scoreboard / cheese ledger |

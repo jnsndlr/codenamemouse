@@ -42,9 +42,21 @@ extends Resource
 @export_range(0.0, 0.8, 0.01) var carry_penalty: float = 0.10
 
 @export_group("Underground")
-## Speed underground, as a multiplier (GDD section 3 -- movement scales inversely with size).
-## Tunnels are the Sneak's highway and very nearly a wall for the Brute, who is a cork.
-@export_range(0.1, 2.0, 0.05) var tunnel_speed: float = 1.0
+## Speed underground, as a multiplier. **A BONUS ONLY: this cannot go below 1.0.**
+##
+## `[REVISED]` GDD section 3 had speed scale inversely with size -- Sneak 1.25, Generalist 0.9,
+## Brute 0.35 -- on the theory that a Brute in a corridor is a cork. In play it is not a cork, it
+## is a player who has been quietly removed from a third of the map: at 0.35 a Brute crossing its
+## own tunnel is slower than everyone else is on the lawn ABOVE it, so the tunnel stops being a
+## route it can use and becomes a place it gets caught. A class tax on using the game's signature
+## system is the wrong shape of trade -- the Brute already pays for its bulk in turn rate, sprint
+## and carry penalty, all of which apply everywhere and none of which take a map away.
+##
+## Every class is 1.0 now, and `Mouse.move_speed` floors this at 1.0 so a stale resource cannot
+## reintroduce a penalty by accident. The range keeps the dial for the case the design might still
+## want -- a class that is genuinely FASTER underground -- because that reads as a strength rather
+## than as lag.
+@export_range(1.0, 2.0, 0.05) var tunnel_speed: float = 1.0
 ## How fast this class opens a tile, as a multiplier on the dig controller's own timing.
 ##
 ## EVERYBODY CAN DIG, and the Engineer is simply the one who is good at it. GDD section 4 made

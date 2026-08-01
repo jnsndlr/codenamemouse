@@ -52,6 +52,7 @@ signal refused(reason: String)
 var _player: Mouse
 var _network: TunnelNetwork
 var _cooldown_left: float = 0.0
+var _cursor: CollapseCursor
 
 
 func _ready() -> void:
@@ -67,9 +68,33 @@ func _ready() -> void:
 	# that just did nothing, and a refused cave-in is exactly that -- see depth_indicator.gd.
 	refused.connect(_network.dig_refused.emit)
 
+	# Parented to the network, like the dig cursor, so it moves with the tunnels rather than with
+	# this node -- which is a plain Node with no transform of its own.
+	_cursor = CollapseCursor.new()
+	_network.add_child(_cursor)
+
 
 func _process(delta: float) -> void:
 	_cooldown_left = maxf(0.0, _cooldown_left - delta)
+	_show_reach()
+
+
+## Light up the cell this would bring down.
+##
+## Only for the class that can do it. A box following every mouse that walks through a corridor
+## would be noise, and worse, it would promise a capability three of the four do not have -- the
+## class gate is the whole of Pillar 4 for the Engineer and the world should say so.
+func _show_reach() -> void:
+	if _cursor == null:
+		return
+	if _player == null or _player.is_scruffed() or _player.mouse_class != owner_class:
+		_cursor.show_target(_network, 0, Vector2i.MAX, false)
+		return
+	var plane := _player.get_plane()
+	if plane <= 0:
+		_cursor.show_target(_network, 0, Vector2i.MAX, false)
+		return
+	_cursor.show_target(_network, plane, target(), _cooldown_left <= 0.0)
 
 
 ## 0 when ready, counting down otherwise. For a HUD that wants to draw the wait.

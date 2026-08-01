@@ -40,6 +40,12 @@ const KEYS: Dictionary = {
 	# is the dig hold, E takes a shaft and F sinks one, so Q is the one seat left at the table and
 	# it is where the Engineer's cave-in goes.
 	"ability": [KEY_Q],
+	# The second Engineer ability. Section 9's table offers "Q, E, F" and E and F are both shafts,
+	# so the table is out of seats -- X is the next key the left hand can reach without leaving
+	# WASD, and it is far enough from Q that the two abilities can't be fat-fingered into each
+	# other. They are opposites (one seals a corridor for good, one holds it for a while) and
+	# misfiring either while the other was wanted is a wasted cooldown.
+	"barricade": [KEY_X],
 	# Quarter-turn the view. Arrows rather than Q/E because both hands are already busy --
 	# left on WASD and abilities, right on the mouse, which is the steering wheel.
 	"view_left": [KEY_LEFT],

@@ -77,6 +77,8 @@ func _initialize() -> void:
 		["bots_follow", _check_bots_follow],
 		["classes", _check_classes],
 		["cave_in", _check_cave_in],
+		["barricade", _check_barricade],
+		["boulder", _check_boulder],
 	]
 
 	for check: Array in checks:
@@ -464,6 +466,293 @@ func _fire(cave: CaveIn) -> void:
 	cave._unhandled_input(press)
 
 
+## The Engineer's other capability: a boulder in the way, and the Brute who shifts it. (M4)
+##
+## THREE SEPARATE THINGS HAVE TO AGREE and the audit exists because two of them are silent when
+## they don't. The rock is visible, so a placement bug is obvious; the ROUTING BLOCK is not -- a
+## barricade that fails to leave the graph produces a bot walking into a rock forever, which reads
+## as broken AI -- and neither is the CLASS GATE on clearing it, which is the whole reason the
+## Brute wants to be underground at all.
+func _check_barricade() -> void:
+	await _arena(1)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+	var wall := _scene.get_node_or_null("Barricade") as Barricade
+	var player := _director.get_player()
+	if wall == null or player == null:
+		_expect(false, "the arena has a barricade ability and a player")
+		return
+
+	# A straight corridor with an entrance at one end, so a route through it has no way round.
+	network.dig_shaft_down(0, Vector2i(-17, -17))
+	for x in range(-17, -9):
+		network.dig(1, Vector2i(x, -17))
+	await _advance(0.2)
+
+	player.set_physics_process(false)
+	player.global_position = network.cell_to_world(1, Vector2i(-14, -17)) + Vector3.UP * 0.05
+	player.set_plane(1)
+	player.set_class(MouseClass.GENERALIST)
+	player.set("_aim_point", network.cell_to_world(1, Vector2i(-13, -17)))
+
+	# NOT THE GENERALIST. Everyone digs; only the Engineer shapes.
+	_place(wall)
+	_expect(
+		not network.is_blocked(1, Vector2i(-13, -17)),
+		"a Generalist cannot set a barricade"
+	)
+
+	player.set_class(MouseClass.ENGINEER)
+	_place(wall)
+	await _advance(0.1)
+	_expect(network.is_blocked(1, Vector2i(-13, -17)), "an Engineer can")
+	_expect(
+		network.is_dug(1, Vector2i(-13, -17)),
+		"and the cell is still dug -- a barricade is not a cave-in"
+	)
+	_expect(
+		network.graph().route(1, Vector2i(-17, -17), 1, Vector2i(-11, -17)).is_empty(),
+		"nothing routes through it"
+	)
+
+	# And then a wait. Without it an Engineer could wall a corridor end to end in one breath, and
+	# three barricades in a row is a door rather than a delay.
+	player.set("_aim_point", network.cell_to_world(1, Vector2i(-15, -17)))
+	_place(wall)
+	_expect(
+		not network.is_blocked(1, Vector2i(-15, -17)),
+		"a second barricade is refused while the first is on cooldown"
+	)
+
+	# Never a shaft cell: the mouth of a ladder has to stay usable, and the beam of daylight would
+	# go on advertising a way out that nobody could take.
+	wall._cooldown_left = 0.0
+	player.global_position = network.cell_to_world(1, Vector2i(-16, -17)) + Vector3.UP * 0.05
+	player.set("_aim_point", network.cell_to_world(1, Vector2i(-17, -17)))
+	_expect(wall.target() == Vector2i.MAX, "the cell under an entrance is not a barricade spot")
+
+	# Nor on top of somebody. A cave-in buries whoever is standing there; this is a rock being
+	# pushed, and you cannot push a rock through a mouse.
+	player.global_position = network.cell_to_world(1, Vector2i(-14, -17)) + Vector3.UP * 0.05
+	var bystander := _puppet(Team.RED, network.cell_to_world(1, Vector2i(-15, -17)) + Vector3.UP * 0.05)
+	bystander.set_plane(1)
+	await _advance(0.1)
+	player.set("_aim_point", network.cell_to_world(1, Vector2i(-15, -17)))
+	_place(wall)
+	_expect(not network.is_blocked(1, Vector2i(-15, -17)), "a barricade cannot land on a mouse")
+	bystander.queue_free()
+	await _advance(0.1)
+
+	# THE SUPPLY IS THREE STANDING, not three ever. Placed one at a time down the corridor, the
+	# fourth has to be refused however long you wait.
+	for x in [-15, -12, -11]:
+		wall._cooldown_left = 0.0
+		player.global_position = network.cell_to_world(1, Vector2i(x + 1, -17)) + Vector3.UP * 0.05
+		player.set("_aim_point", network.cell_to_world(1, Vector2i(x, -17)))
+		_place(wall)
+		await _advance(0.1)
+	_expect(wall.in_hand() == 0, "three standing is the whole supply")
+	wall._cooldown_left = 0.0
+	player.global_position = network.cell_to_world(1, Vector2i(-17, -17)) + Vector3.UP * 0.05
+	player.set("_aim_point", network.cell_to_world(1, Vector2i(-16, -17)))
+	_place(wall)
+	_expect(not network.is_blocked(1, Vector2i(-16, -17)), "and a fourth is refused")
+
+	# ONLY A BRUTE SHIFTS IT. The swing is the real one -- started, wound up and resolved through
+	# the physics tick -- because the thing most likely to break here is the plumbing between a
+	# melee cone and an object that is not a mouse, and calling the rock's own method directly
+	# would test everything except that.
+	var rock := _standing_at(1, Vector2i(-13, -17))
+	if rock == null:
+		_expect(false, "the barricade at (-13,-17) is still standing to be cleared")
+		return
+	# A stub off the corridor to swing from, so the Brute has floor under it. Standing in mid-air
+	# would still resolve the cone -- the check ignores height -- but a puppet falling through the
+	# world for the rest of the check is a second variable nobody asked for.
+	network.dig(1, Vector2i(-13, -16))
+	var hitter := _puppet(Team.RED, network.cell_to_world(1, Vector2i(-13, -16)) + Vector3.UP * 0.05)
+	hitter.set_plane(1)
+	hitter.set_class(MouseClass.GENERALIST)
+	await _advance(0.1)
+	var full := rock.hits_left()
+	hitter.swing()
+	await _advance(0.6)
+	# COUNTED, NOT LOOKED AT. "The rock is still standing" is true whether the swing was ignored,
+	# missed entirely, or landed and left two hits to go -- so the first version of this check
+	# passed with the class gate deleted, which is exactly the kind of test that stops anyone
+	# looking. The count separates all three.
+	_expect(rock.hits_left() == full, "a Generalist swinging at a barricade achieves nothing")
+
+	# Long enough for the previous swing to finish AND its recovery to expire (0.4 + 0.28), or
+	# `swing()` refuses and the next assertion fails for a reason that has nothing to do with rock.
+	await _advance(0.4)
+	hitter.set_class(MouseClass.BRUTE)
+	_expect(hitter.swing(), "the Brute's swing actually starts")
+	await _advance(0.6)
+	_expect(rock.hits_left() == full - 1, "a Brute's swing lands, through the ordinary melee cone")
+	_expect(is_instance_valid(rock), "and one swing is not enough")
+	for i in range(rock.hits_to_clear):
+		if is_instance_valid(rock):
+			rock.hit_by(hitter)
+	# BEFORE advancing a frame. The rock frees itself deferred and its pieces fly for most of a
+	# second afterwards, so the corridor has to reopen on the swing that broke it -- otherwise the
+	# Brute who just earned the way through is held up by debris, and a bot re-planning during the
+	# animation is told a route that is visibly clear is still shut.
+	_expect(
+		not network.is_blocked(1, Vector2i(-13, -17)),
+		"the cell is walkable the moment the rock breaks, not when the pieces finish falling"
+	)
+	await _advance(0.2)
+	_expect(not is_instance_valid(rock), "a Brute shifts it in the end")
+	_expect(not network.is_blocked(1, Vector2i(-13, -17)), "and the cell stays walkable")
+	_expect(
+		not network.graph().route(1, Vector2i(-14, -17), 1, Vector2i(-13, -17)).is_empty(),
+		"and routes through it again -- the graph got the cell back"
+	)
+	_expect(wall.in_hand() == 1, "and the Engineer gets the slot back")
+
+
+## Boulders: the obstruction you can see, and the one a Brute can take apart. (M4, GDD section 3)
+##
+## THE POINT OF A BOULDER IS THAT IT IS TWO THINGS AT ONCE -- a lump on the lawn and a shut cell of
+## plane 1 -- and the second one is invisible. Nothing errors when a boulder fails to block the
+## earth beneath it; you simply dig a corridor through solid rock and never find out it should not
+## have worked. So the digging half is asserted first and hardest.
+##
+## AND IT COMES APART A QUARTER AT A TIME, which is the reason sections have their own hit pools
+## rather than the boulder having one big one. A check that only proved "twenty swings clears it"
+## would pass just as well against a single pool, and the decision the design is actually offering
+## -- open one corner, or remove the whole rock -- would quietly not exist.
+func _check_boulder() -> void:
+	await _arena(1, false, true)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+	var boulder := _widest_boulder()
+	if boulder == null:
+		_expect(false, "the field scattered a boulder covering more than one cell")
+		return
+
+	var cells := Boulder.cells_for(boulder.origin_cell, boulder.size)
+	for cell: Vector2i in cells:
+		_expect(network.is_rock(1, cell), "the earth under a boulder is rock at %v" % cell)
+		# KNOWN TO EVERYBODY, unlike a seam. The rock is standing in the open, so making a crew dig
+		# into it to "discover" what it can already see would be a puzzle about the camera.
+		_expect(
+			network.is_rock_known(1, cell, Team.BLUE)
+			and network.is_rock_known(1, cell, Team.RED),
+			"both crews can see what a boulder is sitting on, at %v" % cell
+		)
+		# PLANE 1 ONLY. Going under it is the answer the whole design wants you to reach for, and a
+		# boulder that blocked every layer would be a wall you can see from the lawn.
+		_expect(not network.is_rock(2, cell), "the plane below a boulder is ordinary earth at %v" % cell)
+		_expect(not network.dig(1, cell), "no corridor can be driven under a boulder at %v" % cell)
+
+	var target := boulder.get_child(0) as BoulderSection
+	if target == null:
+		_expect(false, "the boulder is built out of sections")
+		return
+	_expect(target.plane == 0, "a boulder is hit from the lawn, not from a tunnel under it")
+
+	# A swing from the wrong class, counted rather than looked at -- "the rock is still there" is
+	# true whether the swing was ignored, missed, or landed and left four hits to go.
+	var at := target.global_position
+	var hitter := _puppet(Team.RED, at + Vector3(0.0, 0.05, TunnelNetwork.CELL))
+	hitter.set_class(MouseClass.GENERALIST)
+	await _advance(0.1)
+	var full := target.hits_left()
+	hitter.swing()
+	await _advance(0.6)
+	_expect(target.hits_left() == full, "a Generalist swinging at a boulder achieves nothing")
+	_expect(full == 5, "a section takes five swings (it takes %d)" % full)
+
+	# And one from the right one, through the real melee cone, because the plumbing between a swing
+	# and a thing that is not a mouse is what is most likely to be broken.
+	await _advance(0.4)
+	hitter.set_class(MouseClass.BRUTE)
+	_expect(hitter.swing(), "the Brute's swing actually starts")
+	await _advance(0.6)
+	_expect(target.hits_left() == full - 1, "a Brute's swing lands on a boulder")
+
+	var cell := target.cell
+	var others := boulder.sections_left()
+	for i in range(full):
+		if is_instance_valid(target):
+			target.hit_by(hitter)
+	# BEFORE advancing a frame, like the barricade: the section frees itself deferred and its pieces
+	# fly for most of a second, and the ground it stood on has to be diggable on the swing that
+	# broke it rather than when the debris settles.
+	_expect(not network.is_rock(1, cell), "the cell is ordinary earth the moment the section breaks")
+	await _advance(0.2)
+	_expect(not is_instance_valid(target), "a Brute breaks a section in the end")
+	_expect(
+		boulder.sections_left() == others - 1,
+		"and only that section -- the rest of the boulder stands"
+	)
+	for cell_left: Vector2i in cells:
+		if cell_left != cell:
+			_expect(
+				network.is_rock(1, cell_left),
+				"the earth under the standing sections is still shut, at %v" % cell_left
+			)
+	_expect(network.dig(1, cell), "and a corridor can be dug through where it stood")
+
+	# THE LAST SECTION, which is a different case and was a different bug: the boulder frees itself
+	# once it is empty, and the pieces of the final quarter were parented to it, so they went with
+	# it instead of falling. One break in four, in the only case that ends the object -- which a
+	# check that stops after "break a section" never reaches.
+	var pieces := _scene.get_tree().get_nodes_in_group(Boulder.GROUP).size()
+	for node in boulder.get_children():
+		var section := node as BoulderSection
+		if section == null:
+			continue
+		for i in range(section.hits_to_clear):
+			if is_instance_valid(section):
+				section.hit_by(hitter)
+	await _advance(0.2)
+	_expect(not is_instance_valid(boulder), "the boulder is gone once every section is broken")
+	_expect(
+		_scene.get_tree().get_nodes_in_group(Boulder.GROUP).size() == pieces - 1,
+		"and only that boulder"
+	)
+	var debris := 0
+	for node in _scene.get_node("Surface/Boulders").get_children():
+		if node is RockDebris:
+			debris += 1
+	_expect(debris > 0, "the last section leaves pieces behind rather than vanishing with the rock")
+
+
+## The boulder covering the most cells, so the per-section rules have something to be per. Sorted
+## by name first: the field is seeded, so this picks the same rock every run and a failure is
+## reproducible rather than whichever one the group happened to list first.
+func _widest_boulder() -> Boulder:
+	var found: Array[Boulder] = []
+	for node in _scene.get_tree().get_nodes_in_group(Boulder.GROUP):
+		var boulder := node as Boulder
+		if boulder != null:
+			found.append(boulder)
+	found.sort_custom(func(a: Boulder, b: Boulder) -> bool: return a.name < b.name)
+	var best: Boulder = null
+	for boulder: Boulder in found:
+		if best == null or boulder.size.x * boulder.size.y > best.size.x * best.size.y:
+			best = boulder
+	if best != null and best.size.x * best.size.y <= 1:
+		return null
+	return best
+
+
+func _place(wall: Barricade) -> void:
+	var press := InputEventAction.new()
+	press.action = "barricade"
+	press.pressed = true
+	wall._unhandled_input(press)
+
+
+func _standing_at(plane: int, cell: Vector2i) -> BarricadeRock:
+	for node in _scene.get_tree().get_nodes_in_group(BarricadeRock.BARRICADE_GROUP):
+		var rock := node as BarricadeRock
+		if rock != null and rock.plane == plane and rock.cell == cell:
+			return rock
+	return null
+
+
 ## Classes are numbers on a mouse, and the swap point has a place and a price. (M4)
 ##
 ## WHAT THIS IS REALLY GUARDING is that the definitions actually land. `set_class` copies a
@@ -546,6 +835,23 @@ func _check_classes() -> void:
 	await _advance(0.1)
 	_expect(player.is_scruffed(), "the player is scruffed for this part")
 	_expect(not swap.available(), "and cannot swap class while flat on their back")
+
+	# NOBODY IS SLOWED UNDERGROUND (GDD section 3, revised). Asked of `move_speed` on both sides of
+	# the surface rather than of the resource, because the rule has to survive both a `.tres` edit
+	# and the multiplier being reintroduced in code -- and because "slower underground" is
+	# invisible in play until somebody plays the class that has it and quietly stops using tunnels.
+	player.revive_at(Vector3(0.0, 0.2, 0.0))
+	for kind in range(MouseClass.COUNT):
+		player.set_class(kind)
+		player.set_plane(0)
+		var above := player.move_speed()
+		player.set_plane(1)
+		_expect(
+			player.move_speed() >= above - 0.001,
+			"a %s is no slower underground (%.2f vs %.2f)"
+				% [MouseClass.name_of(kind), player.move_speed(), above]
+		)
+	player.set_plane(0)
 
 
 ## Does a defender actually come down after you? (M4)
@@ -737,7 +1043,7 @@ func _check_spotting() -> void:
 ## `_ready` -- afterwards is too late, and a check that meant to run with nobody else in the
 ## arena would quietly be sharing it with mice making their own decisions. `crew` of 1 leaves
 ## only the player, since the player holds blue's first seat.
-func _arena(crew: int) -> void:
+func _arena(crew: int, rock: bool = false, boulders: bool = false) -> void:
 	if _scene != null:
 		_scene.free()
 	_scene = (load("res://scenes/maps/arena.tscn") as PackedScene).instantiate()
@@ -745,9 +1051,25 @@ func _arena(crew: int) -> void:
 		var node: Node = _scene.get_node_or_null(path)
 		if node != null:
 			node.free()
+	# NO BOULDERS UNLESS A CHECK ASKS, exactly like the rock below and for the same reason: a
+	# boulder claims cells of plane 1, and every check here digs a corridor at a hand-picked
+	# coordinate to stand things in. One seeded boulder across one of them would fail a rule check
+	# for a reason that has nothing to do with the rule -- identically every run.
+	if not boulders:
+		var field: Node = _scene.get_node_or_null("Surface/Boulders")
+		if field != null:
+			field.free()
 
 	_director = _scene.get_node("MatchDirector") as MatchDirector
 	_director.crew_size = crew
+
+	# NO ROCK UNLESS A CHECK ASKS FOR IT, and set before the scene enters the tree, because
+	# generation happens in the network's `_ready`. Every check in this file digs a corridor at a
+	# hand-picked coordinate to stand things in; a seeded seam through one of them would fail a
+	# rule check for a reason that has nothing to do with the rule, and it would do it identically
+	# every run, which is the most convincing kind of wrong answer.
+	if not rock:
+		(_scene.get_node("Tunnels") as TunnelNetwork).rock_density = 0.0
 
 	root.add_child(_scene)
 	await process_frame
