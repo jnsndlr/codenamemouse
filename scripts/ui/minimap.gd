@@ -32,6 +32,12 @@ extends Control
 ## routes meet, the physical intersection exists in the world without donating either connected
 ## floor plan to the other map. Sonar adds a cant mark at one detected place, never the route.
 
+## Shared with depth_focus.gd. Every meaningful object that sits on the lawn belongs here: doing so
+## both removes it from underground views and gives this minimap a chance to draw its footprint.
+## Generators implement `minimap_shapes()`; ordinary GeometryInstance3D nodes are mapped from their
+## bounds automatically. This is the contract to follow whenever a new surface object is added.
+const SURFACE_GROUP: StringName = &"surface_clutter"
+
 @export var director_path: NodePath
 @export var network_path: NodePath
 @export var camera_rig_path: NodePath
@@ -58,6 +64,9 @@ extends Control
 ## are compact and high-contrast so their blocked cells remain legible over a patch.
 @export var grass_color: Color = Color(0.30, 0.39, 0.18, 0.52)
 @export var boulder_color: Color = Color(0.48, 0.49, 0.50, 0.95)
+@export var paving_color: Color = Color(0.58, 0.59, 0.57, 0.88)
+@export var surface_rock_color: Color = Color(0.39, 0.38, 0.36, 0.82)
+@export var surface_object_color: Color = Color(0.56, 0.46, 0.31, 0.92)
 ## Rock your crew has found. Cool and pale against the warm dirt of the panel, the same argument
 ## the seam faces make in the world -- and deliberately NOT the colour a tunnel is, because the two
 ## are drawn on top of each other and the question they answer together is where a corridor had to
@@ -169,40 +178,93 @@ func _ground() -> void:
 	)
 
 
-## Grass and boulders are surface terrain everyone can read from the start. Draw the generated
-## footprints rather than a second approximation of the generator, and only on plane zero: below
-## ground the focused layer already shows the boulders as their known plane-one rock cells.
+## Every registered surface object is terrain everyone can read from the start. Purpose-built
+## generators publish precise circles/polygons. Plain geometry gets an automatic projected AABB,
+## which makes adding a one-off prop to the map and the minimap the same authoring action.
 func _surface_features() -> void:
 	var player := _director.get_player()
 	if player != null and player.get_plane() > 0:
 		return
 
-	for node: Node in get_tree().get_nodes_in_group(GrassPatch.GROUP):
-		if not node.has_method("patch_footprints"):
-			continue
-		for patch: Dictionary in node.patch_footprints():
-			var centre: Vector3 = patch["at"]
-			var extent: float = patch["extent"]
-			draw_circle(Vector2(centre.x, centre.z), extent, grass_color)
-			draw_arc(
-				Vector2(centre.x, centre.z), extent, 0.0, TAU, 32,
-				grass_color.lightened(0.16), _pixel(0.7 * _ui)
-			)
+	for node: Node in get_tree().get_nodes_in_group(SURFACE_GROUP):
+		var shapes: Array[Dictionary]
+		if node.has_method("minimap_shapes"):
+			shapes = node.call("minimap_shapes")
+		else:
+			shapes = _automatic_surface_shapes(node)
+		for shape: Dictionary in shapes:
+			_draw_surface_shape(shape)
 
-	# A real cell is only a couple of pixels at this scale. Give each section a small floor so
-	# boulders read as terrain rather than disappearing into the panel texture.
-	var rock_radius := maxf(TunnelNetwork.CELL * 0.46, _pixel(2.2 * _ui))
-	for node: Node in get_tree().get_nodes_in_group(Boulder.GROUP):
-		var boulder := node as Boulder
-		if boulder == null:
+
+func _draw_surface_shape(shape: Dictionary) -> void:
+	var style: StringName = shape.get("style", &"object")
+	var colour := _surface_colour(style)
+	colour.a *= clampf(float(shape.get("strength", 1.0)), 0.0, 1.0)
+	var kind: StringName = shape.get("kind", &"circle")
+	if kind == &"polygon":
+		var points: PackedVector2Array = shape.get("points", PackedVector2Array())
+		if points.size() < 3:
+			return
+		draw_colored_polygon(points, colour)
+		if bool(shape.get("outline", true)):
+			var closed := points.duplicate()
+			closed.append(points[0])
+			draw_polyline(closed, colour.darkened(0.28), _pixel(0.8 * _ui))
+		return
+
+	var centre: Vector2 = shape.get("position", Vector2.ZERO)
+	var radius: float = shape.get("radius", 0.5)
+	var minimum: float = float(shape.get("min_radius_px", 0.0)) * _ui
+	radius = maxf(radius, _pixel(minimum))
+	draw_circle(centre, radius, colour)
+	if bool(shape.get("outline", true)):
+		draw_arc(centre, radius, 0.0, TAU, 24, colour.darkened(0.30), _pixel(0.7 * _ui))
+
+
+func _surface_colour(style: StringName) -> Color:
+	match style:
+		&"grass":
+			return grass_color
+		&"boulder":
+			return boulder_color
+		&"paving":
+			return paving_color
+		&"surface_rock":
+			return surface_rock_color
+		_:
+			return surface_object_color
+
+
+## Fallback for authored props. Generator roots should publish their own shapes so thousands of
+## decorative children can be collapsed intelligently; a normal model needs no extra map code.
+func _automatic_surface_shapes(root: Node) -> Array[Dictionary]:
+	var geometry: Array[GeometryInstance3D] = []
+	_collect_surface_geometry(root, geometry)
+	var shapes: Array[Dictionary] = []
+	for item: GeometryInstance3D in geometry:
+		var box := item.get_aabb()
+		if box.size.x <= 0.001 or box.size.z <= 0.001:
 			continue
-		for cell: Vector2i in boulder.occupied_cells():
-			var centre := Vector2(cell.x, cell.y) * TunnelNetwork.CELL
-			draw_circle(centre, rock_radius, boulder_color)
-			draw_arc(
-				centre, rock_radius, 0.0, TAU, 18,
-				boulder_color.darkened(0.35), _pixel(0.8 * _ui)
-			)
+		var y := box.get_center().y
+		var corners := PackedVector2Array()
+		for corner: Vector3 in [
+			Vector3(box.position.x, y, box.position.z),
+			Vector3(box.end.x, y, box.position.z),
+			Vector3(box.end.x, y, box.end.z),
+			Vector3(box.position.x, y, box.end.z),
+		]:
+			var world: Vector3 = item.global_transform * corner
+			corners.append(Vector2(world.x, world.z))
+		shapes.append({"kind": &"polygon", "style": &"object", "points": corners})
+	return shapes
+
+
+func _collect_surface_geometry(node: Node, into: Array[GeometryInstance3D]) -> void:
+	var item := node as GeometryInstance3D
+	if item != null:
+		into.append(item)
+	for child: Node in node.get_children():
+		_collect_surface_geometry(child, into)
 
 
 ## The dug cells on the layer you are standing on, and nothing from the others.

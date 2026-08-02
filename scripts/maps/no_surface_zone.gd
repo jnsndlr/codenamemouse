@@ -52,6 +52,21 @@ func _ready() -> void:
 	_build()
 
 
+## The paving's authored footprint, using the same transform as `covers`. The minimap consumes this
+## shared shape contract, so replacing the placeholder slab with real art changes neither rule.
+func minimap_shapes() -> Array[Dictionary]:
+	var corners := PackedVector2Array()
+	for corner: Vector3 in [
+		Vector3(-extents.x, 0.0, -extents.y),
+		Vector3(extents.x, 0.0, -extents.y),
+		Vector3(extents.x, 0.0, extents.y),
+		Vector3(-extents.x, 0.0, extents.y),
+	]:
+		var world: Vector3 = to_global(corner)
+		corners.append(Vector2(world.x, world.z))
+	return [{"kind": &"polygon", "style": &"paving", "points": corners}]
+
+
 ## Does any zone on this map seal `spot`, given in world x/z metres?
 ##
 ## `margin` widens every footprint. A shaft mouth is a whole cell wide, so the network asks with

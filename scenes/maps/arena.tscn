@@ -168,7 +168,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -7)
 script = ExtResource("27_patio")
 extents = Vector2(10, 5)
 
-[node name="PropA" type="MeshInstance3D" parent="Surface" groups=["nav_source"]]
+[node name="PropA" type="MeshInstance3D" parent="Surface" groups=["nav_source", "surface_clutter"]]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 11, 0.7, -9)
 mesh = SubResource("Mesh_prop")
 
@@ -177,7 +177,7 @@ mesh = SubResource("Mesh_prop")
 [node name="Collision" type="CollisionShape3D" parent="Surface/PropA/Body"]
 shape = SubResource("Shape_prop")
 
-[node name="PropB" type="MeshInstance3D" parent="Surface" groups=["nav_source"]]
+[node name="PropB" type="MeshInstance3D" parent="Surface" groups=["nav_source", "surface_clutter"]]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -14, 0.7, 7)
 mesh = SubResource("Mesh_prop")
 
@@ -186,7 +186,7 @@ mesh = SubResource("Mesh_prop")
 [node name="Collision" type="CollisionShape3D" parent="Surface/PropB/Body"]
 shape = SubResource("Shape_prop")
 
-[node name="PropC" type="MeshInstance3D" parent="Surface" groups=["nav_source"]]
+[node name="PropC" type="MeshInstance3D" parent="Surface" groups=["nav_source", "surface_clutter"]]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 0.7, 16)
 mesh = SubResource("Mesh_prop")
 

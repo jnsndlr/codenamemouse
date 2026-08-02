@@ -84,6 +84,25 @@ func _ready() -> void:
 	print("boulders: %d, covering %d cells of plane 1" % [_placed, _taken.size()])
 
 
+## Precise live footprints for the shared surface-minimap contract. Asking the surviving sections
+## means a quarter disappears from the panel on the same swing that removes it from the yard.
+func minimap_shapes() -> Array[Dictionary]:
+	var shapes: Array[Dictionary] = []
+	for child: Node in get_children():
+		var boulder := child as Boulder
+		if boulder == null:
+			continue
+		for cell: Vector2i in boulder.occupied_cells():
+			shapes.append({
+				"kind": &"circle",
+				"style": &"boulder",
+				"position": Vector2(cell.x, cell.y) * TunnelNetwork.CELL,
+				"radius": TunnelNetwork.CELL * 0.46,
+				"min_radius_px": 2.2,
+			})
+	return shapes
+
+
 ## May a boulder of `span` stand at `at`?
 ##
 ## The nest rule is the load-bearing one, and it is the network's own clearance rather than a number

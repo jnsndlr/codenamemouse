@@ -15,9 +15,11 @@ extends Node
 ## The cut is a RENDERING cut only. Collision is untouched, so the ground stays solid and you
 ## still enter a tunnel by choosing to, not by walking into a hole.
 
-## What sits ON the ground rather than being the ground: the rock scatter, the grass. Marked in
+## What sits ON the ground rather than being the ground: rocks, grass, paving and props. Marked in
 ## the scene rather than listed here, because "is this scenery or is this the world" is a
-## per-object question a map author answers and this file has no way to guess.
+## per-object question a map author answers and this file has no way to guess. This group is also
+## the minimap contract: add every new surface object here; generators expose `minimap_shapes()`
+## and ordinary GeometryInstance3D props get a footprint automatically.
 const SURFACE_CLUTTER: StringName = &"surface_clutter"
 
 @export var network_path: NodePath

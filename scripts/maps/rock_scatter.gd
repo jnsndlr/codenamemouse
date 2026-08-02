@@ -39,6 +39,9 @@ extends Node3D
 @export var rock_color: Color = Color(0.33, 0.32, 0.31)
 
 var _solid: int = 0
+## Only the substantial, collidable rocks are map terrain. Hundreds of pebbles are motion texture;
+## drawing every one would turn the panel into grit and hide the routes it exists to explain.
+var _minimap_rocks: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -103,7 +106,26 @@ func _ready() -> void:
 			body.add_child(shape)
 			rock.add_child(body)
 			_solid += 1
+			_minimap_rocks.append({
+				"position": spot,
+				"radius": maxf(size.x, size.z) * 0.5,
+			})
 
 		placed += 1
 
 	print("rock scatter: %d rocks, %d with collision" % [placed, _solid])
+
+
+func minimap_shapes() -> Array[Dictionary]:
+	var shapes: Array[Dictionary] = []
+	for rock: Dictionary in _minimap_rocks:
+		var local: Vector2 = rock["position"]
+		var world: Vector3 = to_global(Vector3(local.x, 0.0, local.y))
+		shapes.append({
+			"kind": &"circle",
+			"style": &"surface_rock",
+			"position": Vector2(world.x, world.z),
+			"radius": rock["radius"],
+			"min_radius_px": 1.1,
+		})
+	return shapes

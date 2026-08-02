@@ -52,8 +52,8 @@ uniform float interact_power = 0.18;
 
 // How sharply the blade narrows toward its tip. 0 is the source tutorial's rectangle, 1 is a
 // true point. Done in the shader rather than in the mesh so it stays one shared blade for all
-// 63000 instances -- baking the taper would mean a different mesh per taper value, which is
-// the one thing that cannot be a live slider. At 0.7 the wider mesh keeps its base while the top
+// tens of thousands of instances -- baking the taper would mean a different mesh per taper value,
+// which is the one thing that cannot be a live slider. At 0.7 the wider mesh keeps its base while the top
 // finishes at thirty percent of that width.
 uniform float tip_taper : hint_range(0.0, 1.0) = 0.7;
 
@@ -79,15 +79,23 @@ void vertex() {
 	freedom *= freedom;
 
 	vec3 push = vec3(0.0);
+	float radius_squared = radius * radius;
 	for (int i = 0; i < influence_count; i++) {
 		vec3 away = world_vert - influences[i].xyz;
 		away.y = 0.0;
-		float dist = length(away);
-		// Standing exactly on a blade gives no direction to push it in. Skip rather than
-		// normalize a zero vector, which is a NaN and takes the whole blade off screen.
-		if (dist < 0.0001) {
+		float dist_squared = dot(away, away);
+		// Almost every blade is outside almost every actor's tiny influence radius. Reject on a
+		// dot product first, so background grass does not pay for a square root and normalization
+		// dozens of times per vertex just to feed zero into smoothstep.
+		if (dist_squared >= radius_squared) {
 			continue;
 		}
+		// Standing exactly on a blade gives no direction to push it in. Skip rather than
+		// normalize a zero vector, which is a NaN and takes the whole blade off screen.
+		if (dist_squared < 0.00000001) {
+			continue;
+		}
+		float dist = sqrt(dist_squared);
 		push += (away / dist) * smoothstep(radius, 0.0, dist) * influences[i].w;
 	}
 

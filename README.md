@@ -238,9 +238,13 @@ entirely, which is what both audits do to every check that isn't about them.
 On **Barricade**: `cooldown` (10s), `max_standing` (3), `reach_cells` (1.6). On a placed boulder:
 `hits_to_clear` (3 Brute swings), `fill`, `height_fraction`.
 
-On **Surface/Grass**: `blade_width` (0.12m at the base), `blade_height` (0.44–0.68m), patch count,
-density, and radius. The shared grass shader's `tip_taper` is 0.7, leaving the tip at 30% of the
-base width.
+On **Surface/Grass**: `blade_width` (0.12m at the base), `blade_height` (0.44–0.68m), and
+`sample_spacing` (0.15m at maximum density). Grass is painted continuously across the yard:
+`field_noise_frequency` controls broad growing regions, `detail_noise_frequency` breaks their
+edges up, and the band from `coverage_threshold` (0.49) to `dense_threshold` (0.66) runs from open
+ground to fully occupied, dense grass. `render_chunk_size` affects culling only and never defines
+a visible or gameplay footprint. The shared grass shader's `tip_taper` is 0.7, leaving the tip at
+30% of the base width.
 
 On **Surface/Boulders**: `count` (14), `spans` (the footprints on offer and their weighting — a
 repeated entry is a heavier weight), `hits_per_section` (5 Brute swings per cell), `height`
@@ -252,9 +256,14 @@ their position.
 
 **The minimap draws one layer — the one you're standing on**, tunnels and rock alike, the same rule
 the world follows. Stacked, four planes aren't a map of anything: two corridors a plane apart cross
-on the panel without touching in the world. On the surface it shows the grass footprints, every
-remaining boulder section, and the **shaft mouths**. Below ground, the focused layer takes over;
-plane 1 still shows a boulder's cells as known rock.
+on the panel without touching in the world. On the surface it shows grass, substantial rocks,
+every remaining boulder section, paving, props, and the **shaft mouths**. Below ground, the focused
+layer takes over; plane 1 still shows a boulder's cells as known rock.
+
+**Whenever a new surface object is added, put it in the `surface_clutter` group.** Ordinary 3D
+geometry then gets an automatic minimap footprint and disappears from the tunnel view. A generator
+should implement `minimap_shapes()` so it can collapse its children into useful circles or polygons
+instead of dumping decorative detail onto the panel.
 
 On **Surface/Patio** (a `NoSurfaceZone`): `extents` — half-width and half-depth in metres, so the
 placeholder's 10 × 5 is a 20 × 10 slab. Move it, resize it, rotate it, or add a second node for a
