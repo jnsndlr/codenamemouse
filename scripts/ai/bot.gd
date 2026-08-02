@@ -32,9 +32,19 @@ extends Mouse
 enum { RAIDER, DEFENDER }
 
 @export_group("Role")
-## What this bot is for. Assigned by the director when it spawns, alternating down the crew, so
-## every crew has someone at home and someone on the way over.
+## What this bot is for. Assigned by the director from its seat, so every crew has someone at
+## home and someone on the way over -- see MatchDirector.SEATS.
 @export_enum("Raider", "Defender") var role: int = RAIDER
+## What this bot turns up as. Also from the seat, and it is a WANT rather than a costume: the bot
+## puts it on at its own nest, through the same rule the player's C key obeys (class_swap.gd).
+##
+## THE SWAP IS NOT DECORATION. A bot that was simply born the right class would never exercise the
+## thing the swap point is for, and the swap point is the answer GDD section 4 gives to every
+## composition problem in the game -- adaptation costs the walk home and nothing else. A crew
+## whose Engineer is scruffed on the far side of the yard gets it back by walking, exactly as a
+## human would, and the rule gets used in every match instead of on the evenings somebody
+## remembers to press C.
+@export_enum("Generalist", "Engineer", "Sneak", "Brute") var preferred_class: int = MouseClass.GENERALIST
 ## How far from its own nest a defender will go. Measured from the NEST, not from the bot, so a
 ## defender that chases someone to the edge of its patch turns round rather than being walked
 ## away from the thing it is guarding. This is the whole anti-lure rule and it is one word:
@@ -89,6 +99,25 @@ var _quarry: Mouse = null
 var _since_think: float = 999.0
 ## Purely for the debug readout -- what it thinks it's doing.
 var _intent: String = "idle"
+## The Engineer's raid. Held by every bot and consulted by none of them but an Engineer, which is
+## cheaper than creating one on a class swap and means the state is always there to be reset.
+var _digger := BotDigger.new()
+## True while `_digger` is steering. Movement is different then: the digger says exactly which
+## cell to stand in and decides for itself when it has got there, so the arrival slack that keeps
+## a bot from jittering on the lawn would leave it stalled half a tile short of a face.
+var _driven: bool = false
+## Whether `_decide` fell all the way through to rule 6. The one errand a dig may replace.
+var _raiding: bool = false
+## WHERE THE RANKING WANTS TO GO, kept apart from `_goal`, which is where the feet are pointed
+## this frame. Almost always the same thing -- and catastrophically not while the digger is
+## driving, because the digger STEERS by writing `_goal` (stand at this face, walk to that cell)
+## and would then read its own last instruction back as the destination it was heading for. It
+## did exactly that: half a metre from a target it had set itself, it concluded it had arrived at
+## the enemy banner, tried to surface in the middle of its own corridor, was refused, and handed
+## control back -- every other frame. The corridor advanced one cell every seven seconds instead
+## of every half second, and each time the refusal didn't come it punched a useless mouth in the
+## lawn. Same separation `_quarry` already has from `_goal`, and for the same reason.
+var _errand: Vector3 = Vector3.ZERO
 
 
 func _ready() -> void:
@@ -99,7 +128,8 @@ func _ready() -> void:
 
 
 func get_intent() -> String:
-	return _intent
+	var digging := _digger.get_intent()
+	return digging if _driven and not digging.is_empty() else _intent
 
 
 func _control(delta: float) -> void:
@@ -114,11 +144,56 @@ func _control(delta: float) -> void:
 	_since_think += delta
 	if _since_think >= think_seconds:
 		_since_think = 0.0
+		_reclass()
 		_decide()
+		# Taken here, once, straight off the ranking -- before anything downstream is allowed to
+		# point the feet somewhere else for a frame.
+		_errand = _goal
+		_goal_plane = _head_for_the_face()
 		_plan()
 
+	# EVERY FRAME, unlike the decision above it, because a dig is a CLOCK. Opening a tile takes
+	# half a second of held effort and a behaviour sampled three times a second would charge it
+	# in lumps -- the same reason dig_controller.gd runs on the physics tick and not on input.
+	_drive(delta)
 	_fight(delta)
 	_walk(delta)
+
+
+# ------------------------------------------------------------------------------- the class
+
+
+## Put on the class this seat is for, if this is a place a class may be changed.
+##
+## THE RULE IS BORROWED, NOT REBUILT. `ClassSwap.allowed` is the same predicate the player's C key
+## is gated on -- own nest, on the surface, on your feet -- so a bot cannot re-spec somewhere a
+## human could not. Almost every swap therefore happens on respawn, which is precisely where GDD
+## section 4 says a free switch belongs, and it costs the bot the same walk home it costs you.
+func _reclass() -> void:
+	var wanted := _wanted_class()
+	if mouse_class == wanted or not ClassSwap.allowed(self, _director):
+		return
+	set_class(wanted)
+	# Whatever it was in the middle of belonged to the mouse it used to be. A Generalist does not
+	# inherit an Engineer's half-cut corridor.
+	_digger.reset()
+	_driven = false
+
+
+## What this bot would rather be: its seat, and nothing cleverer.
+##
+## THERE WAS A COVER RULE HERE AND IT WAS WRONG. It said a bot would take the Engineer seat when
+## its crew had none standing, on the theory that a digger is a capability rather than a
+## preference. The theory is fine; the behaviour was not. Engineers are scruffed constantly, and
+## "standing" flips several times a minute, so every mouse that happened to be home flipped to
+## Engineer, cut a stub, flipped back when the real one respawned, and cut nothing further. It
+## made the crew's composition jitter and it made the yard worse -- which is the argument against
+## it, not the theory.
+##
+## If a crew genuinely needs cover for a dead specialist, that belongs to a rule about the MATCH
+## and not to whoever is standing nearest a nest at the time.
+func _wanted_class() -> int:
+	return preferred_class
 
 
 # --------------------------------------------------------------------------------- deciding
@@ -136,6 +211,9 @@ func _decide() -> void:
 	# bot wants is a banner or a nest, and neither can be underground -- one by rule (GDD
 	# section 2), the other by being a place in the yard.
 	_goal_plane = 0
+	# Cleared here and set by exactly one rule below, so "may I dig?" is answered by where the
+	# ranking landed rather than by a second opinion about the state of the match.
+	_raiding = false
 
 	# 1. Carrying it home is everything. Nothing outranks a capture in progress -- a bot that
 	#    stops mid-run to trade blows is how a steal turns into nothing.
@@ -190,9 +268,12 @@ func _decide() -> void:
 		_goal = theirs.carrier.global_position
 		return
 
-	# 6. Otherwise: go and take theirs.
+	# 6. Otherwise: go and take theirs. THE ONLY ERRAND AN ENGINEER MAY DIG, because it is the only
+	#    one that is not urgent -- everything above this is a banner in play, and a tunnel is a
+	#    twenty-second investment nobody makes while the match is being decided above their head.
 	_intent = "going for their banner"
 	_goal = theirs.global_position
+	_raiding = true
 
 
 ## Where a defender stands when nothing is happening: a step out of the nest, toward the middle
@@ -270,6 +351,58 @@ func _fight(delta: float) -> void:
 	swing()
 
 
+## An Engineer on a raid walks to the head of its own corridor, not to the banner.
+##
+## Returns the plane the walk ends on, and leaves `_goal` pointing at the frontier if there is one.
+## `_errand` still holds the banner, so the digging knows which way to cut once it gets there.
+##
+## THE POINT IS THAT THE WALK IS ROUTED. Getting to the far end of your own tunnel means following
+## a corridor with bends in it, which is what route_planner.gd is for and what a one-cell greedy
+## stepper is emphatically not -- the stepper walks into the outside of the first corner, backs up,
+## and oscillates. Splitting it here means the digger never has to navigate: it is only ever asked
+## what to do when the bot is already standing at solid earth.
+func _head_for_the_face() -> int:
+	if not _raiding or mouse_class != MouseClass.ENGINEER or _network == null:
+		return _goal_plane
+	# Given up on that corridor for the moment: go and be a mouse instead of walking back to the
+	# seam that just refused it.
+	if _digger.is_resting():
+		return _goal_plane
+	var face := _digger.frontier(self, _network, _goal)
+	if face.is_empty():
+		return _goal_plane
+	_goal = face["at"]
+	return int(face["plane"])
+
+
+## Hand the frame to the Engineer's raid, if this bot is one and this is its errand.
+##
+## The digger returns where to stand and on which plane, or nothing at all -- and nothing at all is
+## the normal answer, including for an Engineer. It declines on the lawn until the walk is long
+## enough to be worth a hole, and it declines underground the moment it is boxed in. Both times
+## control falls back to the ranking and to route_planner.gd, which can walk a bot out of a tunnel
+## through the mouth it came in by, so there is no abandonment path to write.
+func _drive(delta: float) -> void:
+	var was := _driven
+	_driven = false
+	if _network != null and _raiding and mouse_class == MouseClass.ENGINEER:
+		var order := _digger.think(
+			self, _network, _director.nest_of(team).global_position, _errand, delta
+		)
+		if not order.is_empty():
+			_goal = order["at"]
+			_goal_plane = int(order["plane"])
+			# The digger's corridor IS the route. A plan made a moment ago describes a network
+			# that did not have the last cell in it.
+			_route.clear()
+			_driven = true
+
+	# Handed back mid-corridor: re-plan now rather than at the next think, because until there is
+	# a route the fallback is to walk straight at a goal that may be through a wall.
+	if was and not _driven:
+		_plan()
+
+
 ## Work out the way there, and hand the walking below a single point to head for.
 ##
 ## Re-planned every decision rather than kept until it fails. A route is cheap, the destination
@@ -307,7 +440,21 @@ func _walk(delta: float) -> void:
 
 
 ## Which way to push this frame, or zero for "stay put".
+##
+## NO ARRIVAL SLACK WHILE DIGGING. The slack exists so a bot that has reached a waypoint stops
+## rather than shuffling on the spot, and it is half a metre -- half a cell. The digger works in
+## whole cells and decides for itself when it is standing in one, so borrowing the slack here
+## would park it on the boundary between the cell it is in and the face it is cutting, which
+## reads as a mouse that has forgotten what it was doing. Standing still is expressed the honest
+## way instead: the digger returns the bot's own position, and the heading comes out zero.
 func _heading() -> Vector3:
+	if _driven:
+		var to_cell := _goal - global_position
+		to_cell.y = 0.0
+		if to_cell.length() < 0.02:
+			return Vector3.ZERO
+		return to_cell.normalized()
+
 	var aim := _goal
 	var reach := arrival_slack
 	if not _route.is_empty():

@@ -17,6 +17,7 @@
 [ext_resource type="Script" path="res://scripts/maps/no_surface_zone.gd" id="27_patio"]
 [ext_resource type="Script" path="res://scripts/maps/boulder_field.gd" id="28_boulders"]
 [ext_resource type="Script" path="res://scripts/classes/sonar.gd" id="29_sonar"]
+[ext_resource type="Script" path="res://scripts/game/tunnel_sight.gd" id="30_sight"]
 [ext_resource type="Script" path="res://scripts/camera/camera_rig.gd" id="2_rig"]
 [ext_resource type="Script" path="res://scripts/tunnels/tunnel_network.gd" id="3_network"]
 [ext_resource type="Script" path="res://scripts/tunnels/dig_controller.gd" id="4_dig"]
@@ -259,6 +260,10 @@ grass_path = NodePath("../Surface/Grass")
 [node name="Spotting" type="Node" parent="."]
 script = ExtResource("22_spotting")
 camouflage_path = NodePath("../GrassCamouflage")
+
+[node name="TunnelSight" type="Node" parent="."]
+script = ExtResource("30_sight")
+network_path = NodePath("../Tunnels")
 
 [node name="ClassSwap" type="Node" parent="."]
 script = ExtResource("23_swap")

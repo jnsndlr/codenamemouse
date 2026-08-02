@@ -65,12 +65,17 @@ extends Control
 @export var mouth_color: Color = Color(0.98, 0.86, 0.55, 0.95)
 ## Thieves' cant left by a Sneak. Large enough to find, small enough not to read as an objective.
 @export var cant_size: float = 5.0
+## How solid an enemy cell you can currently SEE is drawn, against your own at full strength. It
+## multiplies the staleness fade rather than replacing it, so even a fresh sighting reads as the
+## weaker fact -- which it is. Your own corridor is a floor plan; theirs is a thing you glimpsed.
+@export_range(0.0, 1.0, 0.05) var enemy_seen_alpha: float = 0.55
 
 var _director: MatchDirector
 var _network: TunnelNetwork
 var _rig: Node3D
 var _spotting: Spotting
 var _sonar: Sonar
+var _sight: TunnelSight
 ## Metres to pixels, and where the middle of the yard sits on screen. Both settled once a frame
 ## in `_draw`, because `_at` is called a few dozen times after that.
 var _scale: float = 1.0
@@ -94,6 +99,8 @@ func _process(_delta: float) -> void:
 		_spotting = get_tree().get_first_node_in_group(Spotting.SPOTTING_GROUP) as Spotting
 	if _sonar == null:
 		_sonar = get_tree().get_first_node_in_group(Sonar.SONAR_GROUP) as Sonar
+	if _sight == null:
+		_sight = get_tree().get_first_node_in_group(TunnelSight.SIGHT_GROUP) as TunnelSight
 	queue_redraw()
 
 
@@ -189,11 +196,35 @@ func _tunnel_cells() -> void:
 		for cell: Vector2i in _network.known_shaft_cells(0, team):
 			var mouth := Vector2(cell.x, cell.y) * TunnelNetwork.CELL
 			draw_rect(Rect2(mouth - Vector2(side, side) * 0.5, Vector2(side, side)), mouth_color, true)
+		# Theirs, if somebody walked past it. Same glyph, thinning out -- an entrance you found is
+		# the same KIND of fact as one you cut, and the only difference is how long ago you were
+		# sure of it. A different symbol would say it was a different kind of hole.
+		if _sight != null:
+			var mouths: Dictionary = _sight.seen_mouths(team)
+			for cell: Vector2i in mouths:
+				var at := Vector2(cell.x, cell.y) * TunnelNetwork.CELL
+				var faded := mouth_color
+				faded.a *= float(mouths[cell]) * enemy_seen_alpha
+				draw_rect(Rect2(at - Vector2(side, side) * 0.5, Vector2(side, side)), faded, true)
 		return
 
 	for cell: Vector2i in _network.known_tunnel_cells(plane, team):
 		var centre := Vector2(cell.x, cell.y) * TunnelNetwork.CELL
 		draw_rect(Rect2(centre - Vector2(side, side) * 0.5, Vector2(side, side)), colour, true)
+
+	# ENEMY GROUND YOU HAVE LAID EYES ON, fading as your crew forgets it (M5). Drawn in the same
+	# earth colour rather than in a "them" colour, because the map is not naming an owner -- it is
+	# saying THERE IS FLOOR HERE, and the alpha is saying how sure you still are. A corridor that
+	# stopped at a bend, thinning out over fifteen seconds, is the honest picture of what a breach
+	# actually taught you.
+	if _sight == null:
+		return
+	var remembered: Dictionary = _sight.seen_cells(team, plane)
+	for cell: Vector2i in remembered:
+		var at := Vector2(cell.x, cell.y) * TunnelNetwork.CELL
+		var faded := colour
+		faded.a *= float(remembered[cell]) * enemy_seen_alpha
+		draw_rect(Rect2(at - Vector2(side, side) * 0.5, Vector2(side, side)), faded, true)
 
 
 ## The seams your crew has found, on the layer you are standing on (GDD section 3).

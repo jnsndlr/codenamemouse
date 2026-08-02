@@ -11,7 +11,7 @@
 
 | | |
 |---|---|
-| Players | **One player = one mouse.** 4v4 `[ASSUMED]` |
+| Players | **One player = one mouse.** 5v5 `[ASSUMED]` — raised from 4v4 at M5: five is the smallest crew that carries a full-time Engineer *and* a Sneak without giving up the defender or the raid, and the two specialists are what the hidden-information layer is made of |
 | Match length | 8 minutes, or first to 3 captures `[ASSUMED]` |
 | Camera | Fixed orthographic isometric, ~45° yaw / ~40° pitch, follow with lookahead |
 | Control | **Cursor steers**, W/S/A/D move relative to facing, hotkey abilities (§9) |
@@ -277,10 +277,21 @@ The asymmetry here is the best thing in the system:
 
 | Situation | What you see |
 |---|---|
-| **In your own tunnel** | Wall outlines extend **far ahead** — you know your network intimately |
-| **In an enemy tunnel** | **Direct line of sight only**, fog of war beyond. You are crawling blind. |
-| **On the surface** | Nothing underground, unless revealed |
+| **In your own tunnel** | **Lit far ahead** — your crew hung the lamps, and the map shows the whole floor plan |
+| **In an enemy tunnel** | **Unlit**, and mapped by direct line of sight only. You are crawling blind. |
+| **On the surface** | Nothing underground, unless revealed — except a shaft mouth, which is a hole in the lawn |
 | **Sneak sonar active** | **Q** briefly traces nearby geometry exactly one layer below, then leaves one shared cant mark |
+
+**The darkness is the fog** `[DECIDED]`. Rather than occluding an enemy corridor or veiling it,
+nothing lights it: a lamp is a thing a crew hung in its own network, so theirs is a hole you
+brought no lamp into. **Daylight down a shaft is exempt** — a beam is the sun, not a lamp. An enemy
+mouth therefore announces itself from the dark, which is the one thing an intruder gets for free
+and the way back out of a corridor you cannot read.
+
+**Sight puts enemy ground on your map, and time takes it off again.** A cell one of your crew can
+actually see is added and starts ageing the moment nobody can see it — the same memory as a spotted
+mouse, so the staleness rule is learned once. A corridor bending away stops at the bend: a breach
+tells you where you *are*, never where the route *goes*. Seeing a cell never makes it yours.
 
 **Sonar is a glimpse followed by a point, not permanent geometry.** It sounds a five-cell radius
 on the plane directly below the Sneak. The answering cells show through the floor for a moment;

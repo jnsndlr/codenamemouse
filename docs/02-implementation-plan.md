@@ -953,11 +953,14 @@ tells you what is under it before you dig at all.**
 **Question:** does the vision asymmetry create the tension we're betting on?
 
 - **Per-team tunnel visibility data** — **landed**; server filtering attaches at M7
-- **Own-tunnel wide awareness** — **landed**; enemy-tunnel line-of-sight + fog remains
+- **Own-tunnel wide awareness** — **landed**, as lamplight: you lit your network, so you read it
+- **Enemy-tunnel line of sight + fog** — **landed** (`tunnel_sight.gd`)
 - **Sneak class with sonar** — **landed**, including contestable cant marks
-- **Minimap layer rendering** — **landed**, now filtered to the local crew
+- **Minimap layer rendering** — **landed**, filtered to the local crew, with seen enemy ground
+  drawn faintly and fading
 
-**Done when:** crawling into an enemy tunnel is *frightening*.
+**Done when:** crawling into an enemy tunnel is *frightening*. **The systems are all in; the
+verdict is not.** That sentence is the milestone now — it can only be answered by playing one.
 
 #### In progress — a map is knowledge, and knowledge leaves marks (landed)
 
@@ -981,10 +984,107 @@ scan cooldown because it is counterplay, not a second use of the information abi
 leak, sonar ignores the plane two layers down, one scan leaves one mark, the owning crew can read
 it regardless of class, an enemy Generalist cannot, and an enemy Sneak can both read and erase it.
 
-**Still to build:** what a crew learns while physically inside an enemy tunnel — line of sight,
-fog/staleness, and how much of a corridor remains on the map after contact breaks. Sonar marks must
-stay points while that arrives; turning a mark into a flood-fill would erase the question M5 is
-supposed to answer.
+#### The dark, and what you can make out in it (landed)
+
+**Lamps are crew property.** Lighting every cell of a layer made an enemy corridor a warm,
+inhabited room, and it quietly undid the map rule beside it: the minimap could keep a floor plan
+secret all it liked while the world drew the whole route out in lamplight the moment you dropped
+into it. Now a lamp is a thing your crew hung there. Nothing is occluded, faded or fogged — the
+earth is exactly where it was and there is simply no light in it, which is a systems answer rather
+than a shader one and costs one condition instead of a fog volume. **Shaft daylight is exempt on
+purpose:** a beam is the sun, not a lamp, so an enemy mouth still shows from the dark. That is the
+one thing an intruder should get free, and it is the counterplay — the way out of a corridor you
+cannot read is to head for the light.
+
+**Sight grants, and time takes it back.** A cell of an enemy network that a crew member can
+actually see goes onto that crew's map and begins ageing the moment nobody can see it. The memory
+is `spotting.gd`'s to the letter — same seconds, same fade fraction, same confidence curve —
+because a player should learn the staleness rule once, and two decay models on one minimap would
+look like a bug in whichever one they noticed second. Line of sight is the grid rather than a
+raycast: underground the walls *are* the undug cells, so "can I see that" is exactly "is every cell
+between here and there open", answerable without a physics server, deterministically, in a headless
+audit, and identically on a server at M7. A corridor bending away stops at the bend. Enemy shaft
+mouths are learnt the same way from the lawn, and forgotten the same way.
+
+Seeing a cell never makes it yours. It ages out, and the crew is back to knowing what it dug.
+
+**And the fog is the ground itself.** The lid a trench is cut through is punched by a mask, and that
+mask is crew knowledge now rather than a picture of the earth: your cells, plus what you can
+currently make out. Built from every dug cell — which is how it shipped — it drew the enemy's whole
+floor plan into the world in front of you, complete, before you had been anywhere near it. **The
+minimap was carefully filtered and the world was not**, and the world is the one the player
+believes; the filtered minimap beside it was decorative. This is the more important half of the
+boundary and it was the half with no assertion on it, which is why there is one now, asked of the
+real mask rather than of the rule that fills it.
+
+#### Somebody had to have dug one (landed)
+
+M5's question cannot be asked of an empty yard. Through M4 nothing in a match ever cut a tunnel
+except the human, so "is an enemy tunnel frightening" had no enemy tunnel in it.
+
+**Crews are five**, past the GDD's four, and the extra seat is bought rather than scaled: five can
+carry a full-time Engineer and a Sneak without giving up the defender or the raid. Every seat is a
+row in `MatchDirector.SEATS` — a role and a class — replacing two independent `seat % 2`
+alternations that made a crew's composition an emergent property of an arithmetic expression.
+Written down, it can be argued with. The Engineer raids and the Sneak defends, both deliberately:
+an Engineer only digs somewhere worth digging *to*, and sonar under your own banner is how a crew
+finds out it is being tunnelled under.
+
+**Bots acquire their class rather than being born in it**, through `ClassSwap.allowed` — the same
+predicate the player's **C** key is gated on. So a bot spawns a Generalist standing in its own nest
+and is an Engineer a third of a second later, almost every swap happens on respawn (exactly where
+GDD §4 puts a free switch), and the swap point stops being machinery exercised by one human
+occasionally.
+
+> **A cover rule was tried here and removed.** Bots would take the Engineer seat when their crew had
+> none *standing*, on the theory that a digger is a capability rather than a preference. The theory
+> is fine; the behaviour was not. Engineers are scruffed constantly, so "standing" flips several
+> times a minute — every mouse that happened to be home flipped to Engineer, cut a stub, and flipped
+> back. It made composition jitter and the yard worse. **The second Engineer seat went the same
+> way**, and for a related reason: two of them raid, get interrupted and respawn independently, so a
+> crew ended up with two half-corridors instead of one that arrived somewhere. One Engineer that
+> reuses its own mouth builds a network. The fifth seat is a second Generalist raider.
+
+**And Engineer bots dig** (`bot_digger.gd`). It replaces exactly one rule in `bot.gd`'s ranking —
+the last one, going for their banner — because everything above that is a banner in play and a
+tunnel is a twenty-second investment. It comes up *short* of the objective so a tunnel is not a
+teleport, and when something urgent happens mid-corridor it stops driving and `route_planner.gd`
+walks the bot out through the mouth it came in by.
+
+Three rules make it build a network rather than make a mess, and all three were learnt from soaks
+rather than from thinking about it:
+
+- **Use a door before making one.** A raid is interrupted constantly, and a digger that cut a fresh
+  hole wherever it stood produced twenty-eight cells across *eleven* mouths in a minute — a yard of
+  three-tile pits. It now walks to its crew's nearest useful mouth, scored as the whole detour, and
+  only cuts a new one when there isn't a good one.
+- **Walk with the planner; dig at a face.** `_choose` returns solid earth only. When the way ahead
+  is already open there is nothing for a digger to decide, and saying so hands the bot to the
+  routing that can actually follow a corridor with a bend in it. A greedy one-cell stepper doing
+  the navigating walks into the outside of the first corner and oscillates, which is precisely what
+  two Engineers spent a soak doing.
+- **Go under it.** Stone ahead and stone to both sides is not a dead end, it is the wrong plane.
+  The bot sinks a shaft and carries on beneath — the behaviour the per-plane rock layouts were
+  designed for (GDD §3: go round it, or go under it) and the first thing in the game to do it on
+  purpose. Without it both crews' corridors stopped at the same midfield seam and the bots paced in
+  front of it.
+
+Plus stuck detection, a no-backtracking rule and a rest timer, because "the cell is open so I can
+walk into it" is very nearly true and fails often enough to deadlock a bot permanently.
+
+> **Two of those three bugs were invisible to the audit and obvious in a sixty-second soak.** The
+> check asserted that an Engineer opens earth, which a bot punching stubs all over the lawn passes
+> comfortably. What tells a corridor from a scatter is **cells per mouth**, and that assertion now
+> exists. The general lesson is about what a rule check can see: correctness questions belong in the
+> audit, and *quality of behaviour* questions need a soak that prints numbers you can look at.
+
+> **The sight check was built so it could not fail, and that is the second time.** The corner it
+> asserts you cannot see round was 8.1 cells away with sight set to 7 — so it tested the *radius*,
+> and passed cheerfully with the line-of-sight test stubbed to `return true`. The far leg is 6.7
+> cells out now: in range, and behind earth. Both halves were then verified by breaking them.
+> The tunnel audit taught this lesson once already (below); the shape of the mistake was different
+> and the moral was identical. **A test whose subject is arranged so the rule can't bite is not a
+> weak test, it is a green light with nothing behind it.**
 
 ---
 
@@ -1130,10 +1230,16 @@ clock, and bots that play the objective. Both audits pass (`tools/tunnel_audit.g
 per-plane rock, barricades, no-surface zones, per-crew vein knowledge and breakable surface
 boulders are stable. The Backyard BBQ layout and dig-controls pass return after the core rules.
 
-**M5 is in progress.** Per-team tunnel and shaft maps have landed, enemy routes no longer leak onto
-the minimap, and the Sneak can sound one level below and leave a cant mark that a rival Sneak can
-find and erase. Both audits pass, with the match suite now covering seventeen rule groups.
+**M5's systems are all built.** Per-team tunnel and shaft maps, sonar and its contestable cant,
+crew-owned lamplight, line-of-sight-with-fog into enemy corridors, and a lid cutaway that keeps the
+same secret the minimap does. Crews of five, bots that acquire their class at the nest, and Engineer
+bots that build one network per crew — going under the midfield rock rather than stopping at it —
+mean there are enemy tunnels to be frightened of in the first place. Both audits pass: fifteen
+tunnel scenarios and nineteen match rule groups.
 
-**Immediate next:** enemy-tunnel line of sight and fog. Entering or intersecting an opposing route
-must reveal only the cells the crew can actually see, with a deliberate rule for what goes stale
-after sight breaks. That completes the visibility asymmetry the sonar marks now sample.
+**Immediate next: play it, and give M5 its verdict.** The milestone's question — is crawling into
+an enemy tunnel *frightening* — is now the only thing standing between here and M6, and it is not a
+coding task. Answer it from inside one, in a full match. The dials if it lands short are `lamp_*`
+on the network, `sight_cells` and `memory_seconds` on `TunnelSight`, and `enemy_seen_alpha` on the
+minimap — but be willing to hear that it is a map problem rather than a tuning one, which is what
+both M3 and M4 concluded about the midfield. Then **M6: cheese is lives.**

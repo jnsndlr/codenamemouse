@@ -44,6 +44,40 @@ const CREW_NAMES: Array = [
 	["BRIE", "WICK", "GRIT", "RUSK", "CHAFF", "DUSK"],
 ]
 
+## What each seat is FOR: where it stands, and what it turns up as.
+##
+## ONE TABLE RATHER THAN TWO ALTERNATIONS. Role used to be `seat % 2` and class was not chosen at
+## all, which meant the composition of a crew was an emergent property of an arithmetic
+## expression -- readable only by working it out, and impossible to state an intent about. The
+## intent is stateable: every crew fields a defender at home, somebody going for the banner, and
+## the two specialists whose systems M5 is trying to observe. Written down, it can be argued with.
+##
+## THE ENGINEER RAIDS AND THE SNEAK DEFENDS, both on purpose. An Engineer only digs somewhere
+## worth digging to, and the place worth digging to is the other crew's half -- a defending
+## Engineer would cut a burrow around its own nest and prove nothing. The Sneak holds the nest
+## because sonar is a WATCH: sounding the layer below your own banner is how a crew finds out it
+## is being tunnelled under, which is the counterplay the Engineer's raid deserves.
+##
+## Seat 0 is the player's on blue. It is the Generalist because that is the on-ramp, and because
+## a human who wants something else can walk to the nest and press C.
+##
+## ONE ENGINEER, NOT TWO. The second Engineer seat was a mistake made for a good reason -- more
+## diggers, more tunnel, more for M5 to be about -- and it produced the opposite. Two of them raid
+## on separate errands, get interrupted separately and respawn separately, so a crew ended up with
+## two half-finished corridors rather than one that went anywhere. One Engineer, reusing its own
+## mouth (see bot_digger.gd), builds a network. The fifth seat is a second Generalist raider, which
+## is also the honest answer to "what does a crew actually need more of".
+##
+## Indexed modulo its own length, so `crew_size` can be turned up or down without this going out
+## of range.
+const SEATS: Array[Dictionary] = [
+	{"class": MouseClass.GENERALIST, "defends": false},
+	{"class": MouseClass.SNEAK, "defends": true},
+	{"class": MouseClass.ENGINEER, "defends": false},
+	{"class": MouseClass.BRUTE, "defends": true},
+	{"class": MouseClass.GENERALIST, "defends": false},
+]
+
 @export var blue_nest_path: NodePath
 @export var red_nest_path: NodePath
 @export var player_path: NodePath
@@ -84,10 +118,14 @@ const CREW_NAMES: Array = [
 ## (GDD section 1), so this is one honest number rather than two bot counts: the player takes a
 ## blue seat and every remaining seat on both sides is filled with a bot.
 ##
-## Three rather than the GDD's eventual four, because three is the smallest crew that can field
-## a defender and still have someone raiding -- and a defended nest is what makes the flag run
-## worth measuring. With nobody at home a steal is a walk.
-@export var crew_size: int = 3
+## FIVE, past the GDD's four, and the extra seat is bought for a reason rather than for scale.
+## Three was the smallest crew that could field a defender and still raid, which was the right
+## number while the only question was whether the flag run was tense. M5 asks a different one --
+## is an enemy tunnel frightening -- and that needs somebody to have DUG one. A crew of five can
+## carry a full-time Engineer and a Sneak without giving up the defender or the raid, so the
+## hidden-information systems get exercised in every match instead of when the seats happen to
+## line up.
+@export var crew_size: int = 5
 @export var bot_scene: PackedScene = preload("res://scenes/actors/bot.tscn")
 
 var _nests: Array[Nest] = []
@@ -414,12 +452,12 @@ func _scan_roster() -> void:
 		mouse.scruffed.connect(_on_scruffed)
 
 
-## Fill both crews. Seat 0 on blue is the player's, if there is one.
+## Fill both crews from `SEATS`. Seat 0 on blue is the player's, if there is one.
 ##
-## Roles alternate down the seats -- raider, defender, raider -- so no crew is ever all-attack
-## or all-defence regardless of what `crew_size` is set to. It also means the player's own crew
-## always has somebody minding the nest, which is what stops solo play being two mice running
-## past each other in opposite directions forever.
+## Both crews read the same table, so they are mirror images. That is worth more than variety
+## here: when the two sides differ, every observation about a match has a second explanation, and
+## M5's question -- is crawling into an enemy tunnel frightening -- cannot be answered by watching
+## a crew that was simply better staffed.
 func _spawn_bots() -> void:
 	if bot_scene == null:
 		return
@@ -430,9 +468,17 @@ func _spawn_bots() -> void:
 			if bot == null:
 				push_error("match director: bot scene is not a Mouse")
 				return
+			var post: Dictionary = SEATS[seat % SEATS.size()]
 			bot.name = "Bot%s%d" % [Team.name_of(side), seat]
 			bot.team = side
-			bot.role = Bot.DEFENDER if seat % 2 == 1 else Bot.RAIDER
+			bot.role = Bot.DEFENDER if bool(post["defends"]) else Bot.RAIDER
+			# The class the seat WANTS, and only that. It is NOT set here, deliberately: a bot
+			# acquires its class at its own nest through the same rule the player's C key obeys
+			# (class_swap.gd), and a bot spawns standing in that nest, so it arrives as a
+			# Generalist and is an Engineer a third of a second later. Dressing it correctly here
+			# would be the cheaper code and would make the swap point dead machinery -- exercised
+			# by one human occasionally instead of by ten mice every respawn.
+			bot.preferred_class = int(post["class"])
 			_name_seat(bot, side, seat)
 			# Positioned BEFORE it enters the tree. A body that exists at the origin for one
 			# frame and is moved afterwards depenetrates against its old overlap and its new

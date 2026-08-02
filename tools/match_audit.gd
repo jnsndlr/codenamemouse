@@ -82,6 +82,8 @@ func _initialize() -> void:
 		["cave_in", _check_cave_in],
 		["barricade", _check_barricade],
 		["sonar", _check_sonar],
+		["tunnel_sight", _check_tunnel_sight],
+		["engineer_bot", _check_engineer_bot],
 		["boulder", _check_boulder],
 	]
 
@@ -346,9 +348,12 @@ func _check_match_end() -> void:
 ## Full crews, left alone for three seconds. Anything wrong anywhere in the chain -- navmesh,
 ## agent, director, control loop -- shows up as a bot that hasn't moved.
 ##
-## The two roles are held to different bars on purpose, because "went somewhere" is the wrong
-## test for a defender: its job is to stand near its own nest, and a defender that sprinted off
-## across the arena would be the bug. A raider has to cover real ground.
+## The seats are held to different bars on purpose, because "went somewhere" is the wrong test
+## for most of them. A defender's job is to stand near its own nest, and a defender that sprinted
+## off across the arena would be the bug. An ENGINEER raider is measured in cells rather than
+## metres: it walks clear of the nest, cuts a mouth and then stands at a face for half a second a
+## tile, so the correct behaviour and a bot frozen by a broken control loop look identical from a
+## tape measure. Only a raider with no other errand has to cover real ground.
 func _check_bots_move() -> void:
 	await _arena(3)
 	await _advance(0.5)
@@ -374,11 +379,14 @@ func _check_bots_move() -> void:
 	for i in range(bots.size()):
 		var bot := bots[i]
 		var home := _director.nest_of(bot.team).global_position
+		var moved := bot.global_position.distance_to(starts[i])
 		if bot.role == Bot.RAIDER:
+			# Either it covered ground or it went under it. Both are "on its way over"; standing
+			# on the lawn where it started is the only answer that is not.
 			_expect(
-				bot.global_position.distance_to(starts[i]) > 3.0,
-				"%s is on its way over (moved %.1fm, intent: %s)" % [
-					bot.name, bot.global_position.distance_to(starts[i]), bot.get_intent()
+				moved > 3.0 or bot.get_plane() > 0,
+				"%s is on its way over (moved %.1fm, plane %d, intent: %s)" % [
+					bot.name, moved, bot.get_plane(), bot.get_intent()
 				]
 			)
 			continue
@@ -701,6 +709,186 @@ func _check_sonar() -> void:
 	press.pressed = true
 	sonar._unhandled_input(press)
 	_expect(sonar.marks_for(Team.BLUE, MouseClass.GENERALIST, 0).is_empty(), "the rival Sneak erases it")
+
+
+## Sight into an enemy tunnel, and the clock that takes it back. (M5, GDD section 3)
+##
+## THE ASSERTIONS ARE ARRANGED AROUND ONE SHAPE OF FAILURE. A leak here is silent, always in the
+## direction of knowing too much, and looks from the blue seat exactly like the feature working --
+## so every claim about what blue learnt is paired with one about what blue must still not know,
+## and the corridor is built with a bend in it precisely so there is something on the far side
+## that sight must not reach.
+##
+## THE BEND IS THE WHOLE TEST, AND IT HAS TO BE INSIDE THE RADIUS. A straight corridor would pass
+## with no line-of-sight code at all, because "everything in range" and "everything in range you
+## can see" are the same set down a pipe. The first version of this check had the far leg 8.1
+## cells away with sight set to 7, so it was asserting the RANGE and passed cheerfully with the
+## line test stubbed out to `return true` -- a check that could not fail, which is the failure mode
+## the tunnel audit already taught this project once. The corner cell is 6.7 cells out now:
+## comfortably in range, and behind solid earth.
+func _check_tunnel_sight() -> void:
+	await _arena(1)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+	var sight := _scene.get_node_or_null("TunnelSight") as TunnelSight
+	if sight == null:
+		_expect(false, "the arena has a tunnel sight")
+		return
+	# Short memory, so the fade can be watched inside an audit rather than over fifteen seconds.
+	sight.memory_seconds = 1.0
+	sight.fade_fraction = 1.0
+
+	# Red cuts an L: a run east along z = 20, then a turn north. Nothing of the second leg is on
+	# the line of the first, which is what makes it unseeable from inside the first.
+	var mouth := Vector2i(10, 20)
+	for x in range(10, 17):
+		_expect(network.dig(1, Vector2i(x, 20), Team.RED), "red cuts its corridor at x=%d" % x)
+	for y in range(19, 16, -1):
+		_expect(network.dig(1, Vector2i(16, y), Team.RED), "red turns the corner at y=%d" % y)
+
+	var lit := Vector2i(12, 20)
+	var round_the_bend := Vector2i(16, 17)
+	_expect(
+		Vector2(round_the_bend - mouth).length() < float(sight.sight_cells),
+		"the far leg is inside sight range, so only the line test can hide it (%.1f cells)" % (
+			Vector2(round_the_bend - mouth).length()
+		)
+	)
+	_expect(not sight.knows(Team.BLUE, 1, lit), "blue starts knowing none of it")
+	_expect(sight.knows(Team.RED, 1, lit), "and red knows its own without looking")
+
+	# Blue drops into the near end of it.
+	var scout := _puppet(Team.BLUE, network.cell_to_world(1, mouth) + Vector3.UP * 0.2)
+	scout.set_plane(1)
+	await _advance(0.4)
+
+	_expect(sight.knows(Team.BLUE, 1, lit), "standing in an enemy corridor reveals what it can see")
+	_expect(
+		not sight.knows(Team.BLUE, 1, round_the_bend),
+		"but not the leg round the corner -- sight does not flood-fill"
+	)
+	# THE CELL IS NOT ADOPTED. Seeing a cell must not make it blue's own, or the crew would keep
+	# it forever and the fog below would never get a chance to fail.
+	_expect(
+		not network.is_tunnel_known(1, lit, Team.BLUE),
+		"and a cell you merely saw is not a cell you cut"
+	)
+	_expect(
+		sight.knows(Team.RED, 1, round_the_bend),
+		"and red still holds the whole of its own route while being looked at"
+	)
+
+	# Not "exactly 1". A cell in view is refreshed once a SWEEP and ages every frame in between,
+	# so its confidence saws between full and one interval's worth of decay -- and with the memory
+	# compressed to a second for this check, one interval is a quarter of it. The claim worth
+	# making is that a cell being looked at stays near the top of the range; the claim that it is
+	# never a hair under 1.0 would be a claim about the sweep rate.
+	var fresh: Dictionary = sight.seen_cells(Team.BLUE, 1)
+	_expect(
+		fresh.get(lit, 0.0) > 1.0 - sight.interval / sight.memory_seconds - 0.01,
+		"a cell in view stays at full confidence between sweeps (%.2f)" % fresh.get(lit, 0.0)
+	)
+
+	# Sight breaks: the scout is scruffed where it stands. Lying on your back is not looking.
+	scout.global_position = network.cell_to_world(1, mouth) + Vector3.UP * 0.2
+	scout.take_hit(9999.0, Vector3.ZERO, 0.0)
+	await _advance(0.5)
+	var stale: Dictionary = sight.seen_cells(Team.BLUE, 1)
+	_expect(
+		stale.get(lit, 1.0) < 0.9,
+		"and starts going stale the moment nobody can see it (%.2f)" % stale.get(lit, 1.0)
+	)
+	await _advance(1.0)
+	_expect(not sight.knows(Team.BLUE, 1, lit), "and is forgotten outright on time")
+	_expect(sight.knows(Team.RED, 1, lit), "while red still has its own corridor")
+
+	# AND THE SAME RULE HOLDS IN THE WORLD, which is the half that was shipped broken. The lid
+	# cutaway is drawn from a mask keyed on every dug cell, so an enemy corridor was punched out of
+	# the earth in front of you -- whole, and before you had been anywhere near it. A leak here is
+	# far worse than one on the minimap: it is the picture the player actually believes.
+	network.show_crew_knowledge(Team.BLUE)
+	_expect(
+		not network.is_cut_away(1, lit),
+		"blue's earth stays shut over a corridor blue has never seen"
+	)
+	network.show_crew_knowledge(Team.RED)
+	_expect(network.is_cut_away(1, lit), "and red can see into the corridor red dug")
+	_expect(network.is_cut_away(1, round_the_bend), "all of it, including round its own corner")
+
+
+## Bots put a class on at their nest, and an Engineer uses it. (M5)
+##
+## TWO RULES THAT ARE EASY TO SHIP BROKEN AND IMPOSSIBLE TO SEE BROKEN. A bot that never swaps
+## looks like a crew of Generalists, which is what it looked like before this existed and nobody
+## noticed for four milestones. A digger that never digs looks like a bot walking to the banner,
+## which is also what it looked like before. Neither failure raises anything.
+##
+## The soak is long because a corridor is: five metres of walking to clear the nest, then half a
+## second a tile. Judged on whether the earth changed at all, not on how far it got -- how far is
+## a balance number and this is a wiring check.
+func _check_engineer_bot() -> void:
+	await _arena(5)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+	await _advance(0.5)
+
+	var engineers: Array[Bot] = []
+	var classes: Dictionary = {}
+	for node in root.get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
+		var bot := node as Bot
+		if bot == null:
+			continue
+		classes[bot.mouse_class] = true
+		if bot.mouse_class == MouseClass.ENGINEER:
+			engineers.append(bot)
+
+	# The director hands out a WANT, not a costume -- a bot acquires its class by standing in its
+	# own nest. If this comes back as one entry, the swap never happened and every seat below is
+	# a Generalist wearing a different name.
+	_expect(classes.size() >= 3, "bots swapped into their seats (found %d classes)" % classes.size())
+	_expect(not engineers.is_empty(), "a crew of five fields an Engineer")
+	if engineers.is_empty():
+		return
+	for bot: Bot in engineers:
+		_expect(bot.role == Bot.RAIDER, "%s digs toward somewhere worth digging to" % bot.name)
+
+	var before := network.cell_count(1)
+	var mouths_before := network.shaft_cells(0).size()
+	await _advance(14.0)
+	var after := 0
+	for plane in range(1, TunnelNetwork.PLANE_COUNT):
+		after += network.cell_count(plane)
+	_expect(after > before, "an Engineer bot opens earth on its own (%d -> %d cells)" % [before, after])
+
+	# CORRIDORS, NOT STUBS, and this is the assertion the first version needed and did not have.
+	# A digger that starts a fresh hole every time its raid is interrupted still passes "opens
+	# earth" -- it opens plenty. What it does not do is build anything: the first soak produced
+	# twenty-eight cells spread over ELEVEN mouths, a yard full of three-tile pits that went
+	# nowhere. Cells per mouth is the number that tells those two apart, and it is the only number
+	# here that would have caught it.
+	var mouths := network.shaft_cells(0).size() - mouths_before
+	_expect(
+		mouths <= 4,
+		"and reuses its way in rather than starting again (%d new mouths)" % mouths
+	)
+	_expect(
+		mouths == 0 or float(after - before) / float(mouths) >= 6.0,
+		"so a mouth leads to a corridor (%.1f cells per mouth)" % (
+			float(after - before) / float(maxi(mouths, 1))
+		)
+	)
+
+	# AND THE CELLS ARE ITS CREW'S. A bot digging with team -1 would quietly hand every corridor
+	# to both sides and make the whole of M5's boundary a fact about the human's digging only.
+	var owned := 0
+	var leaked := 0
+	for side in [Team.BLUE, Team.RED]:
+		for cell: Vector2i in network.known_tunnel_cells(1, side):
+			owned += 1
+			if network.is_tunnel_known(1, cell, Team.other(side)):
+				leaked += 1
+	_expect(owned > 0, "the cells a bot cut are on somebody's map")
+	# A junction is legitimately shared, so this is not "zero" -- it is "not all of them". Two
+	# crews digging from opposite corners cannot have met everywhere.
+	_expect(leaked < owned, "and not on both crews' maps (%d of %d shared)" % [leaked, owned])
 
 
 ## Boulders: the obstruction you can see, and the one a Brute can take apart. (M4, GDD section 3)

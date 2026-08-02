@@ -97,6 +97,43 @@ Nearby tunnel cells shimmer briefly on the ground above, then resolve to one per
 thieves' cant in the world and on your crew's minimap. An enemy Generalist cannot read it; an enemy
 Sneak can, and can rub it out with **Q** from arm's reach. A mark gives away a place, never the route.
 
+**And an enemy corridor is a dark hole you brought no lamp into.** Lamps are crew property now:
+your own network is warm and readable far ahead, and theirs simply has no light in it. Nothing is
+occluded or faded — the earth is exactly where it was, there is just nothing lighting it. Daylight
+falling down a shaft is deliberately exempt, because a beam is the sun rather than a lamp: an enemy
+mouth still announces itself from the dark, which is the one thing an intruder gets for free and
+the way back out of a corridor you can't read.
+
+**And what you see in there goes onto your map, then goes stale.** A cell of an enemy network one
+of your crew can actually see is added to your map and starts ageing the moment nobody can see it —
+the same fifteen seconds and the same fade curve `spotting.gd` already uses for mice, because the
+staleness rule should be learned once. Line of sight is the grid itself: a cell is visible when
+every cell between here and there is open, so a corridor bending away stops at the bend. A breach
+tells you where you are, never where the route goes. Enemy shaft mouths work the same way from the
+lawn — walk past one and it's on your map, thinning out.
+
+**The same rule cuts the ground itself.** The lid you look down into a trench through is punched by
+a mask, and that mask is now crew knowledge rather than a picture of the earth — your cells, plus
+whatever you can currently make out. Enemy ground reads as solid earth until somebody looks at it,
+and closes over again when the sighting is forgotten: **the fog is the ground healing.** Built from
+every dug cell instead, it drew the enemy's entire floor plan into the world in front of you before
+you had been near it, which made the carefully filtered minimap beside it decorative.
+
+**Crews are five, and the bots use all four classes.** Every seat has a role and a class it wants
+(`MatchDirector.SEATS`), and a bot *acquires* that class by standing in its own nest, through the
+same rule the player's **C** key obeys — so almost every swap happens on respawn, which is exactly
+where GDD §4 says a free switch belongs.
+
+**Engineer bots dig, and they build one network rather than a field of pits.** An Engineer walks to
+its crew's existing mouth if there is one and only cuts a fresh entrance when there isn't; underground
+it walks to the head of its own corridor **using the route planner** and cuts only when it is
+standing at solid earth. When a seam blocks all three ways forward it sinks a shaft and carries on
+underneath — which is what the per-plane rock layouts were always for, and the first thing in the
+game to do it on purpose. Each tile costs the same half-second a player pays.
+
+That is what makes M5 testable at all: before it, no enemy had ever dug anything for you to be
+frightened of.
+
 The Backyard BBQ layout and the dig-controls pass are deliberately deferred. That leaves M4's
 surface-versus-tunnel *verdict* unanswered, but its core systems are stable; level design can test
 that question after the core visibility and economy details exist.
@@ -120,9 +157,9 @@ GDD §10's furniture, built now that there are systems behind it.
   A banner glyph per crew: solid is home, pulsing is stolen, dim is dropped. A strip appears
   under the bug with the return countdown, and only while something is actually away.
 - **Minimap, bottom left** — the yard, **your crew's tunnels** on the plane you occupy, sonar cant,
-  the nests, both banners and your crew. Enemy routes stay hidden. **It turns with the view**, so
-  up on the map is up the screen; at the fixed
-  45° yaw that draws the yard as the diamond the concept art has.
+  the nests, both banners and your crew. Enemy routes stay hidden until somebody *sees* them, and
+  then they show faintly and fade back out. **It turns with the view**, so up on the map is up the
+  screen; at the fixed 45° yaw that draws the yard as the diamond the concept art has.
 - **Crew roster, bottom right** — a portrait, a name, a class tag, and health in **segments**
   rather than as a sliding bar, because the question on a roster is "how many more hits", which
   is a number. Chunks are the crew's colour while everyone is fine and degrade through amber to
@@ -278,10 +315,76 @@ mouse and the swap point has a place and a price, checks **only the Engineer can
 in** (and on whom, and how often), checks a **barricade blocks the routing graph and only a Brute
 shifts it** (and the supply, and the cooldown, and that the cell comes back afterwards), checks a
 **Sneak sounds exactly one layer down, leaves crew-readable cant, and a rival Sneak can erase it**,
-checks tunnel cells and mouths never leak from one crew's map to the other's, checks a
-**boulder shuts the earth under it on plane 1 and not on plane 2** and that five Brute swings free
-one cell of it and leave the rest of the rock standing, and checks **who may appear on the
-minimap**: not through a prop, not through a plane, not without being seen, and forgotten on time.
+checks tunnel cells and mouths never leak from one crew's map to the other's, checks that
+**standing in an enemy corridor reveals what you can see and not the leg round the corner** — and
+that what you saw goes stale and is forgotten on time, and never becomes a cell you own, **and that
+the ground itself stays shut over a corridor you have never seen**, asked of the real cutaway mask
+rather than of the rule that fills it — checks
+**bots swap into their seats and an Engineer bot opens earth on its own**, into its own crew's map
+rather than into both — and that what it opens is a **corridor rather than a scatter of stubs**,
+measured as cells per mouth — checks a **boulder shuts the earth under it on plane 1 and not on plane 2**
+and that five Brute swings free one cell of it and leave the rest of the rock standing, and checks
+**who may appear on the minimap**: not through a prop, not through a plane, not without being seen,
+and forgotten on time.
+
+> **The sight check was built wrong first, in the way this project has now been bitten by twice.**
+> The corner it asserts you cannot see round was 8.1 cells away with sight set to 7 — so it was
+> testing the *radius*, and it passed happily with the line-of-sight test stubbed out to
+> `return true`. The far leg is 6.7 cells out now: in range, and behind solid earth. Both halves of
+> the check were then verified by breaking them — disabling the line test fails the corner
+> assertion, and stopping the ageing fails the two staleness assertions.
+
+### The behaviour soak
+
+```bash
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/bot_soak.gd -- 90
+```
+
+**The audits ask whether the rules hold. This asks whether the bots are any good** — and the two
+questions need different tools, because almost every way an AI can be bad is perfectly legal. An
+Engineer that punches a three-tile pit, wanders off, respawns and punches another one breaks no
+rule at all: every dig is valid, every cell is correctly attributed, and the audit's "an Engineer
+bot opens earth on its own" passes comfortably. It was also, for a while, exactly what they did.
+
+It runs a real match and prints a table every five seconds — cells per plane, **cells per mouth**,
+and every bot's class, plane, distance travelled and current intent. It fails on the two things
+that are unambiguous rather than merely worse than last time: a bot **frozen** in place for fifteen
+seconds while trying to go somewhere (a scruffed mouse and a defender at its post are excused), and
+a network that is all entrances and no tunnel.
+
+> **Four bot bugs came out of the first two runs, three of them invisible from reading the code:**
+> the digger read its own steering back as its destination and dug at a fourteenth speed; it started
+> a fresh hole every time a raid was interrupted; a greedy stepper was doing the corridor
+> navigation and oscillated at every bend; and the frontier it walked to could be the cell it was
+> already standing in. The first soak measured 28 cells across **11** mouths. It now reaches ~108
+> cells across **2**, on two planes, having gone under the midfield rock.
+>
+> The general shape: **correctness belongs in an audit; quality of behaviour needs numbers you
+> look at.** The one assertion that would have caught the pits — cells per mouth — now exists in
+> `match_audit.gd` too.
+
+### Visual probes
+
+These need a real renderer, so no `--headless`. Each writes PNGs to `/tmp` for you to eyeball.
+
+```bash
+/Applications/Godot.app/Contents/MacOS/Godot --path . --resolution 1100x760 --script tools/cutaway_probe.gd
+```
+
+Photographs one piece of earth twice, changing only which crew is looking: each viewer stands in
+its own corridor with the other crew's running three cells away. **Exactly one open trench per
+shot, and it is lit.** Two trenches in either shot is the M5 leak — the one that shipped, where the
+lid cutaway was built from every dug cell and drew the enemy's whole floor plan into the ground in
+front of you while the minimap beside it kept the secret perfectly.
+
+`match_audit.gd` asserts this against the mask texture, which is one step short of the truth: the
+lid is discarded in a shader that samples that mask with its own idea of where a cell is, and
+`earth_cutaway.gdshader` warns that if the two ever disagree "the holes land half a cell off the
+tunnels they belong to". A mask that is perfectly correct and sampled half a cell out passes every
+headless check in the project and still shows you their tunnel. Only a photograph closes that gap.
+
+`sonar_probe.gd`, `rock_top_probe.gd` and `arena_probe.gd` work the same way for the sonar echo and
+cant mark, revealed rock caps, and the arena at large.
 
 > **The tunnel audit spent its whole life passing without testing anything, and that is worth
 > knowing about.** `const STRIP: Array[String] = [...] + STRIP_MATCH` produces an *untyped*
@@ -298,12 +401,12 @@ docs/           design documents
 art/            Blender source files and shaders, imported directly by Godot
 scenes/         player, bots, maps
 scripts/actors/ the mouse itself — locomotion, health, melee, carrying
-scripts/game/   teams, nests, banners, the match rules, who can see whom
-scripts/ai/     bots
+scripts/game/   teams, nests, banners, the match rules, who can see whom and what
+scripts/ai/     bots, and the Engineer's raid
 scripts/ui/     score bug, minimap, roster, feed, and the skin they share
 scripts/tunnels/the network, the routing graph, shaft transit, digging
 scripts/        player, camera, maps, input setup
-tools/          headless audits
+tools/          headless audits, a behaviour soak, and visual probes needing a real renderer
 ```
 
 ## Art pipeline
@@ -338,12 +441,23 @@ rather than in `project.godot`, because that file serializes input bindings as o
 unreadable line. Move them into Project Settings > Input Map when you want in-editor
 rebinding.
 
-## Next: the rest of M5
+## Next: play M5 and give it a verdict
 
-The first M5 slice has landed: tunnel cells and mouths are per-crew map knowledge, and the Sneak's
-sonar turns a short-lived glimpse of the layer below into one contestable cant mark. What remains
-is enemy-tunnel line of sight and fog: entering an enemy corridor should reveal only what the crew
-can actually see, then forget or stale it without ever filling in the connected route.
+**M5's systems are all in.** Tunnel cells and mouths are per-crew map knowledge; the Sneak's sonar
+turns a glimpse of the layer below into one contestable cant mark; lamps belong to the crew that
+hung them, so an enemy corridor is unlit; and sight into an enemy network grants cells one line of
+open floor at a time and forgets them on a clock. Crews of five with class-swapping bots and
+digging Engineers mean the yard fills with corridors somebody else made, which is the condition the
+milestone needed to be answerable at all.
+
+**What's left is not code — it's the answer.** M5 asks whether crawling into an enemy tunnel is
+*frightening*. Go and find out, in a full match, from inside one. If it isn't, the dials are
+`lamp_*` on the network, `sight_cells` and `memory_seconds` on `TunnelSight`, and `enemy_seen_alpha`
+on the minimap — but be willing to hear that the answer is a map problem rather than a tuning one,
+which is what M3 and M4 both said about the midfield.
+
+Then **M6 — cheese is lives**: caches, carrying, team stores, respawn cost, and the bankruptcy play.
+The Backyard BBQ layout and the dig-controls pass still stand behind it.
 
 The Backyard BBQ layout still matters, but it is no longer the sequencing gate. It and the
 dig-controls pass return after the core systems, when the surface and tunnel routes can be laid

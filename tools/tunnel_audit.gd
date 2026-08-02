@@ -721,7 +721,7 @@ func _check_reveal() -> void:
 	# THE PICTURE FOLLOWS THE KNOWLEDGE, and it is drawn for exactly one crew. Without this the
 	# whole reveal can be correct and invisible, which from the only seat anybody plays from is
 	# indistinguishable from it not working.
-	_network.show_known_rock(Team.BLUE)
+	_network.show_crew_knowledge(Team.BLUE)
 	if (_network._rock_caps[1] as MeshInstance3D).mesh == null:
 		_fail("REVEAL", "the vein was learned but nothing is drawn over it")
 	else:
@@ -731,7 +731,7 @@ func _check_reveal() -> void:
 			and (cap_material as StandardMaterial3D).cull_mode != BaseMaterial3D.CULL_DISABLED
 		):
 			_fail("REVEAL", "the rock top exists but is back-face culled from above")
-	_network.show_known_rock(Team.RED)
+	_network.show_crew_knowledge(Team.RED)
 	if (_network._rock_caps[1] as MeshInstance3D).mesh != null:
 		_fail("REVEAL", "the other crew is shown a vein it has never touched")
 

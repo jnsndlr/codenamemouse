@@ -220,6 +220,11 @@ var _tunnel_known: Array[Dictionary] = []
 ## upper plane -> {cell: team bits}: who cut and therefore knows each shaft. Kept separately from
 ## the landing cell because the surface minimap draws mouths rather than plane-1 floors.
 var _shaft_known: Array[Dictionary] = []
+## plane -> {cell: true}: enemy cells the VIEWING crew can currently make out, pushed in by
+## tunnel_sight.gd. Only ever the one crew's, because this exists to decide what to draw and there
+## is one camera -- the authoritative per-crew books live in the sight node, where M7 can filter
+## them per client.
+var _glimpsed: Array[Dictionary] = []
 ## plane -> {cell: true}: dug cells something is standing in the way of. Today that is a
 ## barricade; a cave-in makes a cell stop existing, which is a different thing entirely.
 var _obstructed: Array[Dictionary] = []
@@ -233,7 +238,7 @@ var _rock_faces: Array[MeshInstance3D] = []
 var _rock_caps: Array[MeshInstance3D] = []
 ## Whose knowledge the caps are showing. -1 until somebody asks, because a network in a headless
 ## audit has no player and should draw nothing.
-var _cap_team: int = -1
+var _view_team: int = -1
 var _bodies: Array[StaticBody3D] = []
 var _shapes: Array[CollisionShape3D] = []
 var _floor_materials: Array[StandardMaterial3D] = []
@@ -266,6 +271,7 @@ func _init() -> void:
 		_known.append({})
 		_tunnel_known.append({})
 		_shaft_known.append({})
+		_glimpsed.append({})
 		_obstructed.append({})
 
 
@@ -576,7 +582,7 @@ func reveal_vein(plane: int, cell: Vector2i, team: int) -> int:
 ## that has to be wired up in `_ready` is a listener somebody can delete and not notice: the caps
 ## would simply stop updating, which looks exactly like the reveal not working.
 func _announce_rock(plane: int, teams: int) -> void:
-	if _cap_team >= 0 and teams & (1 << _cap_team) != 0:
+	if _view_team >= 0 and teams & (1 << _view_team) != 0:
 		_rebuild_rock_caps(plane)
 	rock_revealed.emit(plane, teams)
 
@@ -687,6 +693,14 @@ func _learn_tunnel_cell(plane: int, cell: Vector2i, team: int) -> void:
 	if before == after:
 		return
 	_tunnel_known[plane][cell] = after
+	# The viewing crew just gained a cell it did not have -- a junction an enemy broke into, or a
+	# landing a shaft dropped onto ground that was already open. `dig` punches its own texel, but
+	# neither of those goes through `dig`, and a cell that is on your map and not in your cutaway
+	# is a corridor you can route through and cannot see.
+	if _view_team >= 0 and _cells[plane].has(cell):
+		var eye := 1 << _view_team
+		if before & eye == 0 and after & eye != 0:
+			_mark_mask(plane, cell, true)
 	tunnel_revealed.emit(plane, bits)
 
 
@@ -802,6 +816,11 @@ func dig(plane: int, cell: Vector2i, team: int = -1) -> bool:
 	_mark_mask(plane, cell, true)
 	_refresh_cell(plane, cell)
 	_rebuild_walls(plane)
+	# A corridor lights itself as it is cut. This used to wait for the next focus change, which
+	# meant digging away from your last lamp ran out of light and stayed dark until you climbed a
+	# shaft and came back down -- survivable while every cell was lit anyway, and not survivable
+	# now that a lit cell is what tells your own network apart from theirs.
+	_relight(plane)
 	cell_opened.emit(plane, cell)
 	return true
 
@@ -849,6 +868,37 @@ func can_collapse(plane: int, cell: Vector2i) -> bool:
 	if plane <= 0 or plane >= PLANE_COUNT or not _cells[plane].has(cell):
 		return false
 	return not _shafts[plane].has(cell) and not has_shaft_up(plane, cell)
+
+
+## ASKING BEFORE ACTING, for anything that would rather try somewhere else than be told no.
+##
+## `dig` and the two shaft calls all announce their refusal on `dig_refused`, which is right: that
+## signal is how a player finds out the controls are not broken, and swallowing it once cost a
+## whole session to the entrance key looking dead. It is exactly wrong for a BOT. An AI reconsiders
+## its route three times a second, and every rock face it probes would shout "solid rock -- go
+## round it" across the human's HUD, in the middle of a match the human is playing. So the tests
+## are available without the voice, and the rule stays in one place rather than being reimplemented
+## by the caller doing the swallowing -- which is how the two would drift apart.
+func can_dig(plane: int, cell: Vector2i) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT or _cells[plane].has(cell):
+		return false
+	return in_bounds(cell) and not _rock[plane].has(cell)
+
+
+func can_shaft_down(plane: int, cell: Vector2i) -> bool:
+	return _shaft_refusal(plane, cell) == ""
+
+
+## Mirrors `dig_shaft_up`'s own guards, in its order. A shaft up is a shaft down cut from below, so
+## the bulk of the answer is the same question asked one plane higher -- with the one difference
+## that `dig_shaft_up` OPENS its landing on the way through, so a ceiling that is still solid earth
+## is not a refusal there and must not be one here.
+func can_shaft_up(plane: int, cell: Vector2i) -> bool:
+	if plane <= 0 or is_rock(plane - 1, cell):
+		return false
+	if plane == 1 and is_sealed(cell):
+		return false
+	return _shaft_refusal(plane - 1, cell, true) == ""
 
 
 ## Sink a shaft from `plane` down to `plane + 1`, at the cell the player is standing on.
@@ -909,7 +959,12 @@ func dig_shaft_up(plane: int, cell: Vector2i, team: int = -1) -> bool:
 
 
 ## Why a shaft can't be sunk here, or "" if it can.
-func _shaft_refusal(plane: int, cell: Vector2i) -> String:
+##
+## `floor_may_be_cut` is for the view from below. `dig_shaft_up` opens its own landing before it
+## records anything, so asked on ITS behalf a ceiling of plain earth is not an obstacle -- only a
+## ceiling that could never be opened is. Everything else about the two directions is identical,
+## which is why they share this rather than each keeping a list.
+func _shaft_refusal(plane: int, cell: Vector2i, floor_may_be_cut: bool = false) -> String:
 	if plane < 0 or plane + 1 >= PLANE_COUNT:
 		return "nothing below to break into"
 	if not in_bounds(cell):
@@ -923,7 +978,8 @@ func _shaft_refusal(plane: int, cell: Vector2i) -> String:
 	# Plane 0 is the surface: standing anywhere on it is standing on solid ground, so an
 	# entrance needs no floor cut first. Below that you have to be in a tunnel.
 	if plane > 0 and not _cells[plane].has(cell):
-		return "no floor to sink a shaft from"
+		if not floor_may_be_cut or not can_dig(plane, cell):
+			return "no floor to sink a shaft from"
 	if _shafts[plane].has(cell):
 		return "a shaft is already here"
 	# A shaft is only worth sinking if there is somewhere to arrive. Checked HERE rather than being
@@ -1072,6 +1128,44 @@ func mask_half_cells() -> int:
 	return MASK_HALF_CELLS
 
 
+## THE CUTAWAY IS A PIECE OF CREW KNOWLEDGE, not a picture of the ground (M5).
+##
+## This mask is what the lid shader discards against, so a texel set here is a hole in the earth
+## you can see a corridor through. Set from `_cells` -- every dug cell, whoever cut it -- it
+## handed the entire layer away: standing anywhere in your own plane-1 tunnel, the whole of the
+## enemy network was cut out of the earth around you in plain sight, complete, before you had gone
+## anywhere near it. The minimap was carefully filtered and the WORLD was not, which is the more
+## convincing of the two and quietly cancelled the milestone.
+##
+## So the mask is the same set the minimap draws: the cells this crew cut, plus the cells it can
+## currently make out (tunnel_sight.gd). Enemy earth reads as earth until somebody looks at it, and
+## goes back to earth when the sighting is forgotten -- the fog is literally the ground closing
+## over again.
+##
+## `_view_team < 0` means nobody is looking -- a headless audit, an editor preview -- and gets the
+## whole layer, which is what those want and cannot leak anything to.
+func _mask_wants(plane: int, cell: Vector2i) -> bool:
+	if _view_team < 0:
+		return _cells[plane].has(cell)
+	return is_tunnel_known(plane, cell, _view_team) or _glimpsed[plane].has(cell)
+
+
+## Is the earth over this cell actually open, as the shader will read it?
+##
+## Asked of the MASK rather than recomputed from the same inputs, deliberately. The whole failure
+## this exists to catch is the drawn world disagreeing with the rule -- a check that recomputed
+## `_mask_wants` would agree with itself no matter what the texture said, and the texture is what
+## the player sees.
+func is_cut_away(plane: int, cell: Vector2i) -> bool:
+	if plane < 0 or plane >= _mask_images.size():
+		return false
+	var x := cell.x + MASK_HALF_CELLS
+	var y := cell.y + MASK_HALF_CELLS
+	if x < 0 or y < 0 or x >= MASK_HALF_CELLS * 2 or y >= MASK_HALF_CELLS * 2:
+		return false
+	return _mask_images[plane].get_pixel(x, y).r > 0.5
+
+
 ## Punch or heal one texel. The entire cost of keeping the cutaway in sync -- no mesh, no CSG,
 ## no rebuild.
 func _mark_mask(plane: int, cell: Vector2i, dug: bool) -> void:
@@ -1079,8 +1173,58 @@ func _mark_mask(plane: int, cell: Vector2i, dug: bool) -> void:
 	var y := cell.y + MASK_HALF_CELLS
 	if x < 0 or y < 0 or x >= MASK_HALF_CELLS * 2 or y >= MASK_HALF_CELLS * 2:
 		return
-	_mask_images[plane].set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0) if dug else Color(0, 0, 0, 1))
+	var show := dug and _mask_wants(plane, cell)
+	_mask_images[plane].set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0) if show else Color(0, 0, 0, 1))
 	_mask_textures[plane].update(_mask_images[plane])
+
+
+## Redraw a whole plane's cutaway from scratch, for when who is looking -- or what they can see --
+## changes rather than what has been dug.
+##
+## Whole rather than incremental, and cheap enough to be: `fill` is one native memset and the loop
+## touches only the cells that ARE visible, which is tens to low hundreds. The alternative is
+## diffing two sets to find the handful of texels that changed, which is more code to get wrong in
+## a place where being wrong means leaking a corridor.
+func _rebuild_mask(plane: int) -> void:
+	if plane < 0 or plane >= _mask_images.size():
+		return
+	var image := _mask_images[plane]
+	image.fill(Color(0.0, 0.0, 0.0, 1.0))
+	for cell: Vector2i in _cells[plane]:
+		if not _mask_wants(plane, cell):
+			continue
+		var x := cell.x + MASK_HALF_CELLS
+		var y := cell.y + MASK_HALF_CELLS
+		if x < 0 or y < 0 or x >= MASK_HALF_CELLS * 2 or y >= MASK_HALF_CELLS * 2:
+			continue
+		image.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
+	_mask_textures[plane].update(image)
+
+
+## What the viewing crew can currently make out of somebody else's network on this plane. Pushed
+## in by tunnel_sight.gd rather than pulled, for the reason `show_crew_knowledge` gives: the
+## network must not go hunting through the match for whose eyes it is drawing.
+##
+## Ignored outright for any crew that is not the one looking, so the caller does not have to know
+## which that is -- and at M7, when the answer is per-client, it still will not have to.
+func show_glimpsed(team: int, plane: int, cells: Array) -> void:
+	if team != _view_team or plane <= 0 or plane >= PLANE_COUNT:
+		return
+	if cells.size() == _glimpsed[plane].size():
+		var same := true
+		for cell: Vector2i in cells:
+			if not _glimpsed[plane].has(cell):
+				same = false
+				break
+		if same:
+			return
+	_glimpsed[plane].clear()
+	for cell: Vector2i in cells:
+		_glimpsed[plane][cell] = true
+	# The earth opens up; the LAMPS do not follow. A cell you can see is still a cell nobody on
+	# your crew hung a light in, and lighting what you glimpse would give the corridor back the
+	# inhabited look the darkness was introduced to take away.
+	_rebuild_mask(plane)
 
 
 ## Warm pools along the corridors of the focused layer.
@@ -1089,6 +1233,23 @@ func _mark_mask(plane: int, cell: Vector2i, dug: bool) -> void:
 ## evenly. A lattice looks reasonable and then lights nothing: a one-cell-wide corridor
 ## running along z = -5 contains no cell whose z is a multiple of four, so the whole corridor
 ## came out pitch black while the cells around the origin were fine.
+##
+## A LAMP IS A THING YOUR CREW HUNG THERE (M5, GDD section 3). Lighting every cell of the layer
+## made an enemy corridor a warm, legible, inhabited room -- the exact opposite of what the
+## milestone is trying to produce, and it undid the map rule beside it: the minimap could keep the
+## floor plan secret all it liked while the world drew the whole route out in lamplight the moment
+## you dropped into it.
+##
+## SO THE DARKNESS IS THE FEATURE, and it is a systems answer rather than a shader one. Nothing is
+## hidden, occluded or faded -- the earth is exactly where it was, and there is simply no light in
+## it. Your own network reads far ahead because you lit it; theirs is a hole you brought no lamp
+## into, which is what GDD section 3 means by crawling blind, and it costs one condition rather
+## than a fog volume.
+##
+## SHAFT DAYLIGHT IS DELIBERATELY LEFT ALONE. A beam falling down a hole is the sun, not a lamp,
+## and it does not care who cut it -- so an enemy mouth still announces itself from the dark, which
+## is the one piece of information an intruder should get for free. It is also the counterplay: the
+## way out of a corridor you cannot read is to head for the light.
 func _rebuild_lamps(plane: int) -> void:
 	var root := _lamp_roots[plane]
 	for child in root.get_children():
@@ -1098,7 +1259,12 @@ func _rebuild_lamps(plane: int) -> void:
 
 	var spacing := maxi(1, lamp_spacing_cells)
 	var lit: Array[Vector2i] = []
-	var cells: Array = _cells[plane].keys()
+	# Nobody looking means nobody to keep a secret from -- a headless audit and an editor preview
+	# both get the whole layer lit, which is what they want and cannot leak anything to.
+	var cells: Array = (
+		_cells[plane].keys() if _view_team < 0
+		else known_tunnel_cells(plane, _view_team)
+	)
 	cells.sort()  # Deterministic, so the same network always lights the same way.
 
 	for cell: Vector2i in cells:
@@ -1265,18 +1431,28 @@ func _make_rock_top_material() -> StandardMaterial3D:
 	return material
 
 
-## Draw the veins `team` has found, on every plane. Called by whatever knows who is looking.
+## Draw the world as `team` knows it: the veins they have found, and the corridors they lit.
 ##
 ## THE VIEWER IS TOLD TO THE NETWORK RATHER THAN LOOKED UP BY IT, because a network that went
 ## hunting for "the player" would be a rendering object reaching into the match to find out whose
 ## side it is on -- and at M7 there is no single answer to that question on a server. One caller,
 ## one line, and the day this is per-client it is the caller that changes.
-func show_known_rock(team: int) -> void:
-	if team == _cap_team:
+##
+## ONE CHANNEL FOR EVERY PER-CREW THING THE WORLD DRAWS, which is why this is no longer called
+## `show_known_rock`. Rock caps came first and got a name that described that week's feature; lamps
+## are the second thing to need the same answer and fog will be the third. A second setter would
+## have meant two ways to be told who is looking, and the interesting bug -- one of them being told
+## and the other not -- would show up as the earth knowing something the light did not.
+func show_crew_knowledge(team: int) -> void:
+	if team == _view_team:
 		return
-	_cap_team = team
+	_view_team = team
 	for plane in range(PLANE_COUNT):
 		_rebuild_rock_caps(plane)
+		# Everything anyone had been glimpsing belonged to the crew that was looking a moment ago.
+		_glimpsed[plane].clear()
+		_rebuild_mask(plane)
+	_rebuild_lamps(_focus)
 
 
 ## One flat sheet per plane, over the cells this crew knows about.
@@ -1288,11 +1464,11 @@ func _rebuild_rock_caps(plane: int) -> void:
 	if plane < 0 or plane >= _rock_caps.size():
 		return
 	var cap := _rock_caps[plane]
-	if _cap_team < 0 or plane <= 0:
+	if _view_team < 0 or plane <= 0:
 		cap.mesh = null
 		return
 
-	var known := known_rock_cells(plane, _cap_team)
+	var known := known_rock_cells(plane, _view_team)
 	if known.is_empty():
 		cap.mesh = null
 		return

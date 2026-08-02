@@ -162,7 +162,7 @@ func _process(delta: float) -> void:
 	# and a one-off call in `_ready` would miss the player being handed a different mouse.
 	var side: Variant = _player.get("team")
 	if side != null:
-		_network.show_known_rock(int(side))
+		_network.show_crew_knowledge(int(side))
 
 	# Below plane 1 the surface isn't dimmed, it's GONE -- you are looking down at the earth
 	# lid of your own layer, and the garden two storeys up would only float over the top of it.

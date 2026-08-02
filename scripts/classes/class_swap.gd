@@ -22,6 +22,11 @@ extends Node
 ## RESPAWNING IS ALREADY COVERED, and that is not an accident. GDD section 4 also makes a switch
 ## free on respawn -- and a respawn puts you at your own nest, which is where this works. There
 ## is no second mechanism.
+##
+## BOTS OBEY THE SAME RULE, through `allowed` below rather than through a copy of it. This node is
+## the player's input handler and a bot has no input, but WHERE a class change is legal is not an
+## input question -- it is a rule, and the moment it exists twice the two copies start to differ.
+## A bot that could re-spec mid-corridor would be a bot playing a different game.
 
 @export var player_path: NodePath
 @export var director_path: NodePath
@@ -38,19 +43,24 @@ func _ready() -> void:
 		set_process_unhandled_input(false)
 
 
-## Whether the mouse this is watching could swap right now.
+## Whether ANY mouse may change class where it is standing. The rule, in one place.
 ##
 ## Scruffed is excluded deliberately, and it is the interesting exclusion: you lie where you fell
 ## for six seconds, and if that spot happens to be your own nest you should not be able to spend
 ## the wait shopping for a class. Coming back on your feet and then pressing C is the same
 ## action with the tempo cost the design asked for.
+static func allowed(mouse: Mouse, director: MatchDirector) -> bool:
+	if mouse == null or director == null or not director.is_playing():
+		return false
+	if mouse.is_scruffed() or mouse.get_plane() != 0:
+		return false
+	var nest := director.nest_of(mouse.team)
+	return nest != null and nest.contains(mouse.global_position)
+
+
+## Whether the mouse this node is watching could swap right now.
 func available() -> bool:
-	if _player == null or _director == null or not _director.is_playing():
-		return false
-	if _player.is_scruffed() or _player.get_plane() != 0:
-		return false
-	var nest := _director.nest_of(_player.team)
-	return nest != null and nest.contains(_player.global_position)
+	return allowed(_player, _director)
 
 
 ## What the contextual hint should say, or "" when there is nothing on offer.
