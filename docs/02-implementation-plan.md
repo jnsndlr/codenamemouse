@@ -598,7 +598,7 @@ behind it.
 - ~~**Bots path through tunnels** via `AStar3D` over dug cells~~ **done** — this was the
   milestone's centre of gravity, since M3 already ships digging and the flag map together.
   Until bots can follow, digging isn't a decision, it's an exploit.
-- Dig controls pass (GDD §9 open question)
+- Dig controls pass (GDD §9 open question) — **deferred with level design**
 - ~~per-plane rock obstructions~~ **done**, and ~~no-surface zones belong with the patio they are
   a rule about, which makes them part of the Backyard BBQ layout~~ — **reversed, and they are done
   too.** A zone is a footprint and a refusal; the patio is a thing you can see. Only the second
@@ -607,6 +607,12 @@ behind it.
 
 **Done when:** you'd rather take the tunnel than the surface route — and the choice
 feels like a real decision rather than an obvious one.
+
+> **Sequencing decision: the M4 systems are closed and its verdict is deferred.** The real
+> Backyard BBQ layout is still required to answer the done-when honestly, but level design is no
+> longer a gate in front of M5. Visibility and economy are core rules that can land against the
+> greybox; the map and dig-controls pass return after them, when routes can be laid out and tuned
+> once around the systems they will actually carry.
 
 #### In progress — the Engineer, and classes that mean something (landed)
 
@@ -946,12 +952,39 @@ tells you what is under it before you dig at all.**
 
 **Question:** does the vision asymmetry create the tension we're betting on?
 
-- Server-filtered per-team tunnel visibility
-- Own-tunnel wide awareness vs. enemy-tunnel line-of-sight + fog
-- Sneak class with sonar
-- Minimap layer rendering
+- **Per-team tunnel visibility data** — **landed**; server filtering attaches at M7
+- **Own-tunnel wide awareness** — **landed**; enemy-tunnel line-of-sight + fog remains
+- **Sneak class with sonar** — **landed**, including contestable cant marks
+- **Minimap layer rendering** — **landed**, now filtered to the local crew
 
 **Done when:** crawling into an enemy tunnel is *frightening*.
+
+#### In progress — a map is knowledge, and knowledge leaves marks (landed)
+
+Every dug cell and shaft now carries a two-bit knowledge mask, parallel to the rock knowledge M4
+proved out. Live digging grants the cell to the digger's crew only. If blue and red corridors meet,
+the physical intersection opens exactly as before, but neither side receives the connected enemy
+route on its minimap: the map shows what your crew made, not everything the shared `AStar3D` graph
+can traverse. Authored and audit geometry defaults to both crews so test fixtures remain neutral.
+
+The Sneak's **Q** sounds a five-cell radius on exactly one plane below. Every nearby tunnel cell
+answers as a brief outline on the floor above; when the echo fades, only the nearest answer remains
+as one persistent piece of thieves' cant in the world and on the crew's minimap. That is the
+information bargain: a scan proves *there is a route here* without handing over its shape.
+
+The cant belongs to the crew, but it is not secret from the class that speaks it. An enemy
+Generalist cannot see the mark at all; an enemy Sneak can see it in the world and on the minimap,
+and pressing **Q** from arm's reach erases it before attempting another scan. Clearing ignores the
+scan cooldown because it is counterplay, not a second use of the information ability.
+
+`match_audit` now mirrors every knowledge assertion across both teams: cells and mouths do not
+leak, sonar ignores the plane two layers down, one scan leaves one mark, the owning crew can read
+it regardless of class, an enemy Generalist cannot, and an enemy Sneak can both read and erase it.
+
+**Still to build:** what a crew learns while physically inside an enemy tunnel — line of sight,
+fog/staleness, and how much of a corridor remains on the map after contact breaks. Sonar marks must
+stay points while that arrives; turning a mark into a flood-fill would erase the question M5 is
+supposed to answer.
 
 ---
 
@@ -1093,19 +1126,14 @@ entire server.
 clock, and bots that play the objective. Both audits pass (`tools/tunnel_audit.gd`,
 `tools/match_audit.gd`).
 
-**M4 is most of the way through.** Classes, the cave-in, bots pathing through tunnels, per-plane
-rock, the barricade, no-surface zones, per-crew vein knowledge and breakable surface boulders have
-all landed; both audits pass, now with rock, barricade, paving, reveal and boulder invariants in
-them.
+**M4's systems are done; its level-design verdict is deferred.** Classes, the cave-in, tunnel bots,
+per-plane rock, barricades, no-surface zones, per-crew vein knowledge and breakable surface
+boulders are stable. The Backyard BBQ layout and dig-controls pass return after the core rules.
 
-**One thing is left, and one is deliberately parked.**
+**M5 is in progress.** Per-team tunnel and shaft maps have landed, enemy routes no longer leak onto
+the minimap, and the Sneak can sound one level below and leave a cant mark that a rival Sneak can
+find and erase. Both audits pass, with the match suite now covering seventeen rule groups.
 
-1. **The Backyard BBQ layout (GDD §8).** This is a prerequisite for M4's own question rather than
-   polish for later, and both M3 and M4 arrived at it independently: no route under an
-   eighty-metre field of open dirt can beat the straight line over the top of it, so the planner
-   keeps correctly answering "walk", and "would you rather take the tunnel?" cannot be asked. Rock
-   makes the *underground* a routing problem; only the map can make the *surface* one — and the
-   no-surface rule the patio needs is now built and tested, waiting for a patio to be a rule about.
-2. **The dig-controls pass, tabled.** Point-and-hold is good enough to keep playing with, and the
-   map is still what will tell you whether it is the friction or the fun. Tuning it against an
-   empty yard would mean tuning it twice.
+**Immediate next:** enemy-tunnel line of sight and fog. Entering or intersecting an opposing route
+must reveal only the cells the crew can actually see, with a deliberate rule for what goes stale
+after sight breaks. That completes the visibility asymmetry the sonar marks now sample.

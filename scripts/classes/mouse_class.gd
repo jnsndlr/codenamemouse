@@ -28,11 +28,8 @@ const DEFINITIONS: Array[ClassDefinition] = [
 
 ## How many the swap point walks through.
 ##
-## All four are pickable, and only one of them is finished. The stat spreads are real -- the
-## Sneak is genuinely fast and fragile, the Brute is genuinely a wall that can barely move
-## underground -- but Second Wind, Slam, Barricade and Sonar do not exist yet, so three of these
-## are currently a set of numbers wearing a name. The Engineer is the one with its capability
-## attached, which is the point of doing it first.
+## All four are pickable. The Engineer and Sneak now have their defining map-control abilities;
+## Second Wind and Slam remain later work for the Generalist and Brute.
 const COUNT: int = 4
 
 

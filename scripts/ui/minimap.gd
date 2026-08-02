@@ -28,9 +28,9 @@ extends Control
 ## the shaft mouths instead, which is the only part of the network that means anything from up
 ## there.
 ##
-## Tunnels are still drawn for BOTH crews, which is more than M5 will allow once per-team tunnel
-## visibility lands. Rock already works that way -- see `_known_rock` -- because it arrived after
-## the per-crew machinery existed; tunnels will follow it.
+## TUNNELS ARE CREW KNOWLEDGE. A cell your crew cuts appears; an enemy cell does not. If the two
+## routes meet, the physical intersection exists in the world without donating either connected
+## floor plan to the other map. Sonar adds a cant mark at one detected place, never the route.
 
 @export var director_path: NodePath
 @export var network_path: NodePath
@@ -63,15 +63,14 @@ extends Control
 ## surface. Bright, because it is a handful of tiles on an otherwise empty panel and it is answering
 ## "where do I get in", not "what does the network look like".
 @export var mouth_color: Color = Color(0.98, 0.86, 0.55, 0.95)
+## Thieves' cant left by a Sneak. Large enough to find, small enough not to read as an objective.
+@export var cant_size: float = 5.0
 
 var _director: MatchDirector
 var _network: TunnelNetwork
 var _rig: Node3D
 var _spotting: Spotting
-## Per plane: the cell centres, in world XZ. Rebuilt only when the count changes -- the map is
-## redrawn sixty times a second and the network changes a few times a minute.
-var _tunnels: Array[PackedVector2Array] = []
-var _counted: Array[int] = []
+var _sonar: Sonar
 ## Metres to pixels, and where the middle of the yard sits on screen. Both settled once a frame
 ## in `_draw`, because `_at` is called a few dozen times after that.
 var _scale: float = 1.0
@@ -88,14 +87,13 @@ func _ready() -> void:
 	_director = get_node_or_null(director_path) as MatchDirector
 	_network = get_node_or_null(network_path) as TunnelNetwork
 	_rig = get_node_or_null(camera_rig_path) as Node3D
-	for plane in range(TunnelNetwork.PLANE_COUNT):
-		_tunnels.append(PackedVector2Array())
-		_counted.append(-1)
 
 
 func _process(_delta: float) -> void:
 	if _spotting == null:
 		_spotting = get_tree().get_first_node_in_group(Spotting.SPOTTING_GROUP) as Spotting
+	if _sonar == null:
+		_sonar = get_tree().get_first_node_in_group(Sonar.SONAR_GROUP) as Sonar
 	queue_redraw()
 
 
@@ -131,6 +129,7 @@ func _draw() -> void:
 	_nests()
 	_mice()
 	_contacts()
+	_cant_marks()
 	_banners()
 
 
@@ -178,6 +177,7 @@ func _tunnel_cells() -> void:
 		return
 	var player := _director.get_player()
 	var plane := player.get_plane() if player != null else 0
+	var team := player.team if player != null else Team.BLUE
 
 	# A touch wider than a cell. Drawn at exactly one cell, adjacent tiles leave hairline seams at
 	# this scale and a corridor reads as a dotted line rather than as a route you could take.
@@ -186,13 +186,13 @@ func _tunnel_cells() -> void:
 	var colour := Color(0.50, 0.36, 0.22, 0.85).lerp(Color(0.24, 0.18, 0.13, 0.6), depth)
 
 	if plane <= 0:
-		for cell: Vector2i in _network.shaft_cells(0):
+		for cell: Vector2i in _network.known_shaft_cells(0, team):
 			var mouth := Vector2(cell.x, cell.y) * TunnelNetwork.CELL
 			draw_rect(Rect2(mouth - Vector2(side, side) * 0.5, Vector2(side, side)), mouth_color, true)
 		return
 
-	_refresh_plane(plane)
-	for centre: Vector2 in _tunnels[plane]:
+	for cell: Vector2i in _network.known_tunnel_cells(plane, team):
+		var centre := Vector2(cell.x, cell.y) * TunnelNetwork.CELL
 		draw_rect(Rect2(centre - Vector2(side, side) * 0.5, Vector2(side, side)), colour, true)
 
 
@@ -225,17 +225,6 @@ func _known_rock() -> void:
 	for cell: Vector2i in _network.known_rock_cells(plane, side):
 		var centre := Vector2(cell.x, cell.y) * TunnelNetwork.CELL
 		draw_rect(Rect2(centre - box * 0.5, box), rock_color, true)
-
-
-func _refresh_plane(plane: int) -> void:
-	var count := _network.cell_count(plane)
-	if count == _counted[plane]:
-		return
-	_counted[plane] = count
-	var points := PackedVector2Array()
-	for cell: Vector2i in _network.dug_cells(plane):
-		points.append(Vector2(cell.x, cell.y) * TunnelNetwork.CELL)
-	_tunnels[plane] = points
 
 
 ## A nest is a PLATE, not a circle. At this scale its real radius comes out about the size of a
@@ -305,6 +294,26 @@ func _contacts() -> void:
 				draw_arc(at, (crew_dot + 2.5) * _ui, 0.0, TAU, 14, shade, 1.2 * _ui)
 		else:
 			draw_arc(at, crew_dot * _ui, 0.0, TAU, 14, shade, 1.8 * _ui)
+
+
+## Persistent tunnel locations sounded out by a Sneak. Your crew sees its own cant; an enemy
+## Sneak sees the marks too, because finding and erasing them is the counterplay.
+func _cant_marks() -> void:
+	if _sonar == null or _director == null:
+		return
+	var player := _director.get_player()
+	if player == null:
+		return
+	for mark: SonarMark in _sonar.marks_for(player.team, player.mouse_class, player.get_plane()):
+		var at := _at(mark.global_position)
+		var colour := Team.color_of(mark.owner_team).lerp(Color(0.95, 0.91, 0.72), 0.55)
+		var size := cant_size * _ui
+		var stroke := 1.5 * _ui
+		draw_polyline(
+			PackedVector2Array([at + Vector2(-size, -size * 0.35), at, at + Vector2(size, -size * 0.35)]),
+			colour, stroke
+		)
+		draw_line(at, at + Vector2(0.0, size), colour, stroke)
 
 
 ## Both banners, over the top of everything, because they are what the match is about. Drawn as

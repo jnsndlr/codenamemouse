@@ -40,6 +40,9 @@ extends SceneTree
 ##                   not. A contact goes stale where it was last seen and is forgotten on time.
 ##                   This is hidden information (GDD section 3) and every failure of it leaks
 ##                   the wrong way -- silently, and in the direction of knowing too much.
+##   SONAR           A crew maps only the cells and mouths it cut. A Sneak sounds exactly one
+##                   layer below, leaves one shared cant mark, and only an enemy Sneak can see
+##                   and erase it.
 ##
 ## TIMED RULES ARE TESTED SHORT. The audit sets the return clock and the respawn to fractions
 ## of a second rather than waiting the real twenty and six. Those numbers are balance dials
@@ -78,6 +81,7 @@ func _initialize() -> void:
 		["classes", _check_classes],
 		["cave_in", _check_cave_in],
 		["barricade", _check_barricade],
+		["sonar", _check_sonar],
 		["boulder", _check_boulder],
 	]
 
@@ -609,6 +613,94 @@ func _check_barricade() -> void:
 		"and routes through it again -- the graph got the cell back"
 	)
 	_expect(wall.in_hand() == 1, "and the Engineer gets the slot back")
+
+
+## Hidden tunnel knowledge and the Sneak's way of sampling it. (M5)
+##
+## Every assertion has a mirror for the other crew. A visibility feature that leaks is much
+## easier to ship than one that does nothing: from the blue seat, both look like "my map works".
+func _check_sonar() -> void:
+	await _arena(1)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+	var sonar := _scene.get_node_or_null("Sonar") as Sonar
+	var player := _director.get_player()
+	if sonar == null or player == null:
+		_expect(false, "the arena has sonar and a player")
+		return
+
+	var blue_cell := Vector2i(-16, -16)
+	var red_cell := Vector2i(7, 6)
+	var red_beside := Vector2i(8, 6)
+	var deeper := Vector2i(7, 7)
+	_expect(network.dig(1, blue_cell, Team.BLUE), "blue can cut a known cell")
+	_expect(network.dig(1, red_cell, Team.RED), "red can cut its own hidden cell")
+	_expect(network.dig(1, red_beside, Team.RED), "red can extend its hidden route")
+	_expect(network.dig(2, deeper, Team.RED), "there is also a deeper route to ignore")
+	_expect(network.is_tunnel_known(1, blue_cell, Team.BLUE), "blue maps the cell it cut")
+	_expect(not network.is_tunnel_known(1, blue_cell, Team.RED), "red does not get blue's cell")
+	_expect(network.is_tunnel_known(1, red_cell, Team.RED), "red maps the cell it cut")
+	_expect(not network.is_tunnel_known(1, red_cell, Team.BLUE), "blue does not get red's cell")
+	var junction := blue_cell + Vector2i(1, 0)
+	var red_after := blue_cell + Vector2i(2, 0)
+	_expect(network.dig(1, junction, Team.RED), "red can break into blue's route")
+	_expect(
+		network.is_tunnel_known(1, junction, Team.BLUE)
+		and network.is_tunnel_known(1, junction, Team.RED),
+		"the intersecting cell is the one shared junction"
+	)
+	_expect(network.dig(1, red_after, Team.RED), "red can continue past the junction")
+	_expect(
+		not network.is_tunnel_known(1, red_after, Team.BLUE),
+		"but the connected enemy route does not leak past it"
+	)
+
+	# Mouths obey the same boundary. Kept far apart so the shaft exclusion rule is not the reason
+	# one side fails to receive one.
+	_expect(network.dig_shaft_down(0, Vector2i(-18, -18), Team.BLUE), "blue cuts a mouth")
+	_expect(network.dig_shaft_down(0, Vector2i(18, 18), Team.RED), "red cuts another mouth")
+	_expect(
+		network.known_shaft_cells(0, Team.BLUE).has(Vector2i(-18, -18)),
+		"blue maps its own mouth"
+	)
+	_expect(
+		not network.known_shaft_cells(0, Team.BLUE).has(Vector2i(18, 18)),
+		"and not red's mouth"
+	)
+
+	player.set_physics_process(false)
+	player.set_class(MouseClass.GENERALIST)
+	player.global_position = network.cell_to_world(0, Vector2i(7, 6)) + Vector3.UP * 0.2
+	player.set_plane(0)
+	_expect(sonar.scan() == 0, "a Generalist cannot sound through the floor")
+
+	player.set_class(MouseClass.SNEAK)
+	var heard := sonar.scan()
+	_expect(heard == 2, "a Sneak hears the two cells exactly one layer below, not the deeper one")
+	var blue_marks := sonar.marks_for(Team.BLUE, MouseClass.GENERALIST, 0)
+	_expect(blue_marks.size() == 1, "one scan leaves one cant mark for the crew")
+	if blue_marks.is_empty():
+		return
+	var mark := blue_marks[0]
+	_expect(mark.target_plane == 1, "the mark says the answer is one layer down")
+	_expect(
+		not sonar.marks_for(Team.RED, MouseClass.GENERALIST, 0).has(mark),
+		"an enemy Generalist cannot read the cant"
+	)
+	_expect(
+		sonar.marks_for(Team.RED, MouseClass.SNEAK, 0).has(mark),
+		"an enemy Sneak can read it"
+	)
+
+	# The rival Sneak has to stand at the mark and spend Q. Clearing is allowed even while the
+	# scan cooldown is running; it is counterplay, not another scan.
+	player.set_team(Team.RED)
+	player.set_class(MouseClass.SNEAK)
+	player.global_position = mark.global_position + Vector3.UP * 0.2
+	var press := InputEventAction.new()
+	press.action = "ability"
+	press.pressed = true
+	sonar._unhandled_input(press)
+	_expect(sonar.marks_for(Team.BLUE, MouseClass.GENERALIST, 0).is_empty(), "the rival Sneak erases it")
 
 
 ## Boulders: the obstruction you can see, and the one a Brute can take apart. (M4, GDD section 3)

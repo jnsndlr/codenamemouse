@@ -724,6 +724,13 @@ func _check_reveal() -> void:
 	_network.show_known_rock(Team.BLUE)
 	if (_network._rock_caps[1] as MeshInstance3D).mesh == null:
 		_fail("REVEAL", "the vein was learned but nothing is drawn over it")
+	else:
+		var cap_material := (_network._rock_caps[1] as MeshInstance3D).mesh.surface_get_material(0)
+		if (
+			cap_material is StandardMaterial3D
+			and (cap_material as StandardMaterial3D).cull_mode != BaseMaterial3D.CULL_DISABLED
+		):
+			_fail("REVEAL", "the rock top exists but is back-face culled from above")
 	_network.show_known_rock(Team.RED)
 	if (_network._rock_caps[1] as MeshInstance3D).mesh != null:
 		_fail("REVEAL", "the other crew is shown a vein it has never touched")

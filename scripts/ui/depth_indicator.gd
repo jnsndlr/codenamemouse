@@ -62,9 +62,14 @@ func _process(delta: float) -> void:
 	# shaft_prompt.gd now, on its own line at the bottom of the screen.
 	var hint := (
 		"F: sink a shaft     arrows: turn view     double-tap W: sprint" if plane <= 0
-		else "aim + hold LMB: dig a tile     F: shaft down     R: shaft up"
+		else "aim + hold RMB: dig a tile     F: shaft down     R: shaft up"
 			+ "\narrows: turn view     double-tap W: sprint     shift: slow"
 	)
+	var kind: int = int(_player.get("mouse_class"))
+	if kind == MouseClass.SNEAK:
+		hint += "\nQ: sound below / erase enemy cant"
+	elif kind == MouseClass.ENGINEER and plane > 0:
+		hint += "\nQ: cave in     X: barricade"
 	var blocked := "\n\nBLOCKED: %s" % _refusal if _refusal_left > 0.0 else ""
 	text = "%s\n%s\n\n%s%s" % [
 		NAMES[clampi(plane, 0, NAMES.size() - 1)], " ".join(counts), hint, blocked

@@ -167,8 +167,8 @@ is free, and neither is permanent.
 ### Breaching enemy networks `[DECIDED]`
 
 **Accidental unless you have detection.** You can't deliberately target an enemy tunnel
-you haven't revealed — running into one is a discovery, and a memorable one. Once Sneak
-sonar has marked a segment, an Engineer *can* aim for it.
+you haven't revealed — running into one is a discovery, and a memorable one. A Sneak sonar mark
+is the location a later targeted breach can use; it does not reveal the connected route.
 
 When two networks meet:
 
@@ -280,7 +280,16 @@ The asymmetry here is the best thing in the system:
 | **In your own tunnel** | Wall outlines extend **far ahead** — you know your network intimately |
 | **In an enemy tunnel** | **Direct line of sight only**, fog of war beyond. You are crawling blind. |
 | **On the surface** | Nothing underground, unless revealed |
-| **Sneak sonar active** | A pulse reveals tunnel geometry in a radius **through earth**, shared with the team |
+| **Sneak sonar active** | **Q** briefly traces nearby geometry exactly one layer below, then leaves one shared cant mark |
+
+**Sonar is a glimpse followed by a point, not permanent geometry.** It sounds a five-cell radius
+on the plane directly below the Sneak. The answering cells show through the floor for a moment;
+the nearest answer remains as a small thieves'-cant rune in the world and on the crew minimap.
+The mark says *a tunnel is here* without saying where it goes.
+
+Cant has class counterplay. Everyone on the owning crew can read its marks. On the enemy crew,
+only a Sneak can see them; from arm's reach that Sneak presses **Q** to erase one instead of
+scanning. Marks persist until cleared.
 
 Raiding an enemy network should feel genuinely frightening — you don't know what's
 around the corner and they do.
@@ -461,7 +470,7 @@ without these.
 |---|---|
 | Fantasy | The one you don't see until it's too late |
 | Stats | **Lowest health**, fastest, **highest burst damage** |
-| **Unique capability** | **Sonar** — pulses to reveal enemy tunnel geometry through earth, shared with the team |
+| **Unique capability** | **Sonar** — briefly sounds one layer below and leaves contestable thieves' cant for the team |
 | Ability | *Fade* — hard to see while moving slowly; broken by attacking or sprinting |
 | Weakness | Dies to anything that touches them. Loses every fair fight. |
 | Role | Scouting, assassin, counter-Engineer, cache raider |

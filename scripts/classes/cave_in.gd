@@ -134,8 +134,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _player == null or _player.is_scruffed():
 		return
 
+	# Q is the primary CLASS ability, not a global cave-in button. Other classes leave the event
+	# untouched so their own ability node can claim it (the Sneak's Sonar is the first).
 	if _player.mouse_class != owner_class:
-		refused.emit("only the %s can bring a tunnel down" % MouseClass.name_of(owner_class))
 		return
 	if _player.get_plane() <= 0:
 		refused.emit("nothing to bring down up here")

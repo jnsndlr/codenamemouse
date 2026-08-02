@@ -64,11 +64,12 @@ func _physics_process(delta: float) -> void:
 
 	_resync_plane()
 	var standing := _network.world_to_cell(_player.global_position)
+	var side := _team()
 
 	if Input.is_action_just_pressed("shaft_down"):
-		_network.dig_shaft_down(_plane, standing)
+		_network.dig_shaft_down(_plane, standing, side)
 	if Input.is_action_just_pressed("shaft_up"):
-		_network.dig_shaft_up(_plane, standing)
+		_network.dig_shaft_up(_plane, standing, side)
 	if Input.is_action_just_pressed("burrow"):
 		_take_shaft(standing)
 		return
@@ -95,7 +96,7 @@ func _update_dig(delta: float) -> void:
 		var rock := _blocked_cell()
 		if rock != Vector2i.MAX:
 			if held and Input.is_action_just_pressed("dig"):
-				_network.dig(_plane, rock)
+				_network.dig(_plane, rock, _team())
 				_learn_vein(rock)
 			_cursor.show_blocked(_network, _plane, rock)
 			_progress = 0.0
@@ -105,7 +106,7 @@ func _update_dig(delta: float) -> void:
 	if digging:
 		_progress += delta * _dig_rate() / maxf(dig_seconds, 0.01)
 		if _progress >= 1.0:
-			_network.dig(_plane, _target)
+			_network.dig(_plane, _target, _team())
 			_learn_exposed(_target)
 			_progress = 0.0
 			# Re-aim immediately: the cell just opened, so it is no longer a valid target and
@@ -153,6 +154,15 @@ func _learn_vein(cell: Vector2i) -> void:
 	if side == null:
 		return
 	_network.reveal_vein(_plane, cell, int(side))
+
+
+## The network accepts -1 for authored/test geometry and treats it as shared knowledge. A live
+## controller supplies a real crew so enemy floor plans stay off the minimap.
+func _team() -> int:
+	if _player == null:
+		return -1
+	var side: Variant = _player.get("team")
+	return int(side) if side != null else -1
 
 
 ## How fast whoever is driving opens a tile, as a multiplier on `dig_seconds`.

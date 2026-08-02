@@ -1,4 +1,4 @@
-[gd_scene load_steps=37 format=3]
+[gd_scene load_steps=38 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="Script" path="res://scripts/game/nest.gd" id="14_nest"]
@@ -16,6 +16,7 @@
 [ext_resource type="Script" path="res://scripts/classes/barricade.gd" id="26_barricade"]
 [ext_resource type="Script" path="res://scripts/maps/no_surface_zone.gd" id="27_patio"]
 [ext_resource type="Script" path="res://scripts/maps/boulder_field.gd" id="28_boulders"]
+[ext_resource type="Script" path="res://scripts/classes/sonar.gd" id="29_sonar"]
 [ext_resource type="Script" path="res://scripts/camera/camera_rig.gd" id="2_rig"]
 [ext_resource type="Script" path="res://scripts/tunnels/tunnel_network.gd" id="3_network"]
 [ext_resource type="Script" path="res://scripts/tunnels/dig_controller.gd" id="4_dig"]
@@ -269,6 +270,11 @@ script = ExtResource("24_cavein")
 player_path = NodePath("../Player")
 network_path = NodePath("../Tunnels")
 
+[node name="Sonar" type="Node" parent="."]
+script = ExtResource("29_sonar")
+player_path = NodePath("../Player")
+network_path = NodePath("../Tunnels")
+
 [node name="Barricade" type="Node" parent="."]
 script = ExtResource("26_barricade")
 player_path = NodePath("../Player")
@@ -302,6 +308,7 @@ script = ExtResource("7_hint")
 network_path = NodePath("../../Tunnels")
 player_path = NodePath("../../Player")
 swap_path = NodePath("../../ClassSwap")
+sonar_path = NodePath("../../Sonar")
 
 [node name="Match" type="Control" parent="HUD"]
 script = ExtResource("17_hud")

@@ -15,7 +15,7 @@ Read these in order — they're the source of truth for what we're building and 
 | [`docs/01-gdd.md`](docs/01-gdd.md) | The **what** — digging, cheese-as-lives, classes, the world |
 | [`docs/02-implementation-plan.md`](docs/02-implementation-plan.md) | The **how** — tech, architecture, milestones M0–M9 |
 
-## Current state: M4 — digging in the game (in progress)
+## Current state: M5 — hidden information (in progress)
 
 **There is a match.** Two crews of three, two banners, melee, scruffing, respawns, a clock,
 and bots that play the objective rather than each other. M3 answered its question — *is the
@@ -88,9 +88,18 @@ out you're committed at the moment you wanted out is finding out too late. The a
 placeholder patio in it; the zone is a rectangle and a rule, so real paving parents underneath it
 later and nothing about the rule changes.
 
-Still to come in M4: a real Backyard BBQ layout (which is a prerequisite for the milestone's own
-question, not polish — see the plan). The dig-controls pass is **tabled** — point-and-hold works
-well enough to keep playing with, and the map is what will say whether it's the friction or the fun.
+**And your map is yours now.** A crew sees the cells and shaft mouths it cut; the enemy route is
+absent, even where the two networks meet. The intersection is real floor in the world, but it does
+not donate the connected enemy floor plan. This is the first half of M5's visibility boundary.
+
+**And the Sneak can sound out what lies below.** Press **Q** to pulse through exactly one layer.
+Nearby tunnel cells shimmer briefly on the ground above, then resolve to one persistent piece of
+thieves' cant in the world and on your crew's minimap. An enemy Generalist cannot read it; an enemy
+Sneak can, and can rub it out with **Q** from arm's reach. A mark gives away a place, never the route.
+
+The Backyard BBQ layout and the dig-controls pass are deliberately deferred. That leaves M4's
+surface-versus-tunnel *verdict* unanswered, but its core systems are stable; level design can test
+that question after the core visibility and economy details exist.
 
 ### The rules
 
@@ -110,8 +119,9 @@ GDD §10's furniture, built now that there are systems behind it.
   as one object. Cheese is lives, so "how are we doing" is one question about all of them.
   A banner glyph per crew: solid is home, pulsing is stolen, dim is dropped. A strip appears
   under the bug with the return countdown, and only while something is actually away.
-- **Minimap, bottom left** — the yard, the tunnels on every plane, the nests, both banners
-  and your crew. **It turns with the view**, so up on the map is up the screen; at the fixed
+- **Minimap, bottom left** — the yard, **your crew's tunnels** on the plane you occupy, sonar cant,
+  the nests, both banners and your crew. Enemy routes stay hidden. **It turns with the view**, so
+  up on the map is up the screen; at the fixed
   45° yaw that draws the yard as the diamond the concept art has.
 - **Crew roster, bottom right** — a portrait, a name, a class tag, and health in **segments**
   rather than as a sliding bar, because the question on a roster is "how many more hits", which
@@ -194,8 +204,10 @@ On **Barricade**: `cooldown` (10s), `max_standing` (3), `reach_cells` (1.6). On 
 On **Surface/Boulders**: `count` (14), `spans` (the footprints on offer and their weighting — a
 repeated entry is a heavier weight), `hits_per_section` (5 Brute swings per cell), `height`
 (0.75–1.15m), `spacing_cells` (3 clear cells between boulders), `boulder_seed`. On **Tunnels**,
-`rock_top_color` is the sheet a found vein is drawn as; on the **minimap**, `rock_color` is the
-same information on the panel and `mouth_color` is a shaft entrance seen from the lawn.
+`rock_top_color` is the pale stone cap drawn across the top of every found, undiggable cube; on
+the **minimap**, `rock_color` is the same information on the panel and `mouth_color` is a shaft
+entrance seen from the lawn. Unknown seams still receive no cap, so the brighter top does not leak
+their position.
 
 **The minimap draws one layer — the one you're standing on**, tunnels and rock alike, the same rule
 the world follows. Stacked, four planes aren't a map of anything: two corridors a plane apart cross
@@ -265,6 +277,8 @@ underground, who a swing may hit — checks the bots can path between the nests 
 mouse and the swap point has a place and a price, checks **only the Engineer can cave a tunnel
 in** (and on whom, and how often), checks a **barricade blocks the routing graph and only a Brute
 shifts it** (and the supply, and the cooldown, and that the cell comes back afterwards), checks a
+**Sneak sounds exactly one layer down, leaves crew-readable cant, and a rival Sneak can erase it**,
+checks tunnel cells and mouths never leak from one crew's map to the other's, checks a
 **boulder shuts the earth under it on plane 1 and not on plane 2** and that five Brute swings free
 one cell of it and leave the rest of the rock standing, and checks **who may appear on the
 minimap**: not through a prop, not through a plane, not without being seen, and forgotten on time.
@@ -324,21 +338,13 @@ rather than in `project.godot`, because that file serializes input bindings as o
 unreadable line. Move them into Project Settings > Input Map when you want in-editor
 rebinding.
 
-## Next: the rest of M4
+## Next: the rest of M5
 
-Is digging *fun*, not just legible? Bots can follow you, the Engineer has both its capabilities,
-the earth has rock in it that your crew can map by paying for it, there are boulders to go under or
-break, and the paving refuses a mouth. What's left is **a real Backyard BBQ layout**. The
-dig-controls pass is tabled behind it. See the implementation plan.
+The first M5 slice has landed: tunnel cells and mouths are per-crew map knowledge, and the Sneak's
+sonar turns a short-lived glimpse of the layer below into one contestable cant mark. What remains
+is enemy-tunnel line of sight and fog: entering an enemy corridor should reveal only what the crew
+can actually see, then forget or stale it without ever filling in the connected route.
 
-**Rock is half of that answer and the map is the other half.** Seams make the *underground* a
-three-dimensional routing problem; only props, a patio and a fence can make the *surface* one —
-and the patio's rule is now built and tested, waiting for a patio to be a rule about.
-
-**One finding already, and it isn't a routing problem.** Bots never choose a tunnel when both
-ends are above ground — because on this arena none is ever shorter. The yard is eighty metres of
-open dirt, so no underground route can beat the straight line over the top of it, and the
-planner correctly says so. Tunnels start winning that comparison the moment the map has
-something in the way — which is exactly what M3 said about the midfield: **it's a map problem**
-(GDD §8), and it belongs to whichever milestone first lays out a real Backyard BBQ. The
-machinery is held under audit in the meantime, with the comparison forced by `tunnel_bias`.
+The Backyard BBQ layout still matters, but it is no longer the sequencing gate. It and the
+dig-controls pass return after the core systems, when the surface and tunnel routes can be laid
+out and tuned once rather than repeatedly around unfinished information rules.

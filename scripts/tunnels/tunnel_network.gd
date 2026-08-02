@@ -50,6 +50,9 @@ signal cell_unblocked(plane: int, cell: Vector2i)
 ## world and the minimap -- redraw a whole plane anyway, and a per-cell signal would have them
 ## rebuild the same mesh forty times for one vein.
 signal rock_revealed(plane: int, teams: int)
+## A crew's map of the tunnel network changed. Tunnel geometry is shared by the world, but the
+## minimap is not omniscient: each crew only gets the cells and shafts it cut itself.
+signal tunnel_revealed(plane: int, teams: int)
 
 ## So anything spawned into the match can find the network without being wired to it. Bots are
 ## created at runtime and have no scene to hold a NodePath for them.
@@ -140,15 +143,14 @@ const SIDES: Array[Vector2i] = [
 ## the message is "this is not the same stuff, and it is not going to open", and it has to land
 ## from across a corridor with no legend to read.
 @export var rock_color: Color = Color(0.60, 0.64, 0.70)
-## The same seam seen from ABOVE, once your crew has found it -- the sheet drawn against the lid
-## over a vein you have run into (GDD section 3).
+## The same seam seen from ABOVE, once your crew has found it -- the cap over the solid cube you
+## have run into (GDD section 3).
 ##
-## DARKER AND COOLER THAN THE FACE, deliberately, and the difference is the message. The face is
-## lit stone you are standing in front of; this is rock read THROUGH a layer of earth, and drawing
-## it in the same grey would say the ceiling had been cut away, which it has not. It only has to
-## survive the comparison with the dirt around it, which is warm -- so the hue does the work and
-## the brightness stays low enough not to pull the eye off the corridor you are digging.
-@export var rock_top_color: Color = Color(0.34, 0.38, 0.45)
+## PALE LIKE THE EXPOSED FACE. The old cap was both too dark and back-face culled from above, so a
+## rock cube read as stone from the side and earth from the top. Matching the face's cool value
+## makes the whole obstruction read as one material. Unknown rock still has no cap at all: this
+## improves the revealed object without leaking seams.
+@export var rock_top_color: Color = Color(0.60, 0.64, 0.70)
 
 @export_group("Light rays")
 ## A shaft you can climb announces itself with the light falling out of it, not with a painted
@@ -209,6 +211,15 @@ var _rock: Array[Dictionary] = []
 ## A BIT MASK RATHER THAN TWO DICTIONARIES, so a boulder -- which both crews can see from the
 ## first second -- is one entry rather than the same cell recorded twice under different keys.
 var _known: Array[Dictionary] = []
+## plane -> {cell: team bits}: which crews know a dug cell as part of their own network.
+##
+## This deliberately does NOT flood-fill through connected floor. If a blue corridor meets a red
+## one, the physical routes intersect, but neither crew receives the other side's floor plan for
+## free. The shared cell is the seam between the two maps.
+var _tunnel_known: Array[Dictionary] = []
+## upper plane -> {cell: team bits}: who cut and therefore knows each shaft. Kept separately from
+## the landing cell because the surface minimap draws mouths rather than plane-1 floors.
+var _shaft_known: Array[Dictionary] = []
 ## plane -> {cell: true}: dug cells something is standing in the way of. Today that is a
 ## barricade; a cave-in makes a cell stop existing, which is a different thing entirely.
 var _obstructed: Array[Dictionary] = []
@@ -253,6 +264,8 @@ func _init() -> void:
 		_shafts.append({})
 		_rock.append({})
 		_known.append({})
+		_tunnel_known.append({})
+		_shaft_known.append({})
 		_obstructed.append({})
 
 
@@ -648,6 +661,35 @@ func is_blocked(plane: int, cell: Vector2i) -> bool:
 # ------------------------------------------------------------------------- queries
 
 
+## Audits and authored probe networks omit a crew and are visible to both sides. Live digging
+## always supplies the mouse's team through dig_controller.gd.
+func _team_bits(team: int) -> int:
+	return TEAM_BITS if team < Team.BLUE or team > Team.RED else 1 << team
+
+
+func _learn_tunnel_cell(plane: int, cell: Vector2i, team: int) -> void:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return
+	var bits := _team_bits(team)
+	# A live dig that breaks into an enemy-only neighbour makes THIS new cell the shared junction.
+	# Do not propagate from an already shared neighbour: that would make every later cell in the
+	# digger's corridor shared too and quietly reveal the whole route one tile at a time.
+	if team >= Team.BLUE and team <= Team.RED:
+		var own_bit := 1 << team
+		var enemy_bit := 1 << Team.other(team)
+		for side: Vector2i in SIDES:
+			var neighbour_bits := int(_tunnel_known[plane].get(cell + side, 0))
+			if neighbour_bits & enemy_bit != 0 and neighbour_bits & own_bit == 0:
+				bits = TEAM_BITS
+				break
+	var before := int(_tunnel_known[plane].get(cell, 0))
+	var after := before | bits
+	if before == after:
+		return
+	_tunnel_known[plane][cell] = after
+	tunnel_revealed.emit(plane, bits)
+
+
 func is_dug(plane: int, cell: Vector2i) -> bool:
 	return plane >= 0 and plane < PLANE_COUNT and _cells[plane].has(cell)
 
@@ -676,6 +718,40 @@ func shaft_cells(plane: int) -> Array:
 ## saves the caller a five-thousand-cell scan of the arena to find a few dozen tiles.
 func dug_cells(plane: int) -> Array:
 	return _cells[clampi(plane, 0, PLANE_COUNT - 1)].keys()
+
+
+## The part of a plane that belongs on one crew's minimap.
+##
+## "Known" here means authored by the crew, not merely connected to it. That distinction is the
+## M5 rule: an enemy can break into your corridor without donating the rest of their route.
+func known_tunnel_cells(plane: int, team: int) -> Array[Vector2i]:
+	var found: Array[Vector2i] = []
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return found
+	var bit := 1 << clampi(team, Team.BLUE, Team.RED)
+	for cell: Vector2i in _tunnel_known[plane]:
+		if int(_tunnel_known[plane][cell]) & bit != 0:
+			found.append(cell)
+	return found
+
+
+func is_tunnel_known(plane: int, cell: Vector2i, team: int) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return false
+	return int(_tunnel_known[plane].get(cell, 0)) & (1 << clampi(team, Team.BLUE, Team.RED)) != 0
+
+
+## Shaft mouths a crew has made or reached. On the lawn these are the only tunnel information
+## the minimap draws, so they need the same ownership boundary as floor cells.
+func known_shaft_cells(plane: int, team: int) -> Array[Vector2i]:
+	var found: Array[Vector2i] = []
+	if plane < 0 or plane >= PLANE_COUNT:
+		return found
+	var bit := 1 << clampi(team, Team.BLUE, Team.RED)
+	for cell: Vector2i in _shaft_known[plane]:
+		if int(_shaft_known[plane][cell]) & bit != 0:
+			found.append(cell)
+	return found
 
 
 ## A shaft leading DOWN from this cell, to `plane + 1`.
@@ -710,7 +786,7 @@ func can_stand(plane: int, cell: Vector2i) -> bool:
 
 ## Cut a floor cell. Returns false if it was already dug -- so callers can tell a fresh
 ## segment from a no-op without re-querying -- and also if it was refused outright.
-func dig(plane: int, cell: Vector2i) -> bool:
+func dig(plane: int, cell: Vector2i, team: int = -1) -> bool:
 	if plane <= 0 or plane >= PLANE_COUNT or _cells[plane].has(cell):
 		return false
 	if not in_bounds(cell):
@@ -722,6 +798,7 @@ func dig(plane: int, cell: Vector2i) -> bool:
 		dig_refused.emit("solid rock -- go round it, or go under it")
 		return false
 	_cells[plane][cell] = true
+	_learn_tunnel_cell(plane, cell, team)
 	_mark_mask(plane, cell, true)
 	_refresh_cell(plane, cell)
 	_rebuild_walls(plane)
@@ -756,11 +833,13 @@ func collapse(plane: int, cell: Vector2i) -> bool:
 		return false
 
 	_cells[plane].erase(cell)
+	_tunnel_known[plane].erase(cell)
 	_grids[plane].set_cell_item(Vector3i(cell.x, 0, cell.y), GridMap.INVALID_CELL_ITEM)
 	_mark_mask(plane, cell, false)
 	_rebuild_walls(plane)
 	_relight(plane)
 	cell_collapsed.emit(plane, cell)
+	tunnel_revealed.emit(plane, TEAM_BITS)
 	return true
 
 
@@ -773,7 +852,7 @@ func can_collapse(plane: int, cell: Vector2i) -> bool:
 
 
 ## Sink a shaft from `plane` down to `plane + 1`, at the cell the player is standing on.
-func dig_shaft_down(plane: int, cell: Vector2i) -> bool:
+func dig_shaft_down(plane: int, cell: Vector2i, team: int = -1) -> bool:
 	var refusal := _shaft_refusal(plane, cell)
 	if refusal != "":
 		dig_refused.emit(refusal)
@@ -781,8 +860,15 @@ func dig_shaft_down(plane: int, cell: Vector2i) -> bool:
 
 	# Open the landing before recording the shaft, so the cell below exists to arrive in. A
 	# shaft you drop through onto solid earth is worse than no shaft.
-	dig(plane + 1, cell)
+	dig(plane + 1, cell, team)
+	# The landing may already be an enemy corridor. Taking a shaft into it reveals the landing
+	# cell, not the connected route beyond it.
+	_learn_tunnel_cell(plane + 1, cell, team)
+	if plane > 0:
+		_learn_tunnel_cell(plane, cell, team)
 	_shafts[plane][cell] = true
+	var bits := _team_bits(team)
+	_shaft_known[plane][cell] = int(_shaft_known[plane].get(cell, 0)) | bits
 	_refresh_cell(plane, cell)
 	_refresh_cell(plane + 1, cell)
 	# Both ends of the new shaft change what their plane's lights should look like, and neither
@@ -793,12 +879,13 @@ func dig_shaft_down(plane: int, cell: Vector2i) -> bool:
 	_relight(plane)
 	_relight(plane + 1)
 	shaft_opened.emit(plane, cell)
+	tunnel_revealed.emit(plane, bits)
 	return true
 
 
 ## Sink a shaft from `plane - 1` down to `plane`, authored from below -- the same object as
 ## dig_shaft_down, just dug by someone standing underneath it.
-func dig_shaft_up(plane: int, cell: Vector2i) -> bool:
+func dig_shaft_up(plane: int, cell: Vector2i, team: int = -1) -> bool:
 	if plane <= 0:
 		dig_refused.emit("nothing above to break into")
 		return false
@@ -817,8 +904,8 @@ func dig_shaft_up(plane: int, cell: Vector2i) -> bool:
 		return false
 	# The cell above has to be floor to arrive on, unless it is the surface, which is
 	# everywhere. Opened first so the shaft below has somewhere to land.
-	dig(plane - 1, cell)
-	return dig_shaft_down(plane - 1, cell)
+	dig(plane - 1, cell, team)
+	return dig_shaft_down(plane - 1, cell, team)
 
 
 ## Why a shaft can't be sunk here, or "" if it can.
@@ -1161,18 +1248,19 @@ func _make_rock_material() -> StandardMaterial3D:
 	return material
 
 
-## The top of a seam your crew has found. Unshaded, and that is the whole trick.
+## The top of a seam your crew has found. Unshaded, pale stone, and that is the whole trick.
 ##
 ## It is drawn a centimetre under a lid that is itself lit by nothing much, so a shaded sheet came
-## back almost black and the vein you had paid a dig to learn about was invisible. Unshaded means
-## the colour on screen is the colour in the export, which is what you want from something that is
-## really a piece of KNOWLEDGE laid over the world rather than a surface in it -- the same argument
-## the dig cursor makes for ignoring depth.
+## back almost black and the vein you had paid a dig to learn about was invisible. The cap also
+## used to be deliberately dark AND its generated winding faced away from the camera, so back-face
+## culling removed it outright from above. Unshaded means the colour on screen is the colour in the
+## export; double-sided means a generated quad cannot silently choose the wrong visible side.
 func _make_rock_top_material() -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.albedo_color = rock_top_color
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	DirtTexture.apply_to(material)
 	return material
 
