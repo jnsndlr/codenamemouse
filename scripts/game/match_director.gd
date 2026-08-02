@@ -33,6 +33,7 @@ signal cheese_changed(side: int, amount: int)
 signal match_ended(winner: int)
 
 const DIRECTOR_GROUP: StringName = &"match_director"
+const CHEESE_CACHE := preload("res://scripts/game/cheese_cache.gd")
 ## No winner: the clock ran out level.
 const DRAW: int = -1
 
@@ -94,9 +95,15 @@ const SEATS: Array[Dictionary] = [
 ## How close you have to be to grab a banner. Generous, at a scale where the mouse is 0.32
 ## across -- a pickup you can miss by running past it is a bad kind of hard.
 @export var pickup_radius: float = 0.85
-## Seconds flat on your back before you're back at your nest. GDD section 2 makes this 6, and
-## 20 when the team's cheese runs out -- the second half needs the economy, which is M6.
+## Seconds flat on your back before you're back at your nest, while the crew can pay for it.
 @export var respawn_seconds: float = 6.0
+## And what it costs when the crew is broke (GDD section 2).
+##
+## SURVIVABLE, NOT TERMINAL, and the gap between the two numbers is the whole design. A crew at
+## zero is not out -- it is a crew that gets overrun if it keeps trading, which is what makes
+## disengaging and going to refill a real option rather than a concession. Section 2 asks
+## specifically that this not be tuned away.
+@export var broke_respawn_seconds: float = 20.0
 ## How far off the spawn point each arrival is placed. See `_send_home`: mice sharing a point
 ## do not stand on each other, they launch.
 @export var spawn_spread: float = 0.4
@@ -105,13 +112,22 @@ const SEATS: Array[Dictionary] = [
 ## What each crew starts the match with. GDD section 2: cheese is the team's respawn supply,
 ## not a second score -- the team's health bar.
 ##
-## THE LEDGER, NOT THE ECONOMY. A respawn costs one, and that is the whole system for now.
-## Caches to raid, cheese you can carry and drop, spending it on Scurry, and the twenty-second
-## respawn at zero are M6, and they belong together: the slow respawn without any way to refill
-## the pool is a death spiral, which is a worse game than no economy at all. So the counter
-## ticks down honestly and nothing yet depends on it -- the number on the HUD is real, and the
-## consequences arrive in one piece.
+## THE WHOLE ECONOMY LANDED AT ONCE, and it had to. A respawn cost without any way to refill is
+## a countdown, and a twenty-second respawn on top of that is a death spiral -- both are a worse
+## game than no economy at all. So caches, carrying, banking, raiding, the broke respawn and
+## Scurry arrived together at M6, and the number on the HUD has consequences in both directions.
 @export var starting_cheese: int = 20
+## The most a crew can hold. Caps the bankruptcy play's upside so a crew that spends a whole
+## match hauling cheese cannot bank an unlosable pile -- the point of refilling is to get back
+## in the fight, not to win by not fighting.
+@export var cheese_ceiling: int = 40
+## How close a fresh drop has to be to an existing pile to join it rather than start its own.
+##
+## Dropped cheese never rots, which is what makes a fight worth going back to -- and is also what
+## would carpet a contested corridor in single wedges if each one stood alone. Fifteen dots inside
+## five metres is noise; one pile of fifteen is a landmark, and a landmark is the thing worth
+## fighting over. Merging is what turns a killing ground into an objective instead of litter.
+@export var drop_merge_radius: float = 2.2
 
 @export_group("Bots")
 ## Mice per crew, the player included. Solo play is the same match with AI in every other seat
@@ -247,6 +263,7 @@ func _physics_process(delta: float) -> void:
 		_check_carry(mouse)
 		_check_pickup(mouse)
 		_check_capture(mouse)
+		_check_cheese(mouse)
 
 
 ## A carrier who has gone underground drops it, wherever they are.
@@ -311,6 +328,136 @@ func _check_capture(mouse: Mouse) -> void:
 		_finish(mouse.team)
 
 
+# ---------------------------------------------------------------------------------- cheese
+
+
+## The wedge loop: take one, walk it home, put it in the pile (GDD section 2).
+##
+## THREE PLACES A WEDGE CAN COME FROM AND ONE IT CAN GO. Caches on the map, a wedge somebody
+## dropped, and the enemy's own stores -- which section 2 makes raidable on purpose, because it
+## is the only cheese in the game that someone is standing over. Cheese is only ever banked at
+## your own nest, so every wedge is a walk, and the walk is the mechanic.
+##
+## Surface only. Cheese does not go down a hole for the same reason a banner does not: an errand
+## you can run underground is an errand nobody can contest.
+func _check_cheese(mouse: Mouse) -> void:
+	if mouse.get_plane() != 0:
+		return
+
+	# Banking first, so arriving home with a wedge always resolves this frame rather than being
+	# beaten to it by the cache you happen to be standing in.
+	if mouse.get_carried_cheese() > 0:
+		if _nests[mouse.team].at_stores(mouse.global_position):
+			var banked := mouse.release_wedges()
+			gain_cheese(mouse.team, banked)
+			event.emit("%s banks a wedge  (%s: %d)" % [
+				mouse.get_display_name(), Team.name_of(mouse.team), _cheese[mouse.team]
+			])
+		return
+
+	if not mouse.has_free_paws():
+		return
+
+	var cache := CheeseCache.nearest(get_tree(), mouse.global_position)
+	if cache != null and cache.within(mouse.global_position) and cache.take():
+		mouse.take_wedge()
+		return
+
+	# Raiding their stores. Costs THEM a life and gains you nothing until you get it home, which
+	# is what makes a raid a commitment rather than a free denial -- get scruffed on the way back
+	# and the wedge is lying in the open for whoever wants it.
+	#
+	# The PILE, not the nest. Their banner stands at the nest's centre and `_check_pickup` runs
+	# before this, so a raider judged by the nest radius picks the banner up instead -- every
+	# time, because it is worth more. Raiding would exist only in the one case where their banner
+	# is already out and you have better things to do. The store being its own spot inside the
+	# nest is what makes it a thing you can go and take.
+	var theirs := Team.other(mouse.team)
+	if _cheese[theirs] > 0 and _nests[theirs].at_stores(mouse.global_position):
+		_spend_cheese(theirs, 1)
+		mouse.take_wedge()
+		event.emit("%s raids the %s stores" % [
+			mouse.get_display_name(), Team.name_of(theirs)
+		])
+
+
+## Leave a pile where somebody fell, and leave it there. Nothing rots (GDD section 2 gives cheese
+## no clock), so this is the map growing its own objectives: every fight that happened becomes
+## somewhere both crews have a reason to come back to.
+##
+## Joins a pile already lying nearby rather than starting a new one. Without that, permanent drops
+## turn any contested ground into a scatter of single wedges -- and a scatter is litter, while one
+## growing pile is a place. The same fight that made it worth defending is what makes it worth
+## taking back.
+##
+## Hung on the map's cache field when there is one, so it is scenery on the lawn like every other
+## cache and drops out of sight with them when the view goes underground. Falls back to the
+## director, which is somewhere rather than nowhere -- a map with no cheese field is a map where
+## carrying cheese should still not silently lose it.
+func _drop_cheese(at: Vector3, wedges: int) -> void:
+	var here := Vector3(at.x, 0.0, at.z)
+	var nearby := CheeseCache.nearest(get_tree(), here)
+	if nearby != null and nearby.global_position.distance_to(here) <= drop_merge_radius:
+		nearby.add_wedges(wedges)
+		return
+
+	var pile := Node3D.new()
+	pile.set_script(CHEESE_CACHE)
+	pile.name = "DroppedWedge"
+	pile.wedges = wedges
+	pile.spread = 0.22
+	var field := get_tree().get_first_node_in_group(&"cheese_field")
+	(field if field != null else self).add_child(pile)
+	pile.global_position = here
+
+
+## Put cheese in a crew's pile. The only way the number ever goes up.
+func gain_cheese(side: int, amount: int) -> void:
+	if amount <= 0:
+		return
+	var before := _cheese[side]
+	_cheese[side] = mini(before + amount, cheese_ceiling)
+	if _cheese[side] == before:
+		return
+	cheese_changed.emit(side, _cheese[side])
+	if before == 0:
+		event.emit("%s IS BACK IN CHEESE" % Team.name_of(side))
+
+
+## Spend a cheese on a Scurry (GDD sections 2 and 9). Returns whether it fired.
+##
+## THE POOL IS CHECKED BEFORE THE MOUSE AND THE MOUSE BEFORE THE CHARGE, so a crew at zero is
+## told no without being billed and a mouse on cooldown cannot burn a teammate's life on nothing.
+## Everyone watching sees the counter drop at the moment the burst starts, which is most of what
+## makes this a decision rather than a button -- section 2 is explicit that the visibility of the
+## spend is the feature.
+func try_scurry(mouse: Mouse) -> bool:
+	if not _playing or mouse == null or mouse.is_scruffed():
+		return false
+	if _cheese[mouse.team] <= 0:
+		return false
+	if not mouse.scurry_ready():
+		return false
+	if not mouse.start_scurry():
+		return false
+	_spend_cheese(mouse.team, 1)
+	event.emit("%s scurries  (%s: %d)" % [
+		mouse.get_display_name(), Team.name_of(mouse.team), _cheese[mouse.team]
+	])
+	return true
+
+
+## How long this crew waits to stand back up. Six seconds, or twenty while broke.
+##
+## Read at the moment of the scruff rather than when the timer runs out, so a crew that refills
+## while you are down does not shorten a wait you already earned -- and, more to the point, so
+## the punishment lands on the crew that was broke when it lost the fight. Zero cheese is meant
+## to be survivable (section 2): twenty seconds is a crew getting overrun, not a crew that has
+## lost, which is exactly what makes the bankruptcy play worth trying.
+func respawn_wait(side: int) -> float:
+	return broke_respawn_seconds if _cheese[side] <= 0 else respawn_seconds
+
+
 func _within(mouse: Mouse, banner: Banner, reach: float) -> bool:
 	var gap := mouse.global_position - banner.global_position
 	gap.y = 0.0
@@ -332,7 +479,18 @@ func _on_scruffed(mouse: Mouse, by: Mouse) -> void:
 			banner.drop()
 			event.emit("the %s banner is dropped" % Team.name_of(banner.team))
 
-	_down[mouse] = respawn_seconds
+	# What you were hauling lands where you fell, exactly as the banner does and for the same
+	# reason: it leaves the thing in the middle of the fight that just happened. A wedge that
+	# vanished on a scruff would make escorting a carrier pointless and raiding free.
+	var wedges := mouse.release_wedges()
+	if wedges > 0:
+		_drop_cheese(mouse.global_position, wedges)
+		event.emit("%s drops a wedge" % mouse.get_display_name())
+
+	# READ BEFORE THE CHARGE. A crew on its last cheese pays for this respawn at the normal rate
+	# and goes broke for the next one -- charging first would take the cheese and then bill the
+	# same death for the broke timer, which is the one life you already paid for.
+	_down[mouse] = respawn_wait(mouse.team)
 	# The life, charged at the moment it is spent rather than when the mouse stands back up. You
 	# are down, the crew is already a cheese poorer, and the counter ticking as you hit the dirt
 	# is the whole reason it is on screen (GDD section 10).

@@ -98,6 +98,33 @@ func _draw() -> void:
 					at + Vector2(0.0, (bar_size.y + 2.0) * ui), stamina,
 					Color(0.85, 0.82, 0.55), fade * 0.9, ui, bar_size.y * 0.6
 				)
+			_scurry_pip(mouse, at, fade, ui)
+
+
+## Whether your Scurry is off cooldown, as a wedge beside your own bars.
+##
+## NEXT TO STAMINA AND NOT ON THE SCORE BUG, because they answer different questions. The team's
+## cheese count is up top where everyone's eyes go for the score -- that is the crew's health bar
+## and a shared fact. Whether YOU can spend one right now is personal, moment-to-moment, and
+## wanted in the half-second before you commit to a chase, which is the same argument GDD section
+## 10 makes for keeping stamina down here.
+##
+## Drawn dim and empty while recharging rather than hidden, so the gap between pressing Space and
+## nothing happening is never a mystery.
+func _scurry_pip(mouse: Mouse, at: Vector2, alpha: float, ui: float) -> void:
+	if not mouse.has_method("scurry_ready"):
+		return
+	var ready: bool = mouse.scurry_ready()
+	var spot := at + Vector2((bar_size.x + 5.0) * ui, bar_size.y * 0.5 * ui)
+	var size := bar_size.y * 1.5 * ui
+	if ready:
+		HudSkin.cheese(self, spot, size, alpha)
+		return
+	# Recharging: the same wedge, faded, with the cooldown draining out of it.
+	var left: float = 1.0 - mouse.scurry_cooldown_ratio()
+	HudSkin.cheese(self, spot, size, alpha * 0.22)
+	if left > 0.0:
+		HudSkin.cheese(self, spot, size * left, alpha * 0.5)
 
 
 func _bar(

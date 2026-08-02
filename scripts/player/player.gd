@@ -52,6 +52,15 @@ var _since_forward_tap: float = 999.0
 func _ready() -> void:
 	super()
 	_stamina = sprint_seconds
+	scurried.connect(_on_scurried)
+
+
+## A second wind, not a stat buff (GDD section 2). Refilling stamina is what stops Scurry from
+## being a boost you tack onto an exhausted sprint and makes it the thing that resets a chase
+## you were losing -- the two seconds of burst run out and you still have a sprint left.
+func _on_scurried(_mouse: Mouse) -> void:
+	_stamina = sprint_seconds
+	_regen_timer = 0.0
 
 
 ## Sprint duration is per-class (GDD section 9: Sneak 6.0, Brute 1.5) and sprint SPEED is not.
@@ -97,6 +106,15 @@ func _control(delta: float) -> void:
 
 	if Input.is_action_just_pressed("attack") and not _pointer_over_ui():
 		swing()
+
+	# ASKED OF THE DIRECTOR, not done here. The price is a cheese out of the crew's pool and the
+	# pool is the director's, so the only thing this end owns is the keypress -- a mouse that
+	# could boost itself would be a mouse that could spend its team's lives without the thing
+	# holding the ledger ever hearing about it.
+	if Input.is_action_just_pressed("scurry"):
+		var director := get_tree().get_first_node_in_group(MatchDirector.DIRECTOR_GROUP)
+		if director != null:
+			director.try_scurry(self)
 
 	_wish = _wish_direction()
 

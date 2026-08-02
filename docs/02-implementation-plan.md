@@ -959,8 +959,17 @@ tells you what is under it before you dig at all.**
 - **Minimap layer rendering** — **landed**, filtered to the local crew, with seen enemy ground
   drawn faintly and fading
 
-**Done when:** crawling into an enemy tunnel is *frightening*. **The systems are all in; the
-verdict is not.** That sentence is the milestone now — it can only be answered by playing one.
+**Done when:** crawling into an enemy tunnel is *frightening*. — **MET. M5 is closed.**
+
+> **The verdict: the tunnels feel good.** Played, and the vision asymmetry does the work it was
+> bet on — an enemy corridor is unlit, its layout is not yours, and what you can make out arrives
+> one cell at a time and then goes stale. No retuning was needed: `lamp_*`, `sight_cells`,
+> `memory_seconds` and `enemy_seen_alpha` all shipped at their first-pass values.
+>
+> Worth recording *because* it was the milestone most likely to come back a map problem. M3 and M4
+> both concluded the midfield needed level design rather than tuning; M5 did not. The thing that
+> made the difference was Engineer bots building a network per crew, so the yard fills with
+> corridors somebody else made — the condition the question could not be asked without.
 
 #### In progress — a map is knowledge, and knowledge leaves marks (landed)
 
@@ -1094,11 +1103,105 @@ walk into it" is very nearly true and fails often enough to deadlock a bot perma
 
 - Caches, carrying, team stores, respawn cost
 - Zero-cheese slow-respawn state
-- Sprint drain
+- ~~Sprint drain~~ — **already landed at M4**, and not against cheese. GDD §9 split sprint off
+  the economy onto per-class stamina, and `player.gd` has held it since: `sprint_seconds` comes
+  off the class definition, with a regen delay and a re-engage floor. Left struck through rather
+  than deleted, because the line is a trap — anyone reading the milestone list would build it a
+  second time, against the wrong resource.
 - **Watch specifically for the bankruptcy play** (GDD §2) — does anyone ever choose to
   concede a capture to go refill? If nobody does, the economy isn't tuned right.
 
-**Done when:** you've agonized over a cheese decision at least once.
+**Done when:** you've agonized over a cheese decision at least once. — **MET. M6 is closed.**
+
+> **The verdict: the economy holds, and dropped cheese turned out to be the best part of it.**
+> The last change before closing was to take the clock off dropped wedges. A pile now waits where
+> somebody fell until somebody comes for it, and that one edit changed what the map is: this game
+> had exactly **one** place both crews were obliged to care about, and now every fight that
+> happens leaves another. They are small, they are temporary in the sense that somebody will take
+> them, and nobody chose where they go — which is the useful kind of objective, because it is not
+> authored. Merging nearby drops into one growing pile is what makes that read as a place rather
+> than as litter.
+>
+> Recorded because the reasoning ran backwards from the obvious one. A timer looks like it
+> creates urgency; what it actually creates is a pile you can win by ignoring.
+
+#### What was already standing
+
+Worth being precise about, because it is most of the ledger and none of the loop. The pool, its
+signal and its readout have been in since M3, and **the respawn cost has been charged all along**
+— `_on_scruffed` spends a cheese at the moment the mouse hits the dirt, so the counter has always
+ticked down. What has never existed is any way to put one *back*, or any way to spend one *by
+choice*. An economy that only drains is a countdown, not a decision, and the milestone's question
+cannot be asked of a countdown.
+
+So M6 is four things: **caches** to gather from, **carrying** and a **deposit** that puts a wedge
+in the crew's pile, a **zero state that bites without ending you**, and **Scurry** — the one spend
+you choose. `Mouse.is_boosting()` has returned `false` since M2.5 waiting for the last of those,
+and `grass_camouflage.gd` already reads it, so a Scurrying mouse is fully visible the day it lands.
+
+#### In progress — the wedge loop (landed)
+
+`cheese_cache.gd` is a pile with a count on it and `cache_field.gd` puts six of them out. A mouse
+with free paws walks into one and takes **one wedge**; it banks at its own nest's **store**, and
+that walk is the whole mechanic. Scruffed mice drop what they were hauling where they fell, which
+is the same rule the banner already obeys and for the same reason. A dropped wedge is not a new
+kind of object — it is a cache with one wedge and a clock, which is also the honest description
+of what it is.
+
+Enemy stores are raidable (§2), and making that work moved the furniture. The stores used to be
+"the nest", which meant a raider standing in one **picked up the banner instead, every time**,
+because `_check_pickup` runs first and a banner is worth more. Raiding would have existed only in
+the case where their banner was already out and you had better things to do. So a nest now has a
+**store saucer** offset from its banner stand — a second thing inside it worth standing on, and a
+second thing a defender has to cover. The audit found this, not a playtest.
+
+> **The cache ring shipped 45 degrees wrong and looked fine.** The layout fans caches either side
+> of the perpendicular to the nest-to-nest diagonal, so going for cheese is a decision to be
+> somewhere other than where the flag is. The first pass walked the arc from the wrong origin and
+> put a cache **five metres from the red nest**, inside a defender's post, on the lane everyone
+> already runs — and it still rendered as a tidy ring. `tools/cache_layout_probe.gd` now prints
+> the distances instead of trusting the picture, and there is a `nest_clear` floor behind the
+> angles: geometry authored in angles is easy to get subtly wrong, and a distance is not.
+
+#### In progress — Scurry, and a zero that bites (landed)
+
+Space, one cheese, ~2s, 15s personal cooldown. It **multiplies** current speed rather than setting
+one (§2, marked *don't relax it*), so a Scurrying carrier is a fast carrier and not a mouse that
+stopped carrying — the audit checks exactly that, because a flat top speed would quietly delete
+the handoff play. The director owns it: `try_scurry` checks the pool, then the mouse, then charges,
+so a refusal never bills anyone. Firing refills sprint stamina, which is what makes it a second
+wind rather than a stat buff.
+
+Respawns are 6s while you can pay and **20s while broke**, read at the moment of the scruff and
+before the charge — a crew on its last cheese gets the short wait, because it could afford the
+death it just took. The pool has a ceiling, so a crew cannot win by hauling cheese instead of
+fighting.
+
+Caches are on the minimap **for both crews**, which is a deliberate exception to M5's instinct
+that information should be earned. The bankruptcy play is a *plan*: disengage, concede a capture,
+go and refill. A plan has to be makeable from the nest before you commit, and a cheese hunt you
+can only run by remembering where the wedges were is homework, not a decision. What stays hidden
+is how much is left in any one of them.
+
+**Bots do not Scurry yet.** They gather, bank, raid and pay for their respawns like everyone else,
+but the one spend that is a *choice* is the player's alone for now — which is fine for asking the
+milestone's question and wrong for M7, where the other side is a human doing it to you.
+
+#### In progress — dropped cheese stays dropped (landed)
+
+Drops have no clock. A pile waits until somebody takes it, and drops within `drop_merge_radius`
+of an existing pile **join it** rather than starting their own — permanent drops without merging
+turn a contested corridor into a scatter of single wedges, and a scatter is litter where one
+growing pile is a landmark. Every pile is on the minimap for both crews, authored and dropped
+alike.
+
+That combination is what makes the economy generate objectives instead of just accounting for
+them. The map ships with six caches; by the tenth minute it has however many places two crews
+have killed each other while carrying, and each of those is somewhere with a reason to go.
+
+`tools/cheese_audit.gd` holds 37 invariants over the loop: wedges are conserved between cache and
+pile, a raid is a transfer rather than a spawn, banking happens once, paws hold one thing, drops
+persist and merge, and every refusal is free.
 
 ---
 
@@ -1112,6 +1215,104 @@ walk into it" is very nearly true and fails often enough to deadlock a bot perma
 
 **Done when:** you and a friend play a full match over the internet and it's playable.
 Not perfect — playable.
+
+#### The survey — what six milestones of "secretly netcode decisions" actually bought
+
+Worth doing before any of it, because the answer changes the size of the milestone. The
+architecture notes above made promises in week one; this is the audit of which ones held.
+
+**Held, and they are the expensive ones:**
+
+- **`Mouse._control(delta)` is already the driver seam.** `Player` overrides it and reads the
+  keyboard; `Bot` overrides it and reads the AI. A third override that reads a replicated input
+  frame slots in beside them **without the base class changing**. This is the single most
+  valuable thing in the codebase for M7 — the thing most projects rewrite is already a two-line
+  virtual with two implementations.
+- **`MatchDirector` is already the sim.** Every rule that matters — pickup, capture, scruff,
+  respawn, the whole cheese loop — resolves in one `_physics_process` on one node that owns the
+  state. That *is* the server tick. It does not need to be found and gathered from nine places
+  first, which is the usual week-one tax.
+- **Per-crew knowledge is already stored per crew.** `tunnel_network.gd` keeps `_known`,
+  `_tunnel_known` and `_shaft_known` as team bit masks, and `spotting.gd` keeps a contact book
+  per side. The hidden-information pillar does *not* need retrofitting — filtering is a
+  serialization concern over data that is already partitioned. The plan warned that retrofitting
+  this would be painful; M5 built it correctly instead.
+- **The state payload is genuinely tiny.** Eight mice, two banners, a score, two cheese counters,
+  and dug cells as discrete `(plane, cell)` messages. 4v4 and grid tunnels were chosen for this
+  and they deliver.
+
+**Did not hold, and these are the actual work:**
+
+- **Input is read where it is used, not captured as data.** Only three files touch `Input.`
+  directly — [`player.gd`](scripts/player/player.gd),
+  [`dig_controller.gd`](scripts/tunnels/dig_controller.gd) and
+  [`camera_rig.gd`](scripts/camera/camera_rig.gd) — and the third is pure presentation that stays
+  local forever. So the capture surface is two files. But they read `Input` *at the moment of
+  acting*, which is the thing that has to change: an intent has to become a value that can travel.
+- **Actions call the rules directly.** `player.gd` calls `director.try_scurry(self)`;
+  `class_swap.gd` acts on `_unhandled_input`; `dig_controller.gd` drives the network on a held
+  button. On a client every one of those is a **request**, not an act. This is the same edit
+  repeated four or five times, and it is the edit that makes cheating structurally impossible
+  rather than merely discouraged.
+- **"The player" is singular, in eleven places.** All but one are in `scripts/ui/` — minimap,
+  roster, vitals, match_hud — asking *whose eyes am I behind*. That is a presentation question
+  with a different answer per client, not a rule, so it becomes `local_player()` and stops being
+  a director property. Cheap, but it is eleven sites and one of them (the director's own) is not
+  like the others.
+- **Bots assume they are on the machine that owns the world.** `_spawn_bots` already does the
+  right shape — the player takes blue seat 0, bots fill the rest — but bots must run on the
+  server only, and `crew_size` becomes *seats minus humans* rather than a constant.
+
+#### The shape of the work
+
+1. **`NetTransport` + `ENetTransport`.** The wrapper the architecture notes asked for, so the
+   browser question stays open. A day, and it is the first day.
+2. **Input becomes a frame.** A small struct — wish direction, aim point, and a bitfield of
+   pressed/just-pressed actions — produced by a local capture node and consumed by
+   `Mouse._control`. Single-player then runs through the identical path, which is what stops the
+   networked path from being the one nobody tests.
+3. **Seats, not scenes.** A seat is a team, an index, and an occupant that is either a peer id or
+   a bot. Joining takes a seat; leaving hands it back to a bot mid-match. `SEATS` already exists
+   and already carries class and role.
+4. **State out at 30Hz.** Mice as transform + a small state byte; banners, score and cheese on
+   change; tunnel cells as discrete events. Clients interpolate between snapshots.
+5. **Per-crew filtering at the serializer.** The masks exist; the rule is that the filter lives
+   where the packet is built and never anywhere else, so there is exactly one place to audit for
+   "did we just send them the enemy's floor plan".
+6. **Prediction only if it hurts.** Deferred on purpose. Displacement-over-damage, projectiles
+   over hitscan and no crits were all chosen so that naive interpolation is survivable — find out
+   whether it is before spending a week on reconciliation.
+
+#### Sequencing — five checkpoints, each playable
+
+Ordered so that something is testable at every stage and the risky part is not last.
+
+1. **Two windows on one machine, one seat each, no bots.** Movement and melee only. This is where
+   the input-frame refactor lands and where it either holds or does not.
+2. **Bots fill the empty seats.** Proves seat ownership and that the server is the only thing
+   thinking.
+3. **The objective loop over the wire** — banner, capture, scruff, respawn, cheese. All of it is
+   already in one node; this is mostly proving that.
+4. **Tunnels and the visibility filter.** The riskiest checkpoint, and deliberately not last:
+   add an assertion that a client's received tunnel set is a subset of its own crew's mask, and
+   run it in the audits.
+5. **Over the internet, with a friend, for a full match.** The milestone's actual question.
+
+#### Risks
+
+- **The visibility filter is the one that can silently fail.** A leak looks like nothing at all
+  from inside a match — the game plays fine and the pillar is gone. It needs an invariant in
+  `tools/`, not a playtest. This is the same lesson `cheese_audit.gd` and `cache_layout_probe.gd`
+  both taught at M6: the failures that matter here are the ones that still look right.
+- **Bots not Scurrying is now blocking.** It was acceptable at M6, where the point was whether a
+  human agonizes over a spend. M7 is about a *second human*, and a crew whose AI seats never
+  spend cheese is a crew that plays the economy differently from the one across the yard. Fix it
+  in checkpoint 2.
+- **Listen-server host advantage** is real and unfixable at this scale. Name it, measure it, and
+  decide whether it matters before building anything to hide it.
+- **The scope trap is prediction.** Every deferred-prediction plan gets talked into it early by a
+  single laggy playtest. The deferral is a decision already taken; reversing it needs evidence
+  from checkpoint 5, not from checkpoint 1.
 
 ---
 
@@ -1237,9 +1438,27 @@ bots that build one network per crew — going under the midfield rock rather th
 mean there are enemy tunnels to be frightened of in the first place. Both audits pass: fifteen
 tunnel scenarios and nineteen match rule groups.
 
-**Immediate next: play it, and give M5 its verdict.** The milestone's question — is crawling into
-an enemy tunnel *frightening* — is now the only thing standing between here and M6, and it is not a
-coding task. Answer it from inside one, in a full match. The dials if it lands short are `lamp_*`
-on the network, `sight_cells` and `memory_seconds` on `TunnelSight`, and `enemy_seen_alpha` on the
-minimap — but be willing to hear that it is a map problem rather than a tuning one, which is what
-both M3 and M4 concluded about the midfield. Then **M6: cheese is lives.**
+**M5 is closed, and its answer was yes.** Crawling into an enemy corridor is frightening: unlit,
+not yours, and legible one cell at a time before it goes stale. Nothing needed retuning — every
+dial shipped at its first-pass value. It is the first milestone since M2 whose verdict did *not*
+come back as a map problem.
+
+**M6 is closed.** Six caches on a ring off the nest-to-nest lane; wedges carried one at a time and
+banked at a store saucer that is its own spot inside a nest rather than the banner's feet; enemy
+stores raidable; 20-second respawns while broke; and Scurry on Space at one cheese, multiplying
+your current speed for two seconds. Dropped cheese **never rots** — a pile waits where somebody
+fell until somebody comes for it, and nearby drops merge into one growing pile. That last change
+is the one that mattered: it makes the map grow objectives the designer never placed, which this
+game had exactly one of before. Three audits pass: 15 tunnel scenarios, 19 match rule groups,
+37 cheese invariants.
+
+**Immediate next: M7 — real multiplayer.** *Does it survive contact with a second human?* The
+survey above is the important part: `Mouse._control` is already the driver seam, `MatchDirector`
+is already the sim, and per-crew tunnel knowledge is already stored per crew. The work is turning
+input into data, turning direct rule calls into requests, making "the player" plural in the eleven
+places that assume otherwise, and filtering what each client is sent. Five checkpoints, each
+playable, with the visibility filter deliberately not last.
+
+**Fix in checkpoint 2:** bots still do not Scurry. Acceptable at M6, where the question was
+whether a human agonizes over a spend. Blocking at M7, where the other side is a human and a crew
+whose AI seats never spend cheese is playing a different economy from the one across the yard.

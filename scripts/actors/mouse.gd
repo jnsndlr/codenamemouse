@@ -36,6 +36,10 @@ signal revived(mouse: Mouse)
 ## want to know at the moment the paw moves.
 signal swung(mouse: Mouse)
 
+## Scurry fired. Player listens to top its sprint stamina back up (GDD section 2: a second wind,
+## not a stat buff), and the HUD listens to flash the counter everyone just watched drop.
+signal scurried(mouse: Mouse)
+
 ## Anything that bends grass (GDD section 8) and anything combat has to consider.
 const ACTOR_GROUP: StringName = &"grass_actor"
 const MOUSE_GROUP: StringName = &"mouse"
@@ -77,6 +81,19 @@ const MOUSE_GROUP: StringName = &"mouse"
 ## PER-CLASS -- Generalist -10%, Sneak -40% -- and the whole handoff play falls out of the
 ## spread. One number until classes land at M4, but it is already the right shape.
 @export_range(0.0, 0.8, 0.01) var carry_penalty: float = 0.25
+
+@export_group("Scurry")
+## The burst, in seconds. Short on purpose (GDD section 2: "~2s"): what a cheese buys is a
+## MOMENT -- the two seconds that turn a losing chase into a won one -- and not a movement mode.
+@export var scurry_seconds: float = 2.0
+## Personal cooldown. Long enough that Scurry cannot be the way you travel, so the pool drains
+## through decisions rather than through a habit.
+@export var scurry_cooldown: float = 15.0
+## What it multiplies your CURRENT speed by, and multiplying is the whole constraint (GDD
+## section 2, marked "don't relax it"). A flat top speed would erase the flag-carry penalty and
+## make a Scurrying Sneak as good a carrier as a Generalist -- which quietly deletes the handoff
+## play. Stacked on top of the ladder, so it is a real step above Sprint's 1.4.
+@export_range(1.0, 3.0, 0.05) var scurry_multiplier: float = 1.85
 
 @export_group("Health")
 @export var max_health: float = 100.0
@@ -141,6 +158,11 @@ var _knock: Vector3 = Vector3.ZERO
 var _stun_left: float = 0.0
 var _carrying: Node3D = null
 var _body_material: StandardMaterial3D
+## Wedges in the paws, 0 or 1. An int rather than a bool because section 2 leaves the door open
+## to a class that hauls two, and every caller below already reads it as an amount.
+var _wedges: int = 0
+var _boost_left: float = 0.0
+var _boost_cooldown: float = 0.0
 
 
 func _ready() -> void:
@@ -280,11 +302,58 @@ func get_horizontal_speed() -> float:
 	return Vector3(velocity.x, 0.0, velocity.z).length()
 
 
-## Scurry (GDD section 9) doesn't exist until the cheese economy at M6. Answered here rather
-## than assumed by callers, because the answer is a design decision: buying speed with cheese
-## must never also buy stealth.
+## Mid-Scurry (GDD sections 2 and 9). Read by grass_camouflage.gd, which pins a boosting mouse
+## at full opacity -- buying speed with cheese must never also buy stealth, and that rule was
+## written here before there was anything to enforce it against.
 func is_boosting() -> bool:
-	return false
+	return _boost_left > 0.0
+
+
+## Whether Scurry is off cooldown. Says nothing about whether the crew can afford it: the pool
+## is the director's, and a mouse has no business reading its team's bank balance.
+func scurry_ready() -> bool:
+	return _boost_cooldown <= 0.0 and _boost_left <= 0.0 and not _scruffed
+
+
+## 0 while ready, rising to 1 just after a Scurry. The HUD's dial.
+func scurry_cooldown_ratio() -> float:
+	return clampf(_boost_cooldown / maxf(scurry_cooldown, 0.001), 0.0, 1.0)
+
+
+## Go. The CALLER has already paid -- MatchDirector.try_scurry is the only thing that should call
+## this, because it owns the pool and the pool is the price. Returns false if the mouse was not
+## in a position to spend, so the director can decline to charge for nothing.
+func start_scurry() -> bool:
+	if not scurry_ready():
+		return false
+	_boost_left = scurry_seconds
+	_boost_cooldown = scurry_cooldown
+	scurried.emit(self)
+	return true
+
+
+func get_carried_cheese() -> int:
+	return _wedges
+
+
+func has_free_paws() -> bool:
+	return _wedges <= 0 and not is_carrying()
+
+
+## Take a wedge into your paws. One at a time (GDD section 2), and never alongside a banner --
+## the two errands are meant to compete for the same mouse, not stack on one.
+func take_wedge() -> bool:
+	if not has_free_paws():
+		return false
+	_wedges = 1
+	return true
+
+
+## Hand over whatever cheese you were carrying, and return how much it was.
+func release_wedges() -> int:
+	var had := _wedges
+	_wedges = 0
+	return had
 
 
 func is_scruffed() -> bool:
@@ -367,6 +436,10 @@ func _scruff(by: Mouse) -> void:
 	_health = 0.0
 	_swing_left = 0.0
 	_cooldown_left = 0.0
+	# The burst dies with you; the cooldown does not. Being scruffed mid-Scurry has to cost the
+	# rest of it, or the safest moment to spend a cheese would be the one just before you lose
+	# the fight -- and the cheese stays spent either way.
+	_boost_left = 0.0
 	velocity = Vector3.ZERO
 	_knock = Vector3.ZERO
 	_wish = Vector3.ZERO
@@ -477,6 +550,11 @@ func _control(_delta: float) -> void:
 func _tick_timers(delta: float) -> void:
 	_stun_left = maxf(0.0, _stun_left - delta)
 	_cooldown_left = maxf(0.0, _cooldown_left - delta)
+	_boost_left = maxf(0.0, _boost_left - delta)
+	# Ticks while the burst is still running, so the fifteen seconds are counted from the moment
+	# you SPENT the cheese and not from the moment the boost ran out. The spend is the thing the
+	# cooldown is rationing.
+	_boost_cooldown = maxf(0.0, _boost_cooldown - delta)
 
 	if _swing_left > 0.0:
 		_swing_left = maxf(0.0, _swing_left - delta)
@@ -512,6 +590,10 @@ func move_speed() -> float:
 		top *= 1.0 - carry_penalty
 	if _swing_left > 0.0:
 		top *= swing_move_multiplier
+	# LAST, and multiplying whatever is left. Every penalty above has already been applied, so a
+	# Scurrying carrier is a fast carrier and not a mouse that stopped carrying (GDD section 2).
+	if _boost_left > 0.0:
+		top *= scurry_multiplier
 	return top
 
 

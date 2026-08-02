@@ -20,6 +20,19 @@ extends Node3D
 ## Where a respawning mouse appears, relative to the nest. Behind the banner stand rather than
 ## on top of it, so you don't spawn inside your own objective.
 @export var spawn_offset: Vector3 = Vector3(0.0, 0.25, 1.1)
+## Where the crew's cheese is piled, relative to the nest (GDD section 8: a nest is a base, a
+## banner spawn AND a cheese store).
+##
+## A SEPARATE SPOT FROM THE BANNER, and it has to be. Section 2 makes enemy stores raidable, but
+## a store at the banner's own feet is a store nobody ever raids: standing there while their
+## banner is home means you pick up the banner instead, every time, because it is worth more.
+## Raiding would then only be possible in the one situation -- their banner already out -- where
+## you have far better things to do. Splitting the two puts a second thing in the nest worth
+## standing on, which is also what makes defending one a real job rather than one radius.
+@export var stores_offset: Vector3 = Vector3(1.35, 0.0, -1.35)
+## How close to the pile you have to be to bank a wedge or take one. Deliberately tighter than
+## `radius`: the nest is where you are safe, the store is a specific place inside it.
+@export var stores_reach: float = 1.0
 @export_enum("Blue", "Red") var team: int = Team.BLUE
 
 var _banner: Banner
@@ -44,6 +57,17 @@ func banner_stand() -> Vector3:
 
 func spawn_point() -> Vector3:
 	return global_position + spawn_offset
+
+
+## Where the crew's cheese sits. Banked here, and raided from here.
+func stores_point() -> Vector3:
+	return global_position + stores_offset
+
+
+## Is `at` close enough to work this crew's pile?
+func at_stores(at: Vector3) -> bool:
+	var pile := stores_point()
+	return Vector2(at.x - pile.x, at.z - pile.z).length() <= stores_reach
 
 
 ## Which way a mouse faces when it spawns -- out of the nest, toward the middle of the arena.
@@ -120,3 +144,31 @@ func _build() -> void:
 	mound.mesh = mound_mesh
 	mound.position.y = 0.05
 	add_child(mound)
+
+	_build_stores()
+
+
+## A saucer where the crew's cheese is piled. Drawn, not just declared, because a raidable store
+## the enemy cannot SEE is not a target -- it is a coordinate you have to be told about, and this
+## game's whole information layer is about things you find out by looking.
+##
+## Deliberately not a wedge count. What is in the pile is on the HUD for your own crew and is
+## exactly the sort of thing the other crew should have to guess at.
+func _build_stores() -> void:
+	var saucer := CylinderMesh.new()
+	saucer.top_radius = stores_reach * 0.62
+	saucer.bottom_radius = stores_reach * 0.72
+	saucer.height = 0.05
+	saucer.radial_segments = 14
+	var material := StandardMaterial3D.new()
+	# The cheese colour, knocked back toward dirt. Bright enough to read as "cheese lives here",
+	# dull enough not to compete with the banner, which is the thing you are actually hunting.
+	material.albedo_color = Color(0.93, 0.78, 0.32).lerp(Color(0.34, 0.28, 0.20), 0.42)
+	material.roughness = 1.0
+	saucer.material = material
+
+	var pile := MeshInstance3D.new()
+	pile.name = "Stores"
+	pile.mesh = saucer
+	pile.position = stores_offset + Vector3(0.0, 0.03, 0.0)
+	add_child(pile)

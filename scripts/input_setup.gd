@@ -45,6 +45,11 @@ const KEYS: Dictionary = {
 	# other. They are opposites (one seals a corridor for good, one holds it for a while) and
 	# misfiring either while the other was wanted is a wasted cooldown.
 	"barricade": [KEY_X],
+	# Scurry -- the cheese boost (GDD sections 2 and 9). Space, and the thumb is the right home
+	# for it: it is available to every class, it is not an ability, and it wants to be pressable
+	# without any finger leaving WASD or the mouse. It is also the only key in the game that
+	# spends a team resource, which is why it is nowhere near the ones you mash.
+	"scurry": [KEY_SPACE],
 	# Quarter-turn the view. Arrows rather than Q/E because both hands are already busy --
 	# left on WASD and abilities, right on the mouse, which is the steering wheel.
 	"view_left": [KEY_LEFT],
@@ -86,6 +91,8 @@ const PAD_AXES: Dictionary = {
 
 const PAD_BUTTONS: Dictionary = {
 	"sprint": [JOY_BUTTON_LEFT_STICK],
+	# Same thumb, same idea as Space.
+	"scurry": [JOY_BUTTON_A],
 	"view_left": [JOY_BUTTON_LEFT_SHOULDER],
 	"view_right": [JOY_BUTTON_RIGHT_SHOULDER],
 }

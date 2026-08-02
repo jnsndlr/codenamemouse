@@ -30,6 +30,7 @@
 [ext_resource type="Script" path="res://scripts/ui/look_panel.gd" id="11_look"]
 [ext_resource type="Script" path="res://scripts/maps/grass_patch.gd" id="12_grass"]
 [ext_resource type="Script" path="res://scripts/player/grass_camouflage.gd" id="13_camo"]
+[ext_resource type="Script" path="res://scripts/maps/cache_field.gd" id="29_cheese"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_top_color = Color(0.28, 0.44, 0.66, 1)
@@ -162,6 +163,9 @@ script = ExtResource("12_grass")
 [node name="Boulders" type="Node3D" parent="Surface" groups=["nav_source", "surface_clutter"]]
 script = ExtResource("28_boulders")
 network_path = NodePath("../../Tunnels")
+
+[node name="Cheese" type="Node3D" parent="Surface" groups=["surface_clutter"]]
+script = ExtResource("29_cheese")
 
 [node name="Patio" type="Node3D" parent="Surface" groups=["surface_clutter"]]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -7)

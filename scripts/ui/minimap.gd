@@ -65,6 +65,9 @@ const SURFACE_GROUP: StringName = &"surface_clutter"
 @export var grass_color: Color = Color(0.30, 0.39, 0.18, 0.52)
 @export var boulder_color: Color = Color(0.48, 0.49, 0.50, 0.95)
 @export var paving_color: Color = Color(0.58, 0.59, 0.57, 0.88)
+## Cheese caches. The one warm colour on a panel of greens and greys, because it is the only
+## thing on it you go to for a reason other than the flag.
+@export var cheese_color: Color = Color(0.95, 0.79, 0.30, 0.92)
 @export var surface_rock_color: Color = Color(0.39, 0.38, 0.36, 0.82)
 @export var surface_object_color: Color = Color(0.56, 0.46, 0.31, 0.92)
 ## Rock your crew has found. Cool and pale against the warm dirt of the panel, the same argument
@@ -195,6 +198,15 @@ func _surface_features() -> void:
 		for shape: Dictionary in shapes:
 			_draw_surface_shape(shape)
 
+	# Caches walk their OWN group rather than joining `surface_clutter`. That group is collected
+	# once at startup by depth_focus.gd, which is fine for authored scenery and wrong for cheese:
+	# a wedge dropped by a scruffed mouse is created mid-match and would never make the list.
+	for node: Node in get_tree().get_nodes_in_group(CheeseCache.GROUP):
+		if not node.has_method("minimap_shapes"):
+			continue
+		for shape: Dictionary in node.call("minimap_shapes"):
+			_draw_surface_shape(shape)
+
 
 func _draw_surface_shape(shape: Dictionary) -> void:
 	var style: StringName = shape.get("style", &"object")
@@ -229,6 +241,8 @@ func _surface_colour(style: StringName) -> Color:
 			return boulder_color
 		&"paving":
 			return paving_color
+		&"cheese":
+			return cheese_color
 		&"surface_rock":
 			return surface_rock_color
 		_:

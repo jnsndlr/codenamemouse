@@ -15,7 +15,19 @@ Read these in order — they're the source of truth for what we're building and 
 | [`docs/01-gdd.md`](docs/01-gdd.md) | The **what** — digging, cheese-as-lives, classes, the world |
 | [`docs/02-implementation-plan.md`](docs/02-implementation-plan.md) | The **how** — tech, architecture, milestones M0–M9 |
 
-## Current state: M5 — hidden information (in progress)
+## Current state: M7 — real multiplayer (next)
+
+**M5 and M6 are both closed.** Crawling into an enemy tunnel is frightening — unlit because you
+didn't hang the lamps, its layout was never yours, and what you can make out arrives a cell at a
+time and then goes stale. No dial needed moving; the first milestone since M2 whose verdict didn't
+come back as a level-design problem.
+
+**And cheese is lives.** The economy runs both ways now — caches to gather, stores to bank and
+raid, a 20-second respawn while broke, and Scurry as the one spend you choose. The best part
+turned out to be the smallest change: **dropped cheese never rots.** A pile waits where somebody
+fell until somebody comes for it, and nearby drops merge into one growing pile. This game had
+exactly one place both crews were obliged to care about — the flag. Now every fight leaves
+another, nobody chose where they go, and the map grows its own objectives as the match runs.
 
 **There is a match.** Two crews of three, two banners, melee, scruffing, respawns, a clock,
 and bots that play the objective rather than each other. M3 answered its question — *is the
@@ -215,6 +227,7 @@ Open the project in Godot 4.7+ and press F5, or:
 | **W / S / A / D** | Forward / backpedal / sidestep — all relative to *facing*, not the camera |
 | **Double-tap W** | Sprint (personal stamina) |
 | **Shift** | Slow — the quiet tier. Bends no grass. |
+| **Space** | **Scurry** — spends **1 team cheese** for a ~2s burst. Multiplies your current speed, refills sprint stamina, and makes you fully visible. 15s personal cooldown; the wedge beside your health bar says when it's ready. |
 | **Left click** | Attack — a short cone in front of you |
 | **Right click** | Dig: point at a tile next to your tunnel and hold |
 | **E** | Take the shaft under or over you |
@@ -288,6 +301,17 @@ is real geometry parented underneath.
 On **Spotting**: `sight_range` (14), `memory_seconds` (15 — how long a contact outlives the
 sighting), `reveal_opacity` (0.35 — how visible you must be to register at all), `interval`
 (0.25, which doubles as reaction time).
+
+**The economy** is spread across three places on purpose, since it is three different questions.
+On **MatchDirector**: `starting_cheese` (20), `cheese_ceiling` (40 — so hauling can't win a match
+on its own), `respawn_seconds` (6) and `broke_respawn_seconds` (20), and `drop_merge_radius` (2.2
+— how close a fresh drop has to be to join an existing pile instead of starting its own). On
+**Surface/Cheese** (a
+`cache_field`): `per_side` (3, mirrored to 6), `wedges_each` (6), `ring_radius` (23),
+`fan_degrees` (120 — how wide either side of the perpendicular) and `nest_clear` (11, a hard
+floor behind the angles). On a **Mouse**: `scurry_seconds` (2.0), `scurry_cooldown` (15.0) and
+`scurry_multiplier` (1.85, a real step above Sprint's 1.4). On a **Nest**: `stores_offset` and
+`stores_reach` — where the crew's pile sits and how close you must be to bank or raid it.
 
 **Classes live in [`resources/classes/`](resources/classes)** — four `.tres` files, one per
 class. `dig_speed` (Engineer 1.0, everyone else 0.35), `carry_penalty`, health, speed, turn rate,
@@ -469,23 +493,80 @@ rather than in `project.godot`, because that file serializes input bindings as o
 unreadable line. Move them into Project Settings > Input Map when you want in-editor
 rebinding.
 
-## Next: play M5 and give it a verdict
+## Next: M6 — cheese is lives
 
-**M5's systems are all in.** Tunnel cells and mouths are per-crew map knowledge; the Sneak's sonar
-turns a glimpse of the layer below into one contestable cant mark; lamps belong to the crew that
-hung them, so an enemy corridor is unlit; and sight into an enemy network grants cells one line of
-open floor at a time and forgets them on a clock. Crews of five with class-swapping bots and
-digging Engineers mean the yard fills with corridors somebody else made, which is the condition the
-milestone needed to be answerable at all.
+**M5 got its verdict and it was yes**, at first-pass values, without a retune. That closes the
+hidden-information layer and opens the economy.
 
-**What's left is not code — it's the answer.** M5 asks whether crawling into an enemy tunnel is
-*frightening*. Go and find out, in a full match, from inside one. If it isn't, the dials are
-`lamp_*` on the network, `sight_cells` and `memory_seconds` on `TunnelSight`, and `enemy_seen_alpha`
-on the minimap — but be willing to hear that the answer is a map problem rather than a tuning one,
-which is what M3 and M4 both said about the midfield.
+**Most of the ledger was already standing, and none of the loop.** The pool, its signal and the
+readout on the score bug have been in since M3, and the respawn cost has been charged the whole
+time — `_on_scruffed` spends a cheese the moment you hit the dirt. What has never existed is a way
+to put one *back*, or a way to spend one *by choice*. An economy that only drains is a countdown,
+and you cannot ask a countdown whether it creates decisions.
 
-Then **M6 — cheese is lives**: caches, carrying, team stores, respawn cost, and the bankruptcy play.
-The Backyard BBQ layout and the dig-controls pass still stand behind it.
+So M6 is four things, and **they are all in**:
+
+**Cheese you can go and get.** Six caches sit on a ring deliberately *off* the nest-to-nest lane,
+mirrored so neither crew has a shorter walk. You take **one wedge at a time** and carry it home,
+which makes refilling a series of trips across ground somebody else wants rather than a prize you
+grab. Get scruffed and it lands where you fell, with a clock on it, for whoever wants it.
+
+**A store you can raid.** Banking happens at a saucer inside your nest — its own spot, not the
+banner's feet, and that detail is load-bearing: while the two shared a radius, a raider in an
+enemy nest picked up the **banner** every time, because the banner is worth more. Enemy stores
+are raidable (§2), so a nest now has two things worth standing on and a defender has two things
+to cover.
+
+**A zero that bites without ending you.** Respawns go 6s → **20s** while broke, read at the moment
+you are scruffed and *before* the charge, so a crew on its last cheese still gets the short wait
+for the death it could afford.
+
+**Scurry.** Space, one cheese, ~2s, 15s personal cooldown. It **multiplies** your current speed
+rather than setting one — so it does not erase the flag-carry penalty, and a Scurrying Sneak is
+still a worse carrier than a Scurrying Generalist. It refills your sprint stamina, which makes it
+a second wind rather than a stat buff, and it pins you at **full opacity**: buying speed with
+cheese must never also buy stealth. Everyone sees the counter drop and everyone knows who pressed
+it, which is most of what makes it a decision.
+
+Sprint is *not* part of this: GDD §9 split sprint off the economy onto per-class stamina, and
+`player.gd` has held it since M4.
+
+Caches are on the minimap **for both crews** — a deliberate exception to M5's instinct that
+information should be earned. The bankruptcy play is a *plan*, and a plan has to be makeable from
+the nest before you commit; a cheese hunt you can only run from memory is homework. What stays
+hidden is how much is left in any one pile.
+
+**Dropped cheese never rots**, and that is the piece worth calling out. A pile waits where somebody
+fell until somebody comes for it; drops close together merge into one growing pile. An earlier pass
+gave drops a timer on the theory that a clock creates urgency — it does the opposite, because a
+pile that expires is a pile you can win by ignoring. Left alone, they turn every fight that
+happened into somewhere both crews have a reason to return to. Every pile is on the minimap for
+both crews, authored and dropped alike.
+
+## Next: M7 — real multiplayer
+
+*Does it survive contact with a second human?* **Done when you and a friend play a full match over
+the internet and it's playable.** Not perfect — playable.
+
+The interesting part is how much of it is already built, because six milestones of "secretly
+netcode decisions" were kept honest. **`Mouse._control()` is already the driver seam** — `Player`
+overrides it and reads the keyboard, `Bot` overrides it and reads the AI, and a third override
+reading a replicated input frame slots in beside them without the base class changing.
+**`MatchDirector` is already the sim**: every rule resolves in one `_physics_process` on one node
+that owns the state. And **per-crew knowledge is already stored per crew** — the tunnel network
+keeps team bit masks, so the hidden-information pillar needs filtering, not retrofitting.
+
+What is *not* built: input is read where it's used rather than captured as data (only three files
+touch `Input.`, and one of them is the camera, which stays local forever); actions call the rules
+directly, and on a client every one of those has to become a request; "the player" is singular in
+eleven places, all but one of them presentation. Five checkpoints, each playable, with the
+visibility filter deliberately not last — a leak there looks like nothing at all from inside a
+match, which is exactly the kind of failure `tools/` exists to catch. See
+[the plan](docs/02-implementation-plan.md) for the full survey and sequencing.
+
+**Fix in checkpoint 2:** bots don't Scurry yet. Fine for M6's question, blocking for M7 — a crew
+whose AI seats never spend cheese plays a different economy from the one across the yard. The
+Backyard BBQ layout and the dig-controls pass still stand behind all of it.
 
 The Backyard BBQ layout still matters, but it is no longer the sequencing gate. It and the
 dig-controls pass return after the core systems, when the surface and tunnel routes can be laid
