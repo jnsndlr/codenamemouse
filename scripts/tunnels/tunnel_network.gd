@@ -1209,10 +1209,20 @@ func _rebuild_rock_caps(plane: int) -> void:
 		cap.mesh = null
 		return
 
-	# Just under the lid, so the sheet reads as the top of a body of rock rather than as a tile on
-	# the floor. The lid itself sits a hair BELOW the next plane's floor, so this has to clear it
-	# from underneath or the two fight along every cell boundary.
-	var top := _wall_top(plane) - 0.015
+	# JUST ABOVE THE LID, not just below it, and the first version got this exactly backwards. Under
+	# the lid is where a seam's top surface really is -- and it is invisible there, permanently: the
+	# lid is opaque earth, and the one thing that ever cuts a hole in it is a cell being DUG. A rock
+	# cell is never dug. So the sheet was drawn correctly, hidden under solid ground, on every plane.
+	#
+	# Above it, the sheet is what it always claimed to be in the comments: a piece of knowledge laid
+	# over the world rather than a surface in it. You are looking at the ground your crew has learned
+	# there is rock beneath, which is the only reading of "the top of the seam" a camera up here can
+	# actually deliver.
+	#
+	# Measured off SPACING rather than `wall_height`, because the lid sits one plane spacing above
+	# the floor whatever the walls have been tuned to -- and a sheet that tracked the wall dial would
+	# sink back under the ground the first time somebody shortened it.
+	var top := SPACING + 0.02
 	var half := CELL * 0.5
 	var t := SurfaceTool.new()
 	t.begin(Mesh.PRIMITIVE_TRIANGLES)

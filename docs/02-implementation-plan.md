@@ -858,7 +858,7 @@ tells you what is under it before you dig at all.**
   before M5 has to do it for tunnels and sightings, where the answer changes every second. It is
   stored as a bit mask per cell rather than two dictionaries, so a boulder — which everybody can
   see — is one entry and not the same cell recorded twice.
-- **Drawn as a sheet under the lid, in its own colour, unshaded.** The seam *face* is lit stone you
+- **Drawn as a sheet ABOVE the lid, in its own colour, unshaded.** The seam *face* is lit stone you
   are standing in front of; the top is rock read through a layer of earth, so drawing them the same
   grey would say the ceiling had been cut away. Unshaded because the sheet sits under a lid lit by
   almost nothing and a shaded one came back black — it is a piece of knowledge laid over the world,
@@ -898,6 +898,25 @@ tells you what is under it before you dig at all.**
 > under `Surface` — including the boulders, which claim cells the moment they exist — runs before
 > the network's own `_ready`. The cell dictionaries moved to `_init`, where they cost nothing and
 > cannot be raced: they are plain dictionaries and had no reason to wait for a renderer.
+
+> **The minimap draws one layer now, the one you are standing on** — the same rule the world
+> itself follows. Four planes stacked on a 200-pixel square are not a map of anything: two
+> corridors a plane apart cross on the panel without touching in the world, so the picture asserts
+> junctions that do not exist, and a deep network fills the yard with routes you cannot take from
+> where you are. The depth tint stays and now means something on its own: it says how deep the
+> corridors you are looking at are. On the surface, where there are no dug cells to draw, it shows
+> the **shaft mouths** — the only part of the network that means anything from the grass.
+
+> **Two bugs the screenshot found that the audit could not, and they were the same mistake twice:
+> testing the rule and not the picture.** The sheet was drawn just *under* the lid, which is where
+> a seam's top surface really is and where it is permanently invisible — the only thing that ever
+> cuts a hole in a lid is a cell being dug, and a rock cell is never dug. And the reveal hung off
+> deliberately pressing dig *into* rock, which is the one action the interface talks you out of:
+> the cursor greys and stops pulsing over a seam precisely to say holding the button will achieve
+> nothing. So a player could dig a corridor along a seam, stand there looking at its stone face,
+> and have found nothing. Digging a cell that exposes a face now reveals it too, and both halves
+> are asserted — the audit had happily checked that the mesh existed, which it did, under a metre
+> of earth.
 
 > **One bug found by reading, then pinned by a test.** The pieces a section throws off were
 > parented to the boulder, which frees itself once its last section is gone — so the final quarter

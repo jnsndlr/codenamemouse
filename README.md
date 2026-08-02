@@ -62,9 +62,10 @@ four coloured cards. The rocks and grass on the lawn now **disappear the moment 
 them**: they sit a metre above the floor you are reading and land on it from this angle, so a
 corridor was filling up with scenery that looked like it was in the tunnel and wasn't.
 
-**And the rock you've found stays found.** Dig into a seam and your crew learns the **whole
-connected vein** — drawn from then on as a cool grey sheet in the earth above your corridor, and
-marked on the minimap for the plane you're standing on. **Your crew only**: the other side still
+**And the rock you've found stays found.** Dig into a seam — or just open the cell beside it and
+expose its stone face — and your crew learns the **whole connected vein**, drawn from then on as a
+cool grey sheet on the ground above your corridor and marked on the minimap for the plane you're
+standing on. **Your crew only**: the other side still
 has to pay for its own copy of the map. The cell you spent is the price; the shape of the vein is
 what you bought. This is the first knowledge in the game one crew has and the other doesn't, which
 is M5's whole job — doing it first on rock, which never moves, is deliberate.
@@ -194,7 +195,13 @@ On **Surface/Boulders**: `count` (14), `spans` (the footprints on offer and thei
 repeated entry is a heavier weight), `hits_per_section` (5 Brute swings per cell), `height`
 (0.75–1.15m), `spacing_cells` (3 clear cells between boulders), `boulder_seed`. On **Tunnels**,
 `rock_top_color` is the sheet a found vein is drawn as; on the **minimap**, `rock_color` is the
-same information on the panel.
+same information on the panel and `mouth_color` is a shaft entrance seen from the lawn.
+
+**The minimap draws one layer — the one you're standing on**, tunnels and rock alike, the same rule
+the world follows. Stacked, four planes aren't a map of anything: two corridors a plane apart cross
+on the panel without touching in the world. On the surface it shows the **shaft mouths** instead,
+since the lawn has no dug cells and where you can get in is the only thing about the network that
+matters from up there.
 
 On **Surface/Patio** (a `NoSurfaceZone`): `extents` — half-width and half-depth in metres, so the
 placeholder's 10 × 5 is a 20 × 10 slab. Move it, resize it, rotate it, or add a second node for a

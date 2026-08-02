@@ -106,6 +106,7 @@ func _update_dig(delta: float) -> void:
 		_progress += delta * _dig_rate() / maxf(dig_seconds, 0.01)
 		if _progress >= 1.0:
 			_network.dig(_plane, _target)
+			_learn_exposed(_target)
 			_progress = 0.0
 			# Re-aim immediately: the cell just opened, so it is no longer a valid target and
 			# holding the button should move on to the next one rather than stall.
@@ -123,9 +124,26 @@ func _update_dig(delta: float) -> void:
 ## about on four functions that mostly don't, and bots -- which never dig -- would have to supply it
 ## anyway. The dig controller is already the one object that pairs a player with a cell.
 ##
-## ON THE PRESS, not on the hover. The cursor already goes grey over rock you are pointing at, and
-## that is the right amount to give away for free: one cubic metre, while you look at it. Learning
-## the shape of the whole vein costs an action -- you swing at it and find out it rings.
+## Cutting a cell open exposes whatever it now backs onto, and a face you can SEE is a face you
+## have found.
+##
+## THE PRESS ALONE WAS NEARLY NEVER ENOUGH, which only showed up on screen. Digging a corridor
+## along a seam draws its face in stone -- you are standing there looking at it -- and none of that
+## counted, because the reveal hung off deliberately pressing dig INTO the rock. The cursor tells
+## you not to do that: it goes grey and stops pulsing precisely to say holding the button will
+## achieve nothing. So the one action the feature waited for was the one action the interface talks
+## you out of, and the vein you had plainly found stayed dark.
+##
+## Both paths reveal now. Running into it head-on still works and is what a player does when they
+## want to know how far it goes; exposing the face is what actually happens.
+func _learn_exposed(cell: Vector2i) -> void:
+	for side: Vector2i in TunnelNetwork.SIDES:
+		_learn_vein(cell + side)
+
+
+## ON THE PRESS, not on the hover. Pointing at rock already greys the cursor, and that is the right
+## amount to give away for free: one cubic metre, while you look at it. Learning the shape of the
+## whole vein costs a cell -- either the one you swung at it with, or the one you opened beside it.
 func _learn_vein(cell: Vector2i) -> void:
 	if _player == null:
 		return

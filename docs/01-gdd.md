@@ -224,9 +224,15 @@ you learn where the rock is by paying for the knowledge rather than by being tol
 
 **What a seam teaches you, once you've hit it. `[DECIDED]`** Running into rock reveals the
 **whole connected vein** — not the one cell — and reveals it **to your crew only**. From then
-on it is drawn in its own colour against the earth above it, and it appears on the minimap for
+on it is drawn in its own colour on the ground above it, and it appears on the minimap for
 the plane you're standing on. The cell you spent is the price; the shape of the vein is what you
 bought, and the other crew still has to pay for its own copy.
+
+> **Two ways to hit it, and the quiet one is the one that matters.** Swinging the cursor at a
+> seam and being refused counts — but so does simply **opening the cell beside it**, which draws
+> its face in stone. That is what actually happens in play, and it has to count: the cursor greys
+> out over rock specifically to tell you not to hold the button there, so a rule that waited for
+> the head-on version would almost never fire.
 
 > **Why the vein and not the cell.** A seam is one object — it was grown as one — and chipping
 > along a wall a tile at a time to map something you can already see the shape of is bookkeeping,

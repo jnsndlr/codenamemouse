@@ -761,6 +761,47 @@ func _check_reveal() -> void:
 	if _network.is_rock_known(1, seam2, Team.BLUE):
 		_fail("REVEAL", "and it told the other crew as well")
 
+	# AND THE PATH THAT ACTUALLY HAPPENS: not swinging at the rock, but opening the cell beside it
+	# and exposing its face. This is the one a player hits without meaning to, and it is the one the
+	# feature originally missed -- the cursor greys out over rock specifically to say "don't hold
+	# the button here", so almost nobody was ever going to trigger the head-on version.
+	if not await _fresh_reveal_scene():
+		_broken("reveal", "the arena would not build a third time")
+		return
+	var seam3 := _first_rock(1)
+	var face := _soft_neighbour(1, seam3)
+	if seam3 == Vector2i.MAX or face == Vector2i.MAX:
+		_broken("reveal", "no seam with soft ground beside it in the third arena")
+		return
+	# Stand one cell further back, so the tile being opened is the one that touches the rock and the
+	# player is not already standing against it.
+	var back := face + (face - seam3)
+	if _network.is_rock(1, back):
+		_broken("reveal", "the cell behind the face is rock too -- nowhere to dig from")
+		return
+	_network.dig(1, back)
+	var digger: Node3D = _scene.get_node("Player")
+	var arm: Node = _scene.get_node("DigController")
+	digger.set_physics_process(false)
+	arm.set_physics_process(false)
+	digger.global_position = _network.cell_to_world(1, back) + Vector3.UP * 0.05
+	arm._plane = 1
+	digger.set("team", Team.BLUE)
+	digger.set_class(MouseClass.ENGINEER)
+	digger._aim_point = _network.cell_to_world(1, face)
+	Input.action_press("dig")
+	await process_frame
+	for i in range(40):
+		arm._update_dig(1.0 / 60.0)
+	Input.action_release("dig")
+	if not _network.is_dug(1, face):
+		_broken("reveal", "the tile beside the seam never opened -- nothing was exposed")
+		return
+	if not _network.is_rock_known(1, seam3, Team.BLUE):
+		_fail("REVEAL", "opening the cell beside a seam exposed its face and taught nobody anything")
+	if _network.is_rock_known(1, seam3, Team.RED):
+		_fail("REVEAL", "and exposing a face told the other crew too")
+
 	print("")
 	print("-- reveal")
 	if _findings.is_empty():
