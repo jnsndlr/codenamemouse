@@ -113,13 +113,36 @@ void vertex() {
 	push.x += sin(phase) * wind_strength;
 	push.z += cos(phase * 0.7) * wind_strength;
 
-	// World-space displacement back into the blade's own space. The original multiplies the
-	// vector by the matrix from the left, a Godot 3 idiom for the inverse rotation; spelling
-	// it as the basis transpose says what it means and drops the stray translation term that
-	// the original's vec4(dir, 1.0) quietly picks up.
-	vec3 local_push = push * mat3(MODEL_MATRIX);
+	// The blade's own axes. grass_patch.gd scales the basis by (1, height, 1), so column 1 is the
+	// only one carrying a scale -- its length IS this blade's height in metres, and dividing it
+	// out leaves a clean rotation to push vectors through.
+	mat3 model_basis = mat3(MODEL_MATRIX);
+	float stem = max(length(model_basis[1]), 0.0001);
+	mat3 blade_axes = mat3(model_basis[0], model_basis[1] / stem, model_basis[2]);
 
-	VERTEX += local_push * interact_power * freedom;
+	// How far up the spine this vertex sits, in metres. THAT is the quantity a bend must not
+	// change, and the original changed it: sliding the tip sideways while leaving its height
+	// alone makes the blade the hypotenuse of its own lean, so it grows by up to a tenth of its
+	// length as you walk into it. Nothing about that reads as bending -- it reads as the grass
+	// swelling, and because the wind drives the same term it never stops doing it.
+	float along = VERTEX.y * stem;
+	vec3 lean = push * interact_power * freedom;
+
+	// Drop the vertex until its distance from the root is what it was. The tip swings through an
+	// arc instead of stretching along one. `freedom` is quadratic while `along` is linear, so the
+	// lean is always the shorter side here -- the clamp is insurance, not a working case.
+	float upright = sqrt(max(along * along - dot(lean, lean), 0.0));
+	vec3 bend = lean + blade_axes[1] * (upright - along);
+
+	// World-space displacement back into the blade's own space. The original multiplies the
+	// vector by the matrix from the left, a Godot 3 idiom for the inverse rotation; spelling it
+	// as the basis transpose says what it means and drops the stray translation term that the
+	// original's vec4(dir, 1.0) quietly picks up. Transposing only inverts an ORTHONORMAL basis,
+	// which is why the height came out of it above -- and undoing that scale is the last step.
+	vec3 local_bend = bend * blade_axes;
+	local_bend.y /= stem;
+
+	VERTEX += local_bend;
 }
 
 

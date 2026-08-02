@@ -72,6 +72,20 @@ func contacts_for(side: int) -> Dictionary:
 	return _contacts[side]
 
 
+## Is this mouse currently too well hidden to have been picked out?
+##
+## PUBLIC, because the bots have to be asking the same question the sweep asks. A bot that walks
+## at someone it cannot see is not a hard opponent, it is a bot that reads the scene tree -- and
+## it quietly deletes the mechanic for the human, who is doing everything right and being chased
+## anyway. Sharing `reveal_opacity` rather than giving the AI its own threshold is what stops the
+## grass meaning one thing on the minimap and another to the thing walking toward you.
+##
+## Only about being SEEN. Range, line of sight and which plane you are on are the sweep's
+## business; a caller that wants those wants `_can_see`.
+func hidden(mouse: Mouse) -> bool:
+	return _opacity_of(mouse) < reveal_opacity
+
+
 ## 1 while a contact is fresh, falling to 0 as it is forgotten. The marker's alpha, and the
 ## honest answer to "how much should I trust this".
 func confidence(entry: Dictionary) -> float:
@@ -167,7 +181,7 @@ func _can_see(watcher: Mouse, enemy: Mouse) -> bool:
 	var gap := watcher.global_position - enemy.global_position
 	if gap.length() > sight_range:
 		return false
-	if _opacity_of(enemy) < reveal_opacity:
+	if hidden(enemy):
 		return false
 	return _clear_line(watcher, enemy)
 

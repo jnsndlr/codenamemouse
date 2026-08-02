@@ -25,6 +25,13 @@ extends Node3D
 ## ticked in the scene, unlike the nests: a zone left out of the group is a rule that silently
 ## does not apply, and the failure looks like the digging code being broken rather than like a
 ## map that forgot something.
+##
+## Joined in `_enter_tree`, and that is not a style choice. Godot runs `_enter_tree` over an
+## entire subtree before it runs a single `_ready`, so registering there is the only way a zone
+## is in the group no matter where the map author put it. In `_ready` the group is only populated
+## for nodes that happen to sit ABOVE this one in the scene -- which is exactly how the patio came
+## to be carpeted in grass: Surface/Grass paints in its own `_ready`, Surface/Patio is the next
+## sibling down, and `seals()` was therefore asking an empty group.
 const GROUP: StringName = &"no_surface"
 
 ## Half-extents on the ground, in metres: x across, y along z. The node's own yaw rotates it, so
@@ -47,8 +54,11 @@ const GROUP: StringName = &"no_surface"
 var _slab: MeshInstance3D
 
 
-func _ready() -> void:
+func _enter_tree() -> void:
 	add_to_group(GROUP)
+
+
+func _ready() -> void:
 	_build()
 
 

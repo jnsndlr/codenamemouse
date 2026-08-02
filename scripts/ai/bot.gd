@@ -87,6 +87,9 @@ enum { RAIDER, DEFENDER }
 @onready var _agent: NavigationAgent3D = $Agent
 
 var _director: MatchDirector
+## Found lazily, like the director. Optional: a map without one still plays, it just has no
+## concealment for the bots to respect.
+var _spotting: Spotting
 var _network: TunnelNetwork
 var _goal: Vector3 = Vector3.ZERO
 ## Which plane the destination is on. Almost always 0 -- the banners and the nests are on the
@@ -297,6 +300,17 @@ func _pick_quarry() -> Mouse:
 	return near
 
 
+## The nearest enemy this bot has actually SEEN within `reach` of a spot.
+##
+## The concealment gate belongs here and not in `_nearest_enemy`, because this is the one that
+## produces a DESTINATION -- a defender reading this sets `_goal` to whatever it returns. Walking
+## at a mouse crouched in deep grass is the precise failure GDD section 8 is meant to prevent:
+## the human does everything the mechanic asks, goes still, watches the blades settle, and the
+## defender strolls over anyway. Whatever the grass hides, it has to hide from both crews or it
+## is scenery.
+##
+## A carrier is never hidden -- grass_camouflage.gd pins them at full opacity -- so the rule that
+## sends a bot after its stolen banner needs no exception here and does not get one.
 func _nearest_enemy_within(of: Vector3, reach: float) -> Mouse:
 	var best: Mouse = null
 	var closest := reach
@@ -304,11 +318,28 @@ func _nearest_enemy_within(of: Vector3, reach: float) -> Mouse:
 		var other := node as Mouse
 		if other == null or other.team == team or other.is_scruffed():
 			continue
+		if _hidden_from_me(other):
+			continue
 		var gap := of.distance_to(other.global_position)
 		if gap <= closest:
 			closest = gap
 			best = other
 	return best
+
+
+## Too well concealed for this bot to be steering at, on the same 0..1 scale the minimap uses.
+##
+## Asked of spotting.gd rather than answered here, so there is exactly one threshold in the game
+## for "I have not resolved that shape". A second copy would drift, and the day it drifted the
+## grass would conceal you from the map and not from the bots -- which is worse than not
+## concealing you at all, because it would still LOOK like it was working.
+##
+## Fails open. No spotting node means no concealment model at all, and a defender that ignores
+## every intruder is a far louder bug than one that sees too well.
+func _hidden_from_me(other: Mouse) -> bool:
+	if _spotting == null:
+		_spotting = get_tree().get_first_node_in_group(Spotting.SPOTTING_GROUP) as Spotting
+	return _spotting != null and _spotting.hidden(other)
 
 
 ## Nearest enemy still standing. A scruffed mouse is not a threat and chasing one is the

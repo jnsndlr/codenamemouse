@@ -22,6 +22,18 @@ const MAX_INFLUENCES: int = 48
 ## Anything that bends grass adds itself here. A group rather than an exported path list, so
 ## the bots that arrive at M3 start bending grass without this file changing.
 const ACTOR_GROUP: StringName = &"grass_actor"
+## Half-step used to difference the painted field into a gradient. Has to sit well below the
+## finest wavelength in play or it measures noise instead of slope: the detail field's top octave
+## is 0.19 * 4 = 0.76, about a 1.3 m wavelength, so 0.05 has plenty of room.
+const GRADIENT_STEP: float = 0.05
+## Extra cull margin on each render chunk, in metres.
+##
+## Covers exactly what the mesh bounds cannot know about: the shader's own displacement. That is
+## `interact_power` (0.18) times a push the shader clamps to 1, plus `wind_strength` (0.035) on two
+## axes, so about 0.19 m at the absolute worst. This was 2.0 -- eleven times what it needs, which on
+## a 6 m chunk means culling a box more than twice the chunk's own width and drawing a third more
+## grass than is on screen.
+const CULL_MARGIN: float = 0.35
 
 @export var grass_seed: int = 20260731
 @export var half_extent: float = 34.0
@@ -33,17 +45,49 @@ const ACTOR_GROUP: StringName = &"grass_actor"
 ## enough to make the noise peaks real cover without paying that cost over the whole arena.
 @export_range(0.08, 0.5, 0.01) var sample_spacing: float = 0.15
 ## Render-only chunk size. Smaller chunks cull better; this never affects the painted pattern.
-@export_range(4.0, 20.0, 1.0) var render_chunk_size: float = 8.0
+##
+## The camera is orthographic and tightly zoomed (camera_rig.gd: 7.5 idle to 10.75 sprint), so it
+## only ever sees 3-6% of the arena -- which makes chunk granularity, not blade count, the thing
+## that decides how much grass gets vertex-shaded. tools/grass_cull_probe.gd measures the whole
+## curve; 6 m with the tightened margin draws about 15% of the field at sprint zoom against 23% for
+## the old 8 m and 2.0 margin, and 4 m only buys another point and a half for 289 draw calls.
+@export_range(3.0, 20.0, 1.0) var render_chunk_size: float = 6.0
 ## Broad soil/moisture regions, then smaller breakup within them.
 @export_range(0.005, 0.2, 0.005) var field_noise_frequency: float = 0.055
 @export_range(0.02, 1.0, 0.01) var detail_noise_frequency: float = 0.19
 @export_range(0.0, 0.5, 0.01) var detail_influence: float = 0.22
-## Below this combined noise value the lawn stays open. At `dense_threshold`, every jittered sample
-## grows a blade. The band between them creates naturally feathered, variable-density boundaries.
+## Below this combined noise value the lawn stays open. This single number is the shape OUTLINE --
+## the contour where grass starts -- and nothing below moves it.
 @export_range(0.0, 1.0, 0.01) var coverage_threshold: float = 0.49
-@export_range(0.0, 1.0, 0.01) var dense_threshold: float = 0.66
+## How far in from that outline the grass takes to reach full density, IN METRES.
+##
+## Metres, and that is the entire point. The obvious way to feather an edge is a second noise
+## threshold and a smoothstep between the two, which is what this used to do -- but a fixed band of
+## noise VALUE is a wildly variable distance on the ground. Measured over this arena (tools/
+## grass_probe.gd) the old 0.49-0.66 band spanned 2.4 m where the field is steep and 11 m where it
+## is flat, median 4.35 m. Grass shapes here are rarely more than ten metres across, so a taper
+## that wide left them with no interior at all: 36% of the grassed ground sat below density 0.1 and
+## only 14% ever reached full. Dividing by the local slope converts value into distance, so a shape
+## is solid everywhere except a rim of exactly this width.
+@export_range(0.1, 3.0, 0.05) var edge_feather: float = 0.6
+## The same taper for CONCEALMENT, kept separate and wider on purpose.
+##
+## The blades want a tight rim so the patch reads as solid cover; hiding does not want the same
+## number, or cover would switch on over 0.6 m -- about a seventh of a second at sprint -- and a
+## mechanic you cross faster than you can react to is a coin flip rather than a decision. Wider
+## here means the edge of a patch is partial cover you can feel yourself entering.
+@export_range(0.1, 4.0, 0.05) var cover_feather: float = 1.4
 ## Coarse sampling used only to paint the minimap. It reads the same continuous mask as the blades.
 @export_range(0.5, 3.0, 0.1) var minimap_sample_spacing: float = 1.4
+## Whether grass is drawn into the sun's shadow map as well as the frame.
+##
+## OFF, which is the largest single saving available here and the one worth re-examining by eye
+## first. Every blade that casts runs its vertex shader again per shadow cascade, and the cascades
+## are fitted to the camera's range rather than to what is on screen, so grass can cost several
+## times more in the shadow pass than in the visible one. What it buys back at this scale is close
+## to nothing: blades are half a metre tall under a pixelation pass whose fat pixels are wider than
+## the shadows they would cast. Left as a switch, not a deletion, because that is a look call.
+@export var cast_shadows: bool = false
 
 @export_group("Blade")
 ## Taller than the mouse, or it conceals nothing -- the capsule is about 0.4 and grass that
@@ -88,6 +132,7 @@ var _trail: Array[Dictionary] = []
 var _last_drop: Dictionary = {}
 ## Cached coarse paint for the minimap. The world and gameplay evaluate the continuous field.
 var _minimap_shapes: Array[Dictionary] = []
+var _blade_count: int = 0
 
 
 ## The material every render chunk shares, so the look panel can drive its uniforms live. Handing out
@@ -106,7 +151,27 @@ func concealment_at(at: Vector3) -> float:
 	var spot := Vector2(local.x, local.z)
 	if not _grass_allowed(spot):
 		return 0.0
-	return smoothstep(0.12, 0.78, _grass_density(spot))
+	return smoothstep(0.0, cover_feather, _edge_distance(spot))
+
+
+## Blade density at a world position: 0 on open ground, on paving, in a nest or off the map, and
+## 1 inside a grass shape past its rim. The painter's own answer to "should anything grow here".
+##
+## Public as the counterpart to `concealment_at`, which answers the gameplay question through the
+## same mask but its own wider ramp. tools/grass_paving_probe.gd integrates this to check that what
+## was actually PLANTED matches what the mask says -- the one test that catches the mask being
+## right by the time anyone asks it and wrong at the moment it was used.
+func density_at(at: Vector3) -> float:
+	var local: Vector3 = to_local(at)
+	var spot := Vector2(local.x, local.z)
+	if not _grass_allowed(spot):
+		return 0.0
+	return _grass_density(spot)
+
+
+## How many blades this patch actually planted.
+func blade_count() -> int:
+	return _blade_count
 
 
 func _ready() -> void:
@@ -119,12 +184,14 @@ func _ready() -> void:
 	_field_noise = _make_noise(grass_seed, field_noise_frequency, 4)
 	_detail_noise = _make_noise(grass_seed + 7919, detail_noise_frequency, 3)
 
+	var started := Time.get_ticks_msec()
 	var counts: Vector3i = _paint_noise_field(mesh, rng)
+	_blade_count = counts.x
 	_paint_minimap()
 
 	_actors.resize(MAX_INFLUENCES)
-	print("grass: %d noise-painted blades in %d render chunks (%d in dense growth)" % [
-		counts.x, counts.y, counts.z
+	print("grass: %d noise-painted blades in %d render chunks (%d past the %.2f m rim) in %d ms" % [
+		counts.x, counts.y, counts.z, edge_feather, Time.get_ticks_msec() - started
 	])
 
 
@@ -149,17 +216,49 @@ func _noise_01(noise: FastNoiseLite, at: Vector2) -> float:
 	return clampf(noise.get_noise_2d(at.x, at.y) * 0.5 + 0.5, 0.0, 1.0)
 
 
-## The continuous paint mask. Low-frequency Perlin establishes broad islands; detail perturbs their
-## edges and cuts holes through them. Smoothstep turns that height map into probability, with full
-## occupancy at the peaks and genuinely empty ground below the coverage threshold.
-func _grass_density(at: Vector2) -> float:
+## The raw painted height field. Low-frequency Perlin establishes broad islands; detail perturbs
+## their edges and cuts holes through them. Thresholded at `coverage_threshold` this is the shape.
+func _painted(at: Vector2) -> float:
 	if _field_noise == null or _detail_noise == null:
 		return 0.0
 	var broad := _noise_01(_field_noise, at)
 	var detail := _noise_01(_detail_noise, at) - 0.5
-	var painted := broad + detail * detail_influence
-	var high := maxf(dense_threshold, coverage_threshold + 0.001)
-	return pow(smoothstep(coverage_threshold, high, painted), 1.25)
+	return broad + detail * detail_influence
+
+
+## Roughly how many metres `at` lies inside its grass shape. Negative outside.
+##
+## The field's value tells you which side of the outline you are on but not how far, because how
+## fast the value climbs varies by more than an order of magnitude across the map. Its GRADIENT is
+## the missing conversion factor: value-above-threshold divided by metres-per-unit-of-value is
+## metres. That is the standard first-order distance estimate for an implicit surface, and it is
+## only accurate near the contour -- which is the only place the answer is used, since both callers
+## saturate their smoothstep a metre or two in.
+##
+## Costs four extra field samples, so it is deliberately not paid where the value alone already
+## settles the question. Outside the shape there is nothing to measure; the sign is the answer.
+func _edge_distance(at: Vector2) -> float:
+	var above := _painted(at) - coverage_threshold
+	if above <= 0.0:
+		return -1.0
+	var gx := (_painted(at + Vector2(GRADIENT_STEP, 0.0))
+		- _painted(at - Vector2(GRADIENT_STEP, 0.0))) / (2.0 * GRADIENT_STEP)
+	var gz := (_painted(at + Vector2(0.0, GRADIENT_STEP))
+		- _painted(at - Vector2(0.0, GRADIENT_STEP))) / (2.0 * GRADIENT_STEP)
+	var slope := sqrt(gx * gx + gz * gz)
+	# A dead-flat plateau is arbitrarily deep inside, not arbitrarily close to an edge. It has to
+	# clear the WIDER of the two ramps: returning just `edge_feather` would fill the blades in and
+	# still leave concealment short of 1, so the densest grass on the map would not fully hide you.
+	if slope < 0.0001:
+		return maxf(edge_feather, cover_feather)
+	return above / slope
+
+
+## How thickly blades grow at a spot: 0 outside a shape, 1 anywhere past the rim.
+func _grass_density(at: Vector2) -> float:
+	if _field_noise == null or _detail_noise == null:
+		return 0.0
+	return smoothstep(0.0, edge_feather, _edge_distance(at))
 
 
 func _grass_allowed(spot: Vector2) -> bool:
@@ -171,7 +270,10 @@ func _grass_allowed(spot: Vector2) -> bool:
 	var world_spot := Vector2(world.x, world.z)
 	if Nest.blocks(get_tree(), world_spot):
 		return false
-	return not NoSurfaceZone.seals(get_tree(), world_spot)
+	# NOTHING GROWS THROUGH PAVING. Asked with half a blade's width of margin, because the answer
+	# that matters is whether any part of the blade sits on the slab, not whether its centre does
+	# -- a root a centimetre off the edge still puts half its base on the concrete.
+	return not NoSurfaceZone.seals(get_tree(), world_spot, blade_width * 0.5)
 
 
 func _process(delta: float) -> void:
@@ -318,10 +420,13 @@ func _paint_chunk(key: Vector2i, mesh: Mesh, rng: RandomNumberGenerator) -> Vect
 				(float(column) + 0.5) * cell.x + rng.randf_range(-cell.x * 0.42, cell.x * 0.42),
 				(float(row) + 0.5) * cell.y + rng.randf_range(-cell.y * 0.42, cell.y * 0.42)
 			)
+			# Mask first, density second. The mask is two cheap group scans; the density now costs
+			# five noise samples where it has to measure a gradient, so it is the one worth not
+			# paying for ground that was never going to grow anything.
+			if not _grass_allowed(spot):
+				continue
 			var density := _grass_density(spot)
 			if rng.randf() > density:
-				continue
-			if not _grass_allowed(spot):
 				continue
 
 			var basis := Basis(Vector3.UP, rng.randf_range(0.0, TAU))
@@ -353,7 +458,9 @@ func _paint_chunk(key: Vector2i, mesh: Mesh, rng: RandomNumberGenerator) -> Vect
 	instance.material_override = _material
 	# The shader bends tips outside untouched mesh bounds, so a chunk clipped at the screen edge
 	# would otherwise pop as its untouched bounds leave.
-	instance.extra_cull_margin = 2.0
+	instance.extra_cull_margin = CULL_MARGIN
+	if not cast_shadows:
+		instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(instance)
 	return Vector2i(transforms.size(), dense_count)
 
@@ -369,7 +476,11 @@ func _paint_minimap() -> void:
 				-half_extent + (float(x) + 0.5) * spacing,
 				-half_extent + (float(z) + 0.5) * spacing
 			)
-			var density := _grass_density(spot)
+			# CONCEALMENT, not blade count. The minimap is a cover map -- what it owes the player
+			# is the same answer concealment_at gives them, so the two cannot disagree about where
+			# a patch begins. With the rim now only `edge_feather` wide, blade density would paint
+			# it as a hard-edged solid, which is exactly the lie the wider cover taper avoids.
+			var density := smoothstep(0.0, cover_feather, _edge_distance(spot))
 			if density < 0.10:
 				continue
 			if not _grass_allowed(spot):

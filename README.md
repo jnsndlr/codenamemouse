@@ -86,7 +86,9 @@ up somewhere, and you know where the somewheres are. Refused in different words 
 from underneath, and while you're under one the prompt above your head says so, because finding
 out you're committed at the moment you wanted out is finding out too late. The arena has a
 placeholder patio in it; the zone is a rectangle and a rule, so real paving parents underneath it
-later and nothing about the rule changes.
+later and nothing about the rule changes. **Nothing grows through paving either** — grass asks the
+same zones, with half a blade's width of margin so a root just off the edge doesn't put half its
+base on the concrete.
 
 **And your map is yours now.** A crew sees the cells and shaft mouths it cut; the enemy route is
 absent, even where the two networks meet. The intersection is real floor in the world, but it does
@@ -186,6 +188,13 @@ for 15s after they break away, **frozen where they were last seen** and fading, 
 marker reads as the guess it is. Carriers are always visible (§2). See
 [`scripts/game/spotting.gd`](scripts/game/spotting.gd).
 
+**Bots respect it too.** A defender picks its target through the same `reveal_opacity` the
+minimap uses, so a mouse gone still in deep grass is not a destination — the grass either hides
+you from both crews or it is scenery. Carriers are pinned at full opacity, so the rule that sends
+a bot after its stolen banner needs no exception. `tools/grass_hiding_probe.gd` parks an enemy in
+cover inside a defender's patch and asks the bot's own target picker, then repeats it on bare
+ground so a gate that is simply always on fails.
+
 One thing on screen is ahead of its system, deliberately and honestly: **cheese** is a real
 ledger (20 per crew, −1 per respawn) but nothing yet depends on running out — caches, spending
 and the zero-cheese respawn are M6, and they have to land together or empty is a death spiral.
@@ -240,11 +249,17 @@ On **Barricade**: `cooldown` (10s), `max_standing` (3), `reach_cells` (1.6). On 
 
 On **Surface/Grass**: `blade_width` (0.12m at the base), `blade_height` (0.44–0.68m), and
 `sample_spacing` (0.15m at maximum density). Grass is painted continuously across the yard:
-`field_noise_frequency` controls broad growing regions, `detail_noise_frequency` breaks their
-edges up, and the band from `coverage_threshold` (0.49) to `dense_threshold` (0.66) runs from open
-ground to fully occupied, dense grass. `render_chunk_size` affects culling only and never defines
-a visible or gameplay footprint. The shared grass shader's `tip_taper` is 0.7, leaving the tip at
-30% of the base width.
+`field_noise_frequency` controls broad growing regions and `detail_noise_frequency` breaks their
+edges up. `coverage_threshold` (0.49) is the outline — where grass starts — and the taper in from
+it is measured in **metres**, not in noise: `edge_feather` (0.6m) for the blades and `cover_feather`
+(1.4m) for concealment, deliberately wider so the edge of a patch is partial cover you can feel
+yourself entering rather than a line you cross in a seventh of a second. Feathering by a second
+noise threshold instead spans whatever distance the local slope happens to give — 2.4m to 11m on
+this map — which left shapes with no dense interior; `tools/grass_probe.gd` prints both curves.
+`render_chunk_size` (6m) affects culling only and never defines a visible or gameplay footprint;
+`cast_shadows` is off, which is the cheapest large saving here and the one to flip first if the
+lawn looks flat. The shared grass shader's `tip_taper` is 0.7, leaving the tip at 30% of the base
+width.
 
 On **Surface/Boulders**: `count` (14), `spans` (the footprints on offer and their weighting — a
 repeated entry is a heavier weight), `hits_per_section` (5 Brute swings per cell), `height`
