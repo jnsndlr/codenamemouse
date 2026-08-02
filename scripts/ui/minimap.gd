@@ -54,6 +54,10 @@ extends Control
 ## Screen pixels a dug cell draws as, at minimum. Below about this a corridor stops reading as
 ## a line and starts reading as noise.
 @export var tunnel_min: float = 1.6
+## Surface cover is known terrain, not spotting information. Grass is broad and subdued; boulders
+## are compact and high-contrast so their blocked cells remain legible over a patch.
+@export var grass_color: Color = Color(0.30, 0.39, 0.18, 0.52)
+@export var boulder_color: Color = Color(0.48, 0.49, 0.50, 0.95)
 ## Rock your crew has found. Cool and pale against the warm dirt of the panel, the same argument
 ## the seam faces make in the world -- and deliberately NOT the colour a tunnel is, because the two
 ## are drawn on top of each other and the question they answer together is where a corridor had to
@@ -127,6 +131,7 @@ func _draw() -> void:
 
 	draw_set_transform(_origin, _yaw, Vector2(_scale, _scale))
 	_ground()
+	_surface_features()
 	# Under the tunnels, because a corridor is a route and a seam is the ground it was cut through
 	# -- and where the two meet, what you want to see is that the corridor stops.
 	_known_rock()
@@ -162,6 +167,42 @@ func _ground() -> void:
 		]),
 		Color(0.36, 0.30, 0.20, 0.8), _pixel(1.5 * _ui)
 	)
+
+
+## Grass and boulders are surface terrain everyone can read from the start. Draw the generated
+## footprints rather than a second approximation of the generator, and only on plane zero: below
+## ground the focused layer already shows the boulders as their known plane-one rock cells.
+func _surface_features() -> void:
+	var player := _director.get_player()
+	if player != null and player.get_plane() > 0:
+		return
+
+	for node: Node in get_tree().get_nodes_in_group(GrassPatch.GROUP):
+		if not node.has_method("patch_footprints"):
+			continue
+		for patch: Dictionary in node.patch_footprints():
+			var centre: Vector3 = patch["at"]
+			var extent: float = patch["extent"]
+			draw_circle(Vector2(centre.x, centre.z), extent, grass_color)
+			draw_arc(
+				Vector2(centre.x, centre.z), extent, 0.0, TAU, 32,
+				grass_color.lightened(0.16), _pixel(0.7 * _ui)
+			)
+
+	# A real cell is only a couple of pixels at this scale. Give each section a small floor so
+	# boulders read as terrain rather than disappearing into the panel texture.
+	var rock_radius := maxf(TunnelNetwork.CELL * 0.46, _pixel(2.2 * _ui))
+	for node: Node in get_tree().get_nodes_in_group(Boulder.GROUP):
+		var boulder := node as Boulder
+		if boulder == null:
+			continue
+		for cell: Vector2i in boulder.occupied_cells():
+			var centre := Vector2(cell.x, cell.y) * TunnelNetwork.CELL
+			draw_circle(centre, rock_radius, boulder_color)
+			draw_arc(
+				centre, rock_radius, 0.0, TAU, 18,
+				boulder_color.darkened(0.35), _pixel(0.8 * _ui)
+			)
 
 
 ## The dug cells on the layer you are standing on, and nothing from the others.

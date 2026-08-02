@@ -108,6 +108,16 @@ func sections_left() -> int:
 	return left
 
 
+## The surface cells that still contain rock. The minimap asks the boulder instead of drawing its
+## original rectangle so a section disappears from the map on the same swing that clears it.
+func occupied_cells() -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for section: BoulderSection in _sections:
+		if is_instance_valid(section) and not section.is_queued_for_deletion():
+			cells.append(section.cell)
+	return cells
+
+
 func _on_section_broken(_what: Breakable, _by: Mouse) -> void:
 	# One frame late, because the section frees itself deferred and is still standing right now.
 	# Counting it as gone here would announce an empty boulder while a quarter of it is on screen.

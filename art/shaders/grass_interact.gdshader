@@ -53,8 +53,9 @@ uniform float interact_power = 0.18;
 // How sharply the blade narrows toward its tip. 0 is the source tutorial's rectangle, 1 is a
 // true point. Done in the shader rather than in the mesh so it stays one shared blade for all
 // 63000 instances -- baking the taper would mean a different mesh per taper value, which is
-// the one thing that cannot be a live slider.
-uniform float tip_taper : hint_range(0.0, 1.0) = 0.35;
+// the one thing that cannot be a live slider. At 0.7 the wider mesh keeps its base while the top
+// finishes at thirty percent of that width.
+uniform float tip_taper : hint_range(0.0, 1.0) = 0.7;
 
 uniform float wind_strength = 0.035;
 uniform float wind_speed = 1.4;

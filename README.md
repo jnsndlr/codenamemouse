@@ -238,6 +238,10 @@ entirely, which is what both audits do to every check that isn't about them.
 On **Barricade**: `cooldown` (10s), `max_standing` (3), `reach_cells` (1.6). On a placed boulder:
 `hits_to_clear` (3 Brute swings), `fill`, `height_fraction`.
 
+On **Surface/Grass**: `blade_width` (0.12m at the base), `blade_height` (0.44–0.68m), patch count,
+density, and radius. The shared grass shader's `tip_taper` is 0.7, leaving the tip at 30% of the
+base width.
+
 On **Surface/Boulders**: `count` (14), `spans` (the footprints on offer and their weighting — a
 repeated entry is a heavier weight), `hits_per_section` (5 Brute swings per cell), `height`
 (0.75–1.15m), `spacing_cells` (3 clear cells between boulders), `boulder_seed`. On **Tunnels**,
@@ -248,9 +252,9 @@ their position.
 
 **The minimap draws one layer — the one you're standing on**, tunnels and rock alike, the same rule
 the world follows. Stacked, four planes aren't a map of anything: two corridors a plane apart cross
-on the panel without touching in the world. On the surface it shows the **shaft mouths** instead,
-since the lawn has no dug cells and where you can get in is the only thing about the network that
-matters from up there.
+on the panel without touching in the world. On the surface it shows the grass footprints, every
+remaining boulder section, and the **shaft mouths**. Below ground, the focused layer takes over;
+plane 1 still shows a boulder's cells as known rock.
 
 On **Surface/Patio** (a `NoSurfaceZone`): `extents` — half-width and half-depth in metres, so the
 placeholder's 10 × 5 is a 20 × 10 slab. Move it, resize it, rotate it, or add a second node for a

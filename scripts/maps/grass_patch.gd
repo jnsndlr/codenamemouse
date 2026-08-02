@@ -1,3 +1,4 @@
+class_name GrassPatch
 extends Node3D
 ## Patches of grass that bend away from whoever walks through them (GDD section 8).
 ##
@@ -18,6 +19,9 @@ extends Node3D
 ## Live actors plus the fading marks behind them, sharing one array. Must match the shader's
 ## own MAX_INFLUENCES -- it sizes a uniform array, so it cannot be read from here.
 const MAX_INFLUENCES: int = 48
+## The minimap reads the generated patch footprints from this group. Keeping the generated
+## positions here means the panel cannot drift from the seeded grass that is actually in the yard.
+const GROUP: StringName = &"grass_patch"
 ## Anything that bends grass adds itself here. A group rather than an exported path list, so
 ## the bots that arrive at M3 start bending grass without this file changing.
 const ACTOR_GROUP: StringName = &"grass_actor"
@@ -42,9 +46,10 @@ const ACTOR_GROUP: StringName = &"grass_actor"
 ## Taller than the mouse, or it conceals nothing -- the capsule is about 0.4 and grass that
 ## comes up to its shoulder just makes it easier to spot.
 @export var blade_height: Vector2 = Vector2(0.44, 0.68)
-## Wide enough to survive the pixel pass. At 0.05 a blade landed on one or two fat pixels and
-## flickered in and out as the camera moved; a mass of grass has to read as a mass.
-@export var blade_width: float = 0.085
+## A broad base that survives the pixel pass. At 0.05 a blade landed on one or two fat pixels and
+## flickered in and out as the camera moved; tapering from 0.12 gives the patch weight at ground
+## level while the shader keeps the tips narrow.
+@export var blade_width: float = 0.12
 ## Vertical segments. The bend is quadratic in height, so a blade needs enough spans to
 ## actually curve -- at 1 it can only shear, which reads as a hinge rather than as grass.
 @export var blade_segments: int = 3
@@ -112,6 +117,7 @@ func concealment_at(at: Vector3) -> float:
 
 
 func _ready() -> void:
+	add_to_group(GROUP)
 	_material = ShaderMaterial.new()
 	_material.shader = load("res://art/shaders/grass_interact.gdshader")
 
@@ -146,6 +152,12 @@ func _ready() -> void:
 
 	_actors.resize(MAX_INFLUENCES)
 	print("grass: %d patches, %d blades" % [placed, placed * blades_per_patch])
+
+
+## The circles the seeded generator actually placed, for terrain views such as the minimap.
+## A copy keeps callers from accidentally changing the cover test's source of truth.
+func patch_footprints() -> Array[Dictionary]:
+	return _patches.duplicate(true)
 
 
 func _process(delta: float) -> void:
