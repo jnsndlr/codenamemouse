@@ -1205,6 +1205,192 @@ persist and merge, and every refusal is free.
 
 ---
 
+### M6.5 — A build you can hand to somebody (3–5 evenings)
+
+**Question:** can someone who has never seen this play a full match without you in the room?
+
+- A title screen, a pause menu, and a way back out of a match
+- Every binding visible in-game, generated from the bindings themselves
+- Fullscreen, a version label, an icon
+- Dev tooling gated out of a release build
+- A signed-enough `.app` that opens on a MacBook that is not this one
+
+**Done when:** a friend on another Mac has played a full match, and you have their log file.
+
+> **Why a milestone and not a chore list.** M7's last checkpoint is "over the internet, with a
+> friend, for a full match" — which requires handing someone a build, something this project has
+> never once done. Discovering how macOS feels about unsigned binaries *while* also debugging
+> interpolation is how a two-week milestone becomes four. This pulls the distribution half
+> forward so it can fail on its own, and the failures are cheap and boring when they are alone.
+>
+> The title screen earns its place the same way. Nothing in `scripts/` calls `change_scene`,
+> `quit`, or touches `paused`: the arena is the main scene and that is the entire application.
+> Making the match a thing you can enter and leave is the **seat and lobby skeleton M7 needs
+> anyway**, so Play gets built as one entry beside a Host and Join that do not exist yet.
+
+#### The question is onboarding, and that is a choice
+
+The alternative question was stability — does it run for an hour without falling over — and the
+bot soak already answers that better than a guest could. What no tool in `tools/` can answer is
+whether the game **explains itself**, and there are fifteen bindings including four that are
+each a whole subsystem: `E` burrows, `F` and `R` are shafts, `Q` is a class ability whose meaning
+changes with the class. A tester who never finds `E` never sees tunnels, and tunnels are the game.
+
+That choice sets the scope. Controls legibility and the first thirty seconds are the milestone;
+a volume slider is not. **There is no audio in the project at all** — no `.wav`, no `.ogg`, no
+`AudioStream` anywhere — so a volume control would be a slider wired to nothing, which is worse
+than its absence because it reads as a promise.
+
+#### Credits are fifteen minutes, because there is nothing to credit
+
+Worth writing down so nobody budgets a day for it. The repo contains **zero third-party assets**:
+no fonts, no textures, no images, no sounds. The look is `art/shaders/` and one `.blend`, and
+`HudSkin.font()` takes Godot's built-in. So the licensing pass is an `ATTRIBUTIONS.md` carrying
+the engine's MIT notice, and it is done.
+
+#### Gatekeeper is the item that eats the evening
+
+The obvious checklist for this milestone is a Windows checklist — a path with spaces, a non-admin
+account, Program Files. None of those are the target. On macOS the equivalent is **quarantine**:
+an unsigned or ad-hoc-signed `.app` that arrives by AirDrop, browser or Messages gets the
+attribute, and recent macOS refuses to open it outright — the old right-click-to-open bypass is
+gone, so the tester has to find Privacy & Security and choose Open Anyway.
+
+For an alpha of one the dodge is to **transfer by a channel that does not set the attribute** —
+`rsync`, `scp`, a USB stick — rather than to buy a certificate. Developer ID signing and
+notarization is $99/yr and it buys nothing until the build goes to somebody you cannot text.
+
+Also Mac-shaped, and each a one-line decision in the export preset: universal versus `arm64`, and
+a minimum macOS version. The one genuinely uncertain item is **the compute pass**:
+`pixel_edges_effect.gd` dispatches through `RenderingDevice`, and a compute shader is exactly the
+thing that behaves differently on another GPU. It gets verified on the target machine, not here.
+
+> **The HUD already survives the resolution question, which was the surprise.** `HudSkin` is
+> written as proportions against a 1280×720 `REFERENCE` and multiplied by `scale_for`, and
+> `contextual_hint.gd` and `match_hud.gd` both go through it — so a Retina panel scales the
+> furniture rather than halving it. What does *not* scale by construction is the pixel pass,
+> whose entire look is a function of framebuffer size. Check it at 2×; do not assume it.
+
+#### The audits cannot run against the binary, and saying so is the point
+
+The instinct is "run the existing audits against the exact release build". They cannot: exported
+release templates do not take `--script`, so `tunnel_audit.gd`, `match_audit.gd` and
+`cheese_audit.gd` only ever run against the project. The honest procedure is to **run them on the
+same tagged commit the export is built from**, then smoke-test the `.app` by hand — because a
+build that inherits confidence the audits did not actually give it is the failure mode this whole
+document keeps warning about.
+
+The corresponding gap is that **one playtest produces one set of evidence and then it is gone**.
+File logging goes on, a screenshot key gets bound, and both locations get written down, or the
+report is "it broke at some point" and the evening bought nothing.
+
+#### Dev tooling that is actually reachable
+
+`tools/` is all `--script` runners a release export never reaches, and `greybox.tscn` is an
+export-filter line. But `look_panel.gd` is **a live shader-tuning slider panel bound to F1 and
+wired into `arena.tscn`**, and F1 is a key people press. It goes behind `OS.is_debug_build()`.
+
+#### In progress — a game you can enter and leave (landed)
+
+`title.tscn` is the main scene now; `arena.tscn` is somewhere you go. `routes.gd` owns both moves
+and exists for M7 rather than for the title screen — joining a server, leaving a match and being
+handed back to a lobby are all "swap the scene under the player", and until this milestone that had
+**never once happened in this project**. Play sits where Host and Join will sit.
+
+`pause_menu.gd` freezes the tree and keeps itself running (`PROCESS_MODE_WHEN_PAUSED`), which is the
+whole trick — the pause has to stop the sim rather than hide it, or a tester who steps away comes
+back scruffed. `settings.gd` persists fullscreen to `user://settings.cfg`, deliberately as a static
+class and not an autoload. Both menus are built in code, like `look_panel.gd`, because a column of
+buttons is a hundred lines of unreadable scene diff. `menu_skin.gd` is a Theme rather than
+`HudSkin`'s immediate-mode drawing, and its header argues why that inverts here: a menu is static,
+is entirely interaction, and has a container doing its layout.
+
+**`controls_panel.gd` reads the live `InputMap` instead of a list of strings**, so what lives in it
+is order, names and grouping and nothing else. It also **fails loud**: `_unlisted()` diffs the
+actions it groups against the actions that exist and draws anything ungrouped at the bottom under
+its raw name. A new binding shows up ugly rather than absent, which is the right way round — the
+milestone's question is whether somebody can play without you in the room, and a control that
+silently never reaches the controls screen is the one failure that looks like success.
+
+#### In progress — the build keeps its own evidence (landed)
+
+The gap named above, closed. File logging is on, **P takes a screenshot**, and the shots land in
+`user://screenshots/` — next to Godot's own `user://logs/`, so what comes back from a playtest is
+**one folder to zip** rather than two places to go looking. The controls sheet names that folder on
+screen, which is where you find out before pressing the key rather than after.
+
+- **P, and not F2, and that is a Mac decision rather than a taste one.** macOS maps the top row to
+  brightness and volume unless the tester has enabled "Use F1, F2, etc. as standard function keys" —
+  off by default — so F2 on somebody else's machine dims their display and photographs nothing.
+  Survivable for `look_panel` on F1, which is dev-only and never leaves this machine; not survivable
+  for the one key whose whole job is to work in a stranger's hands on the first press.
+- **An autoload, reversing `settings.gd`'s argument on purpose.** That file says two keys read on
+  demand are a static function and an autoload would be "a node in every scene tree for the sake of
+  a boolean". Both halves invert here: this has to *be* a node in every tree, and it has to survive
+  `change_scene`, because the title screen, the controls sheet and the match are three scenes and
+  all three are worth photographing.
+
+> **The probe caught a bug that destroyed half the evidence and reported success while doing it.**
+> The filename was a timestamp, the system clock reads to the second, and a tester photographing a
+> thing from two angles does it in well under one — so the second shot silently overwrote the first.
+> The key worked, the toast confirmed, a file existed. `tools/screenshot_probe.gd` asserts the
+> *artefact* rather than the call: a file that did not exist before exists after, it decodes at the
+> window's size, and it has more than one colour in it — because a blank capture is the failure that
+> writes a perfectly valid file. It also asserts the toast is **not in its own successor**, verified
+> by deleting the dismissal and watching that one assertion fail.
+
+> **`user://logs/` is not `~/Library/Logs/Godot/`, and this file said otherwise.** The latter is
+> where the *editor* keeps its log. A milestone whose deliverable is a bug report cannot name the
+> wrong folder, so it was checked against the engine rather than remembered.
+
+#### In progress — the export preset (landed; the build itself is not)
+
+`export_presets.cfg` exists, validates, and **excludes `tools/*` and `scenes/maps/greybox.tscn`** —
+the export-filter line this plan already promised. **Universal rather than `arm64`**, because the
+one thing this milestone is buying is that the build opens on a machine we cannot inspect, and an
+architecture guess is a whole class of "it doesn't open" for a few dozen megabytes. Minimum macOS
+stays at the engine defaults (10.13 / 11.00), and signing is **ad-hoc** — Developer ID is $99/yr and
+buys nothing until the build goes to somebody you cannot text.
+
+> **The exporter refuses arm64 or universal outright without ETC2 ASTC**, which is how the setting
+> was found: not as a texture-quality choice but as a hard configuration error with the template
+> error beside it. `rendering/textures/vram_compression/import_etc2_astc` is on, and stated in
+> `project.godot` with the reason, because it looks like a rendering preference and is not one.
+
+> **`--export-pack` needs no export template, and that is worth knowing.** The section above is
+> right that the *audits* can never run against a release build. The **packaging** is a different
+> question and does not have to wait for a 1 GB download: `--export-pack` writes the `.pck` alone,
+> and the filter was checked against the real artefact rather than against the config file — zero
+> `res://tools/` entries, no `greybox.tscn`, and 65 script paths still present, because "excluded
+> everything" and "excluded nothing" both pass a filter you only read. 9.3 MB.
+
+`ATTRIBUTIONS.md` is written and the fifteen-minute estimate held. It records that the repo contains
+no third-party assets — **verified rather than asserted**, by searching for fonts, audio and
+`addons/` rather than by remembering — and carries the engine's MIT notice. The 102 third-party
+components Godot bundles are *not* copied in: that list goes stale the first time the engine is
+updated, and the engine already answers it at runtime through `Engine.get_copyright_info()`.
+
+**Still open: the `.app` itself.** Export templates for 4.7.1 are not installed, so nothing has been
+built or launched yet. The compute pass is the item that has to be seen rather than reasoned about —
+`pixel_edges_effect.gd` dispatches through `RenderingDevice`, which is exactly the thing that
+behaves differently on another GPU, and it is this game's entire look.
+
+#### The web build is not part of this, and here is the number
+
+Self-hosting is genuinely free and genuinely easy — a directory of static files on Cloudflare
+Pages, with `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` set so the threaded
+build boots. The hosting was never the obstacle. **The renderer is.** Godot's web export runs
+Compatibility only, Compatibility has no `RenderingDevice`, and `PixelEdgesEffect` is a
+`CompositorEffect` built on one — so the pass that *is* this game's look cannot run in a browser
+at all. Its own class comment records that the fragment-shader version was tried and abandoned,
+because a full-screen quad in the transparent queue erased anything translucent, which is the
+mouse's grass concealment.
+
+So web is not a build target, it is a rendering decision, and it stays at M9 where §"Tech
+decisions" already put it. M0's cube loaded in a browser; nothing since M2.5 would.
+
+---
+
 ### M7 — Real multiplayer (1–2 weeks)
 
 **Question:** does it survive contact with a second human?
@@ -1452,7 +1638,20 @@ is the one that mattered: it makes the map grow objectives the designer never pl
 game had exactly one of before. Three audits pass: 15 tunnel scenarios, 19 match rule groups,
 37 cheese invariants.
 
-**Immediate next: M7 — real multiplayer.** *Does it survive contact with a second human?* The
+**M6.5 is nearly closed, and one item is left.** The title screen, pause menu, the bindings drawn
+from the live `InputMap`, fullscreen, the version label, the icon, file logging, the screenshot key,
+`ATTRIBUTIONS.md`, the F1 tuning panel gated behind `OS.is_debug_build()` and a validated macOS
+export preset are all in. Four suites pass: 15 tunnel scenarios, 19 match rule groups, 37 cheese
+invariants and the screenshot probe.
+
+**What remains is the `.app`, and it is the half that cannot be reasoned about.** Export templates
+for 4.7.1 need installing, then: build from the same commit the audits passed on, confirm `tools/`
+and `greybox.tscn` really are absent from the `.pck`, and smoke-test by hand — with the compute pass
+the specific thing to look at, since `RenderingDevice` is what behaves differently on another GPU
+and it is the whole look. Then the question itself: a friend on another Mac, a full match, and their
+log file. Mac only — the web build is a rendering decision, not an export target, and stays at M9.
+
+**Then M7 — real multiplayer.** *Does it survive contact with a second human?* The
 survey above is the important part: `Mouse._control` is already the driver seam, `MatchDirector`
 is already the sim, and per-crew tunnel knowledge is already stored per crew. The work is turning
 input into data, turning direct rule calls into requests, making "the player" plural in the eleven

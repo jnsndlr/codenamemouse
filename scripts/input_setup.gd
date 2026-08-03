@@ -58,6 +58,26 @@ const KEYS: Dictionary = {
 	# one place that answers "what is bound", and it costs nothing in a build where the
 	# panel is absent.
 	"look_panel": [KEY_F1],
+	# Pause. Bound here rather than leaning on Godot's built-in `ui_cancel` for the same reason
+	# look_panel is here: one file answers "what is bound", and the controls screen reads that
+	# file's answer. `ui_cancel` also carries Escape's other job -- dismissing focus in a
+	# Control tree -- and the pause menu is a Control tree, so sharing the action would mean
+	# the key that opens the menu is the key the menu's own buttons consume.
+	"pause": [KEY_ESCAPE],
+	# Photograph the screen (M6.5 -- see `scripts/game/screenshot.gd` for why the build needs to
+	# keep its own evidence).
+	#
+	# P AND NOT F2, WHICH IS THE OBVIOUS CHOICE AND IS WRONG ON THIS TARGET. macOS maps the top
+	# row to brightness and volume unless the tester has turned on "Use F1, F2, etc. as standard
+	# function keys" -- off by default -- so F2 on somebody else's Mac dims their display and
+	# takes no photograph. That is survivable for `look_panel` on F1, which is dev-only and never
+	# leaves this machine; it is not survivable for the one key whose entire job is to work in a
+	# stranger's hands on the first press.
+	#
+	# P for photo, and it is nowhere near WASD or the abilities -- same reasoning as C: a shot is
+	# something you take deliberately, and a misfire mid-chase should be impossible rather than
+	# merely unlikely.
+	"screenshot": [KEY_P],
 }
 
 ## Digging moved to the mouse: point at a tile, hold, watch it open. The cursor is already the
@@ -95,6 +115,7 @@ const PAD_BUTTONS: Dictionary = {
 	"scurry": [JOY_BUTTON_A],
 	"view_left": [JOY_BUTTON_LEFT_SHOULDER],
 	"view_right": [JOY_BUTTON_RIGHT_SHOULDER],
+	"pause": [JOY_BUTTON_START],
 }
 
 ## Actions with no keyboard binding still need to exist, or is_action_pressed() throws.
@@ -122,6 +143,7 @@ func _enter_tree() -> void:
 		_ensure(action_name)
 
 	for action_name: String in PAD_AXES:
+		_ensure(action_name)
 		var axis: JoyAxis = PAD_AXES[action_name][0]
 		var direction: float = PAD_AXES[action_name][1]
 		var event := InputEventJoypadMotion.new()
@@ -131,6 +153,7 @@ func _enter_tree() -> void:
 		InputMap.action_set_deadzone(action_name, STICK_DEADZONE)
 
 	for action_name: String in PAD_BUTTONS:
+		_ensure(action_name)
 		for button: JoyButton in PAD_BUTTONS[action_name]:
 			var event := InputEventJoypadButton.new()
 			event.button_index = button

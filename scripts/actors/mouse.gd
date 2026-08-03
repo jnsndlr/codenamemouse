@@ -163,6 +163,9 @@ var _body_material: StandardMaterial3D
 var _wedges: int = 0
 var _boost_left: float = 0.0
 var _boost_cooldown: float = 0.0
+## The swipe. Built here rather than placed in the scenes so bot.tscn, player.tscn and a mouse a
+## headless audit builds by hand all telegraph identically -- see swing_arc.gd.
+var _swing_arc: SwingArc
 
 
 func _ready() -> void:
@@ -173,6 +176,12 @@ func _ready() -> void:
 		team_color = Team.color_of(team)
 	apply_team_color(team_color)
 	_facing = _visual.rotation.y
+	# On the body, NOT on `_visual`: the visual gets a flat material override walked over every
+	# mesh under it by `apply_team_color`, and gets laid on its side when you're scruffed.
+	_swing_arc = SwingArc.new()
+	_swing_arc.name = "SwingArc"
+	add_child(_swing_arc)
+	_swing_arc.arm(self)
 	add_to_group(ACTOR_GROUP)
 	add_to_group(MOUSE_GROUP)
 	set_plane(_plane)
@@ -401,6 +410,10 @@ func swing() -> bool:
 		return false
 	_swing_left = attack_swing
 	_swing_hit = false
+	# Swept over the windup, so the ribbon finishes crossing the cone on the frame
+	# `_resolve_swing` fires rather than after it.
+	if _swing_arc != null:
+		_swing_arc.play(attack_windup)
 	swung.emit(self)
 	return true
 
@@ -436,6 +449,9 @@ func _scruff(by: Mouse) -> void:
 	_health = 0.0
 	_swing_left = 0.0
 	_cooldown_left = 0.0
+	# The swing is cancelled, so the swipe drawing it has to go with it on the same frame.
+	if _swing_arc != null:
+		_swing_arc.stop()
 	# The burst dies with you; the cooldown does not. Being scruffed mid-Scurry has to cost the
 	# rest of it, or the safest moment to spend a cheese would be the one just before you lose
 	# the fight -- and the cheese stays spent either way.

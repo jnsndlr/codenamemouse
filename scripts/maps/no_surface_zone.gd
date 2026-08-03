@@ -39,6 +39,8 @@ const GROUP: StringName = &"no_surface"
 @export var extents: Vector2 = Vector2(6.0, 4.0):
 	set(value):
 		extents = value
+		# The cached minimap polygon is derived from this, so it has to go with it.
+		_minimap_shapes = []
 		if is_inside_tree():
 			_build()
 
@@ -52,6 +54,8 @@ const GROUP: StringName = &"no_surface"
 @export var thickness: float = 0.06
 
 var _slab: MeshInstance3D
+## The paving is authored and does not move, so its one polygon is built on first ask and kept.
+var _minimap_shapes: Array[Dictionary] = []
 
 
 func _enter_tree() -> void:
@@ -65,6 +69,8 @@ func _ready() -> void:
 ## The paving's authored footprint, using the same transform as `covers`. The minimap consumes this
 ## shared shape contract, so replacing the placeholder slab with real art changes neither rule.
 func minimap_shapes() -> Array[Dictionary]:
+	if not _minimap_shapes.is_empty():
+		return _minimap_shapes
 	var corners := PackedVector2Array()
 	for corner: Vector3 in [
 		Vector3(-extents.x, 0.0, -extents.y),
@@ -74,7 +80,8 @@ func minimap_shapes() -> Array[Dictionary]:
 	]:
 		var world: Vector3 = to_global(corner)
 		corners.append(Vector2(world.x, world.z))
-	return [{"kind": &"polygon", "style": &"paving", "points": corners}]
+	_minimap_shapes = [{"kind": &"polygon", "style": &"paving", "points": corners}]
+	return _minimap_shapes
 
 
 ## Does any zone on this map seal `spot`, given in world x/z metres?

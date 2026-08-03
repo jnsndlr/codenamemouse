@@ -51,6 +51,15 @@ func _enter_tree() -> void:
 	add_to_group(GROUP)
 
 
+## Wedges are created and emptied during a match -- the director hangs dropped cheese here -- so
+## this node's footprint must not be baked into the minimap's scenery layer. Its children publish
+## their own shapes through `CheeseCache.GROUP`; what this keeps off the baked layer is the
+## automatic AABB fallback that would otherwise freeze the caches at their opening positions.
+## See minimap.gd's class comment.
+func minimap_dynamic() -> bool:
+	return true
+
+
 func _ready() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = cache_seed

@@ -32,11 +32,33 @@ extends Control
 ## routes meet, the physical intersection exists in the world without donating either connected
 ## floor plan to the other map. Sonar adds a cant mark at one detected place, never the route.
 
+## TWO LAYERS, AND THE SPLIT IS A PERFORMANCE FINDING. The scenery on this panel -- grass, rocks,
+## the patio, authored props -- was being redrawn every frame, and `tools/frame_probe.gd` measured
+## what that cost: **1278 draw calls per frame and 43% of the frame time**, against a 3D world that
+## is only 118 draw calls. Hiding this one Control recovered as much as hiding the entire HUD.
+##
+## So the ground is drawn ONCE into a child Control that sits behind this one, and only the things
+## that actually move -- mice, contacts, tunnels, cheese, banners -- are redrawn per frame. The
+## scenery is regenerated at startup and never changes after, so "once" is very nearly forever:
+## the layer is invalidated only when the panel changes size or the camera takes a quarter turn.
+##
 ## Shared with depth_focus.gd. Every meaningful object that sits on the lawn belongs here: doing so
 ## both removes it from underground views and gives this minimap a chance to draw its footprint.
 ## Generators implement `minimap_shapes()`; ordinary GeometryInstance3D nodes are mapped from their
 ## bounds automatically. This is the contract to follow whenever a new surface object is added.
+##
+## A generator whose footprint CHANGES DURING A MATCH must also implement `minimap_dynamic()`
+## returning true, which keeps it out of the baked layer and on the per-frame pass. Two do:
+## `boulder_field.gd`, because breaking a quarter has to remove that quarter from the panel on the
+## same swing, and `cache_field.gd`, because a wedge dropped where somebody died is created
+## mid-match. Getting this wrong is a stale picture, not a crash, which is exactly why it is
+## written down here rather than left to whoever adds the next generator to notice.
 const SURFACE_GROUP: StringName = &"surface_clutter"
+
+## Below this many pixels of radius, a shape's outline is not a visible edge -- it is a second
+## draw call and a 24-segment arc spent on something the eye reads as one dot either way. The
+## rocks publish `min_radius_px` of 1.1, so this silently removed 86 arcs per frame.
+const OUTLINE_MIN_PX: float = 2.6
 
 @export var director_path: NodePath
 @export var network_path: NodePath
@@ -100,6 +122,15 @@ var _yaw: float = 0.0
 ## The HUD's own size multiplier, so markers stay the same size RELATIVE TO THE PANEL rather
 ## than staying the same number of pixels while the map around them grows.
 var _ui: float = 1.0
+## The panel's well, in screen pixels. Kept because it is what the baked layer is invalidated
+## against: if this and the yaw are unchanged, the scenery underneath is still correct.
+var _map: Rect2 = Rect2()
+
+## The scenery, drawn once and parked behind this Control. See the class comment.
+var _ground_layer: Control
+var _drawn_map: Rect2 = Rect2()
+var _drawn_yaw: float = INF
+var _drawn_surface: bool = false
 
 
 func _ready() -> void:
@@ -109,6 +140,16 @@ func _ready() -> void:
 	_network = get_node_or_null(network_path) as TunnelNetwork
 	_rig = get_node_or_null(camera_rig_path) as Node3D
 
+	# `show_behind_parent` rather than a sibling above us in the scene, so the two halves of one
+	# panel cannot be separated by somebody reordering the HUD.
+	_ground_layer = Control.new()
+	_ground_layer.name = "Ground"
+	_ground_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ground_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_ground_layer.show_behind_parent = true
+	_ground_layer.draw.connect(_draw_ground_layer)
+	add_child(_ground_layer)
+
 
 func _process(_delta: float) -> void:
 	if _spotting == null:
@@ -117,33 +158,71 @@ func _process(_delta: float) -> void:
 		_sonar = get_tree().get_first_node_in_group(Sonar.SONAR_GROUP) as Sonar
 	if _sight == null:
 		_sight = get_tree().get_first_node_in_group(TunnelSight.SIGHT_GROUP) as TunnelSight
+
+	_layout()
+	# The panel, its well and the yard outline are drawn on this layer too, and they are wanted at
+	# every depth -- so descending re-bakes the layer WITHOUT the scenery rather than hiding it.
+	# Hiding it took the frame and the well with it and left the corridors floating on the HUD.
+	if _map != _drawn_map or not is_equal_approx(_yaw, _drawn_yaw) or _on_surface() != _drawn_surface:
+		_ground_layer.queue_redraw()
 	queue_redraw()
+
+
+## Where the panel is and how the yard maps into it. Settled before anything draws, because both
+## layers need the identical numbers and they are drawn at different moments.
+func _layout() -> void:
+	var screen := get_viewport_rect().size
+	# Written against a 1280x720 window and scaled out, like the rest of the HUD.
+	_ui = HudSkin.scale_for(screen)
+	var side := map_size * _ui
+	var edge := margin * _ui
+	var frame := Rect2(Vector2(edge, screen.y - side - edge), Vector2(side, side))
+	_map = frame.grow(-7.0 * _ui)
+
+	# Fits the arena at any quarter turn: rotated forty-five degrees a square is its own diagonal
+	# across, so scaling to that keeps the yard inside the well however the camera is pointing.
+	_scale = (_map.size.x * 0.5) / (world_extent * sqrt(2.0))
+	_origin = _map.get_center()
+	_yaw = _rig.rotation.y if _rig != null else 0.0
+
+
+func _on_surface() -> bool:
+	if _director == null:
+		return false
+	var player := _director.get_player()
+	return player == null or player.get_plane() <= 0
+
+
+## The scenery. Runs on the frames where `_process` decided the panel moved, and not otherwise.
+func _draw_ground_layer() -> void:
+	if _director == null:
+		return
+	_layout()
+	var on: CanvasItem = _ground_layer
+
+	HudSkin.panel(on, _map.grow(7.0 * _ui), 10.0 * _ui)
+	HudSkin.well(on, _map, 4.0 * _ui)
+
+	on.draw_set_transform(_origin, _yaw, Vector2(_scale, _scale))
+	_ground(on)
+	# Scenery is a surface fact. Underground the panel keeps its frame and its yard, and the
+	# corridors on the layer above are what fills it.
+	if _on_surface():
+		_static_surface_features(on)
+	on.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+	_drawn_map = _map
+	_drawn_yaw = _yaw
+	_drawn_surface = _on_surface()
 
 
 func _draw() -> void:
 	if _director == null:
 		return
-
-	var screen := get_viewport_rect().size
-	# Written against a 1280x720 window and scaled out, like the rest of the HUD.
-	var ui := HudSkin.scale_for(screen)
-	var side := map_size * ui
-	var edge := margin * ui
-	var frame := Rect2(Vector2(edge, screen.y - side - edge), Vector2(side, side))
-	HudSkin.panel(self, frame, 10.0 * ui)
-	var map := frame.grow(-7.0 * ui)
-	HudSkin.well(self, map, 4.0 * ui)
-	_ui = ui
-
-	# Fits the arena at any quarter turn: rotated forty-five degrees a square is its own diagonal
-	# across, so scaling to that keeps the yard inside the well however the camera is pointing.
-	_scale = (map.size.x * 0.5) / (world_extent * sqrt(2.0))
-	_origin = map.get_center()
-	_yaw = _rig.rotation.y if _rig != null else 0.0
+	_layout()
 
 	draw_set_transform(_origin, _yaw, Vector2(_scale, _scale))
-	_ground()
-	_surface_features()
+	_dynamic_surface_features(self)
 	# Under the tunnels, because a corridor is a route and a seam is the ground it was cut through
 	# -- and where the two meet, what you want to see is that the corridor stops.
 	_known_rock()
@@ -167,13 +246,13 @@ func _pixel(pixels: float) -> float:
 	return pixels / maxf(_scale, 0.0001)
 
 
-func _ground() -> void:
+func _ground(on: CanvasItem) -> void:
 	var e := world_extent
-	draw_colored_polygon(
+	on.draw_colored_polygon(
 		PackedVector2Array([Vector2(-e, -e), Vector2(e, -e), Vector2(e, e), Vector2(-e, e)]),
 		Color(0.19, 0.21, 0.14, 0.9)
 	)
-	draw_polyline(
+	on.draw_polyline(
 		PackedVector2Array([
 			Vector2(-e, -e), Vector2(e, -e), Vector2(e, e), Vector2(-e, e), Vector2(-e, -e)
 		]),
@@ -181,34 +260,56 @@ func _ground() -> void:
 	)
 
 
+## Does this generator's footprint change during a match? See the class comment: the answer decides
+## which of the two layers it is drawn on, and defaulting to "no" is what makes the baked layer
+## worth having.
+func _is_dynamic(node: Node) -> bool:
+	return node.has_method("minimap_dynamic") and bool(node.call("minimap_dynamic"))
+
+
 ## Every registered surface object is terrain everyone can read from the start. Purpose-built
 ## generators publish precise circles/polygons. Plain geometry gets an automatic projected AABB,
 ## which makes adding a one-off prop to the map and the minimap the same authoring action.
-func _surface_features() -> void:
-	var player := _director.get_player()
-	if player != null and player.get_plane() > 0:
+##
+## The scenery half: baked once. This is the 1200-odd draw calls the frame probe found.
+func _static_surface_features(on: CanvasItem) -> void:
+	for node: Node in get_tree().get_nodes_in_group(SURFACE_GROUP):
+		if _is_dynamic(node):
+			continue
+		for shape: Dictionary in _shapes_of(node):
+			_draw_surface_shape(on, shape)
+
+
+## The half that has to be asked again every frame: boulders lose sections to a Brute, and caches
+## are created and emptied mid-match.
+##
+## Caches walk their OWN group rather than joining `surface_clutter`. That group is collected once
+## at startup by depth_focus.gd, which is fine for authored scenery and wrong for cheese: a wedge
+## dropped by a scruffed mouse is created mid-match and would never make the list.
+func _dynamic_surface_features(on: CanvasItem) -> void:
+	if not _on_surface():
 		return
 
 	for node: Node in get_tree().get_nodes_in_group(SURFACE_GROUP):
-		var shapes: Array[Dictionary]
-		if node.has_method("minimap_shapes"):
-			shapes = node.call("minimap_shapes")
-		else:
-			shapes = _automatic_surface_shapes(node)
-		for shape: Dictionary in shapes:
-			_draw_surface_shape(shape)
+		if not _is_dynamic(node):
+			continue
+		for shape: Dictionary in _shapes_of(node):
+			_draw_surface_shape(on, shape)
 
-	# Caches walk their OWN group rather than joining `surface_clutter`. That group is collected
-	# once at startup by depth_focus.gd, which is fine for authored scenery and wrong for cheese:
-	# a wedge dropped by a scruffed mouse is created mid-match and would never make the list.
 	for node: Node in get_tree().get_nodes_in_group(CheeseCache.GROUP):
 		if not node.has_method("minimap_shapes"):
 			continue
 		for shape: Dictionary in node.call("minimap_shapes"):
-			_draw_surface_shape(shape)
+			_draw_surface_shape(on, shape)
 
 
-func _draw_surface_shape(shape: Dictionary) -> void:
+func _shapes_of(node: Node) -> Array[Dictionary]:
+	if node.has_method("minimap_shapes"):
+		return node.call("minimap_shapes")
+	return _automatic_surface_shapes(node)
+
+
+func _draw_surface_shape(on: CanvasItem, shape: Dictionary) -> void:
 	var style: StringName = shape.get("style", &"object")
 	var colour := _surface_colour(style)
 	colour.a *= clampf(float(shape.get("strength", 1.0)), 0.0, 1.0)
@@ -217,20 +318,23 @@ func _draw_surface_shape(shape: Dictionary) -> void:
 		var points: PackedVector2Array = shape.get("points", PackedVector2Array())
 		if points.size() < 3:
 			return
-		draw_colored_polygon(points, colour)
+		on.draw_colored_polygon(points, colour)
 		if bool(shape.get("outline", true)):
 			var closed := points.duplicate()
 			closed.append(points[0])
-			draw_polyline(closed, colour.darkened(0.28), _pixel(0.8 * _ui))
+			on.draw_polyline(closed, colour.darkened(0.28), _pixel(0.8 * _ui))
 		return
 
 	var centre: Vector2 = shape.get("position", Vector2.ZERO)
 	var radius: float = shape.get("radius", 0.5)
 	var minimum: float = float(shape.get("min_radius_px", 0.0)) * _ui
 	radius = maxf(radius, _pixel(minimum))
-	draw_circle(centre, radius, colour)
-	if bool(shape.get("outline", true)):
-		draw_arc(centre, radius, 0.0, TAU, 24, colour.darkened(0.30), _pixel(0.7 * _ui))
+	on.draw_circle(centre, radius, colour)
+	# The outline is skipped once the dot is too small to have a visible edge -- see OUTLINE_MIN_PX.
+	# `radius` is in world metres under the transform, so it comes back through `_scale` to ask the
+	# question in the units the eye actually sees.
+	if bool(shape.get("outline", true)) and radius * _scale >= OUTLINE_MIN_PX * _ui:
+		on.draw_arc(centre, radius, 0.0, TAU, 24, colour.darkened(0.30), _pixel(0.7 * _ui))
 
 
 func _surface_colour(style: StringName) -> Color:

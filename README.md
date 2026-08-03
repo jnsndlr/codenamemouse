@@ -15,7 +15,28 @@ Read these in order — they're the source of truth for what we're building and 
 | [`docs/01-gdd.md`](docs/01-gdd.md) | The **what** — digging, cheese-as-lives, classes, the world |
 | [`docs/02-implementation-plan.md`](docs/02-implementation-plan.md) | The **how** — tech, architecture, milestones M0–M9 |
 
-## Current state: M7 — real multiplayer (next)
+## Current state: M6.5 — a build you can hand to somebody (in progress)
+
+**There is a game you can enter and leave.** A title screen is the main scene now, the arena is
+somewhere you go, and `Escape` pauses — freezing the sim rather than hiding it, so a tester who
+steps away doesn't come back scruffed. Fullscreen persists between launches, the version sits in
+the corner, and the F1 shader-tuning panel frees itself outside a debug build.
+
+**The controls screen reads the live `InputMap` rather than a list of strings**, so it cannot go
+stale, and anything nobody grouped is drawn at the bottom under its raw action name — a new binding
+shows up ugly instead of absent.
+
+**And the build keeps its own evidence.** File logging is on and **`P` takes a screenshot**; both
+land in the same folder, which the controls screen names on screen, so what comes back from a
+playtest is one directory to zip. `P` and not `F2` because macOS maps the top row to brightness
+unless the tester has changed a setting they've never heard of — the one key whose whole job is to
+work in a stranger's hands has to work on the first press.
+
+**What's left is the `.app` itself**: install export templates, build, and smoke-test on a Mac that
+isn't this one. The export preset is written and validates; the compute pass behind the pixel look
+is the thing that has to be *seen* on another GPU rather than reasoned about.
+
+## What's built, M0 through M6
 
 **M5 and M6 are both closed.** Crawling into an enemy tunnel is frightening — unlit because you
 didn't hang the lamps, its layout was never yours, and what you can make out arrives a cell at a
@@ -236,6 +257,12 @@ Open the project in Godot 4.7+ and press F5, or:
 | **Q** | **Cave-in** (Engineer) — bring down the tunnel cell you are pointing at. The cell is boxed while you aim, warm when it will fire and cold while it cools. |
 | **X** | **Barricade** (Engineer) — wedge a boulder into the open cell you are pointing at |
 | **Arrows** | Turn the view a quarter at a time |
+| **Escape** | Pause — freezes the match, not just the view |
+| **P** | Screenshot, saved beside the log file. Not `F2`: macOS gives the top row to brightness and volume by default, so a function key photographs nothing on somebody else's Mac. |
+
+Every one of these is on the in-game controls screen, generated from
+[`scripts/input_setup.gd`](scripts/input_setup.gd) at runtime rather than typed out a second time —
+move a key there and the screen moves with it.
 
 **The cursor is the steering wheel, not a crosshair.** Movement is derived from facing, so the
 two can never disagree; the turn-rate cap is where the weight comes from. Left click attacks
@@ -333,7 +360,7 @@ On **CameraRig**: `pitch_degrees` (48), `zoom_idle` / `zoom_run` / `zoom_sprint`
 
 ### Audits
 
-Two headless invariant suites. Both must pass; both exit non-zero if they don't.
+Three headless invariant suites. All must pass; each exits non-zero if it doesn't.
 
 ```bash
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/tunnel_audit.gd
@@ -342,6 +369,15 @@ Two headless invariant suites. Both must pass; both exit non-zero if they don't.
 ```bash
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/match_audit.gd
 ```
+
+```bash
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/cheese_audit.gd
+```
+
+**Run all three before cutting a build.** An exported release template does not accept `--script`,
+so none of them can ever run against the `.app` — the honest procedure is to run them on the same
+commit the export is built from and then smoke-test the binary by hand. A build that inherits
+confidence the audits didn't actually give it is the failure this whole project keeps warning about.
 
 The first builds fifteen awkward tunnel networks and asserts you cannot fall out of any of
 them, then checks the **routing graph agrees with the geometry** — no route through undug earth,
@@ -378,6 +414,13 @@ measured as cells per mouth — checks a **boulder shuts the earth under it on p
 and that five Brute swings free one cell of it and leave the rest of the rock standing, and checks
 **who may appear on the minimap**: not through a prop, not through a plane, not without being seen,
 and forgotten on time.
+
+The third holds 37 invariants over the cheese loop (M6): wedges are **conserved** between cache and
+pile rather than spawned, raiding an enemy store is a transfer, banking happens once, a mouse's paws
+hold one thing, Scurry **multiplies** your current speed rather than setting a flat one — so a
+Scurrying carrier is a fast carrier and not a mouse that stopped carrying — drops persist and merge
+into one growing pile, respawns cost what they should and take 20 seconds while broke, and **every
+refusal is free**, so a rejected spend never bills anyone.
 
 > **The sight check was built wrong first, in the way this project has now been bitten by twice.**
 > The corner it asserts you cannot see round was 8.1 cells away with sight set to 7 — so it was
@@ -436,7 +479,20 @@ tunnels they belong to". A mask that is perfectly correct and sampled half a cel
 headless check in the project and still shows you their tunnel. Only a photograph closes that gap.
 
 `sonar_probe.gd`, `rock_top_probe.gd` and `arena_probe.gd` work the same way for the sonar echo and
-cant mark, revealed rock caps, and the arena at large.
+cant mark, revealed rock caps, and the arena at large. `menu_shot.gd` photographs the title screen,
+the controls sheet and the pause menu at four window sizes, which is how "test common resolutions"
+gets performed by somebody who would not resize a window twenty times.
+
+```bash
+/Applications/Godot.app/Contents/MacOS/Godot --path . --script tools/screenshot_probe.gd
+```
+
+Presses `P` and asserts the **artefact**, not the call: a file that wasn't there is, it decodes at
+the window's size, and it has more than one colour in it — because a blank capture is the failure
+that writes a perfectly valid file. It also checks the confirmation toast isn't in its own
+successor. It exists because every way this can break looks identical to success from the tester's
+chair, and it immediately earned its keep: the filename was a bare timestamp, the clock reads to
+the second, and two shots taken in the same second silently overwrote each other.
 
 > **The tunnel audit spent its whole life passing without testing anything, and that is worth
 > knowing about.** `const STRIP: Array[String] = [...] + STRIP_MATCH` produces an *untyped*
@@ -453,9 +509,11 @@ docs/           design documents
 art/            Blender source files and shaders, imported directly by Godot
 scenes/         player, bots, maps
 scripts/actors/ the mouse itself — locomotion, health, melee, carrying
-scripts/game/   teams, nests, banners, the match rules, who can see whom and what
+scripts/game/   teams, nests, banners, the match rules, who can see whom and what,
+                scene routing, settings, the screenshot key
 scripts/ai/     bots, and the Engineer's raid
-scripts/ui/     score bug, minimap, roster, feed, and the skin they share
+scripts/ui/     score bug, minimap, roster, feed, title and pause menus, the controls
+                sheet, and the two skins they share
 scripts/tunnels/the network, the routing graph, shaft transit, digging
 scripts/        player, camera, maps, input setup
 tools/          headless audits, a behaviour soak, and visual probes needing a real renderer
@@ -493,7 +551,7 @@ rather than in `project.godot`, because that file serializes input bindings as o
 unreadable line. Move them into Project Settings > Input Map when you want in-editor
 rebinding.
 
-## Next: M6 — cheese is lives
+## M6 — cheese is lives (closed)
 
 **M5 got its verdict and it was yes**, at first-pass values, without a retune. That closes the
 hidden-information layer and opens the economy.

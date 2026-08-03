@@ -84,6 +84,12 @@ func _ready() -> void:
 	print("boulders: %d, covering %d cells of plane 1" % [_placed, _taken.size()])
 
 
+## Boulders lose sections mid-match, so this cannot go on the minimap's baked scenery layer -- the
+## panel would keep showing a quarter that a Brute already took off. See minimap.gd's class comment.
+func minimap_dynamic() -> bool:
+	return true
+
+
 ## Precise live footprints for the shared surface-minimap contract. Asking the surviving sections
 ## means a quarter disappears from the panel on the same swing that removes it from the yard.
 func minimap_shapes() -> Array[Dictionary]:

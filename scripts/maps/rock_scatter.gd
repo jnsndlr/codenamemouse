@@ -116,16 +116,23 @@ func _ready() -> void:
 	print("rock scatter: %d rocks, %d with collision" % [placed, _solid])
 
 
+## Built on first ask and kept, like grass_patch.gd already does. The rocks are scattered once in
+## `_ready` and never move, so rebuilding this was eighty-six dictionaries and eighty-six
+## `to_global` calls per frame for an answer that could not have changed.
+var _minimap_shapes: Array[Dictionary] = []
+
+
 func minimap_shapes() -> Array[Dictionary]:
-	var shapes: Array[Dictionary] = []
+	if not _minimap_shapes.is_empty() or _minimap_rocks.is_empty():
+		return _minimap_shapes
 	for rock: Dictionary in _minimap_rocks:
 		var local: Vector2 = rock["position"]
 		var world: Vector3 = to_global(Vector3(local.x, 0.0, local.y))
-		shapes.append({
+		_minimap_shapes.append({
 			"kind": &"circle",
 			"style": &"surface_rock",
 			"position": Vector2(world.x, world.z),
 			"radius": rock["radius"],
 			"min_radius_px": 1.1,
 		})
-	return shapes
+	return _minimap_shapes

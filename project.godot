@@ -13,12 +13,26 @@ config_version=5
 config/name="Codename: Mouse"
 config/description="Top-down isometric, class-based capture the flag at mouse scale."
 config/icon="res://assets/branding/png/app-icon-1024.png"
-run/main_scene="res://scenes/maps/arena.tscn"
+config/version="0.1.0-alpha"
+run/main_scene="res://scenes/ui/title.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 
 [autoload]
 
 InputSetup="*res://scripts/input_setup.gd"
+Screenshot="*res://scripts/game/screenshot.gd"
+
+[debug]
+
+; Stated rather than left to the platform default, because M6.5 ships to a machine that is not
+; this one and one playtest produces one set of evidence. A log on disk is the difference between
+; a bug report and "it broke at some point".
+;
+; It lands in `user://logs/`, which is the SAME FOLDER `screenshot.gd` writes shots beside -- so
+; what comes back from a playtest is one directory to zip rather than two places to go looking,
+; and the controls sheet names that directory on screen. (An earlier note here said
+; ~/Library/Logs/Godot/, which is where the *editor* keeps its own log and not where this goes.)
+file_logging/enable_file_logging=true
 
 [display]
 
@@ -33,3 +47,10 @@ window/size/viewport_height=720
 [physics]
 
 3d/default_gravity=20.0
+
+[rendering]
+
+; Required to export for arm64 or universal at all -- the exporter refuses outright without it,
+; which is how M6.5 found it. Apple Silicon wants ASTC, so a build that omits these formats has
+; no textures the target GPU can read.
+textures/vram_compression/import_etc2_astc=true

@@ -108,6 +108,14 @@ var _readouts: Dictionary = {}
 
 
 func _ready() -> void:
+	# NOT IN A RELEASE BUILD. This is a dev tuning UI on F1, and F1 is a key people press. M6.5
+	# ships to somebody who has never seen the game, and a stranger who lands in a panel of
+	# twelve shader coefficients has been handed the impression that this is what the game is.
+	# Freed rather than hidden: the sliders drive a CompositorEffect every frame they exist.
+	if not OS.is_debug_build():
+		queue_free()
+		return
+
 	var camera := get_node_or_null(camera_path) as Camera3D
 	if camera != null and camera.compositor != null \
 			and not camera.compositor.compositor_effects.is_empty():
