@@ -1216,6 +1216,21 @@ persist and merge, and every refusal is free.
 - A signed-enough `.app` that opens on a MacBook that is not this one
 
 **Done when:** a friend on another Mac has played a full match, and you have their log file.
+— **Portability half MET. M6.5 is closed for the purpose it was inserted for.**
+
+> **The verdict: the build runs on other Macs, including a five-year-old one.** Tested on a 2020
+> MacBook Air and a 2026 MacBook Pro. That is the risk this milestone was pulled forward to retire,
+> and it is retired: the universal binary, the ad-hoc signature, the resolution scaling and — the
+> one genuinely uncertain item — the `RenderingDevice` compute pass all survive contact with
+> hardware that is not the development machine. **The 2020 Air is the useful data point**, because
+> it is the one that could plausibly have said no.
+>
+> **Being precise about what that does not answer:** the done-when asks for a *friend*, and a
+> second machine you own is not one. The portability question is closed; the onboarding question —
+> can somebody who has never seen this find `E`, and therefore ever see a tunnel — needs a person
+> who is not you. That is worth doing and it is **no longer a gate in front of M7**, because M7's
+> blocker was never onboarding: it was never having shipped a build at all, and now one has
+> shipped, twice, onto hardware five years apart.
 
 > **Why a milestone and not a chore list.** M7's last checkpoint is "over the internet, with a
 > friend, for a full match" — which requires handing someone a build, something this project has
@@ -1370,10 +1385,40 @@ no third-party assets — **verified rather than asserted**, by searching for fo
 components Godot bundles are *not* copied in: that list goes stale the first time the engine is
 updated, and the engine already answers it at runtime through `Engine.get_copyright_info()`.
 
-**Still open: the `.app` itself.** Export templates for 4.7.1 are not installed, so nothing has been
-built or launched yet. The compute pass is the item that has to be seen rather than reasoned about —
-`pixel_edges_effect.gd` dispatches through `RenderingDevice`, which is exactly the thing that
-behaves differently on another GPU, and it is this game's entire look.
+#### In progress — the first `.app`, and what building one taught (landed)
+
+176 MB, universal (`x86_64 arm64`), ad-hoc signed, `com.jnsndlr.codenamemouse`. It boots: Metal 4.0
+Forward+, 760 rocks, 88,806 grass blades, 14 boulders, 6 caches and a 361-polygon navmesh, into a
+running match, with **no errors** — which is also the compute pass answering for itself, since a
+`RenderingDevice` shader that failed to compile would say so loudly.
+
+> **`user://` shipped to the wrong folder, and only building the thing could show that.** The
+> default puts an exported app's data in `~/Library/Application Support/Godot/app_userdata/`, so
+> the evidence this milestone exists to collect landed under a directory named after an engine the
+> tester does not have installed and has never heard of — and mixed the shipped build's log in with
+> every editor run. `use_custom_user_dir` moves it to `~/Library/Application Support/Codename
+> Mouse/`. **Nothing in the project could have caught this**: in the editor the path is
+> `app_userdata` too and looks entirely reasonable, because in the editor it *is*.
+
+> **The log now says which build it came from.** The engine writes its own version and renderer
+> line; what it cannot know is the *game's* version, which is the number a bug report has to carry.
+> A one-line banner adds that plus the GPU, the resolution, the date, and whether it is a debug or
+> release build. That last field is worth having twice over — it is how the dev-tooling gate got
+> verified rather than assumed, since `release build` in the log **is** `OS.is_debug_build()`
+> returning false, which is the exact condition `look_panel.gd` frees itself on.
+
+> **A force-quit loses the log's tail, and this cost an hour of chasing.** Four consecutive runs
+> produced a zero-byte log and looked like file logging silently not working in a release build.
+> It was `pkill` — Godot's file logger buffers, and SIGTERM takes the buffer with it. Run to a
+> clean exit, everything is there. Errors and warnings are not affected. Worth knowing before
+> reading a tester's empty log as evidence of anything: **ask how they closed it.** `--quit-after`
+> works in release templates, which is what pinned it down and is the way to smoke-test one.
+
+**Still open: the part that needs hands.** Everything above was verified from a terminal, which
+cannot press a key or see the screen. The pause menu, fullscreen, the screenshot key in the shipped
+build, the look at 2× on a Retina panel, and Gatekeeper's opinion of the bundle after it has
+travelled — all of those are a person sitting in front of it, and then the milestone's real
+question: a friend, another Mac, a full match, and their log file.
 
 #### The web build is not part of this, and here is the number
 
@@ -1429,22 +1474,51 @@ architecture notes above made promises in week one; this is the audit of which o
 
 **Did not hold, and these are the actual work:**
 
-- **Input is read where it is used, not captured as data.** Only three files touch `Input.`
-  directly — [`player.gd`](scripts/player/player.gd),
-  [`dig_controller.gd`](scripts/tunnels/dig_controller.gd) and
-  [`camera_rig.gd`](scripts/camera/camera_rig.gd) — and the third is pure presentation that stays
-  local forever. So the capture surface is two files. But they read `Input` *at the moment of
+- **Input is read where it is used, not captured as data.** They read `Input` *at the moment of
   acting*, which is the thing that has to change: an intent has to become a value that can travel.
+
+  > **Re-counted at the start of M7, and the survey was wrong.** It said three files touched
+  > `Input.`, two of them gameplay. It is **six gameplay files**, in two different shapes, and the
+  > shapes matter more than the count:
+  >
+  > | File | How it reads | Actions |
+  > |---|---|---|
+  > | [`player.gd`](scripts/player/player.gd) | polls `Input.` | move, attack, scurry, slow, sprint |
+  > | [`dig_controller.gd`](scripts/tunnels/dig_controller.gd) | polls `Input.` | dig, burrow, shaft up/down |
+  > | [`cave_in.gd`](scripts/classes/cave_in.gd) | `_unhandled_input` | ability |
+  > | [`sonar.gd`](scripts/classes/sonar.gd) | `_unhandled_input` | ability |
+  > | [`barricade.gd`](scripts/classes/barricade.gd) | `_unhandled_input` | barricade |
+  > | [`class_swap.gd`](scripts/classes/class_swap.gd) | `_unhandled_input` | swap_class |
+  >
+  > The four ability files arrived with M4 and M5, *after* the survey was written, and each one
+  > subscribed to the event stream directly because that was the cheapest thing to do at the time
+  > and nothing was wrong with it. **Four of six are the event-driven shape**, which the survey did
+  > not anticipate at all: a polled read becomes "read the frame instead", but an
+  > `_unhandled_input` handler has to stop being an input handler entirely. `camera_rig.gd` is the
+  > seventh and stays local forever, along with the menus and the screenshot key.
+  >
+  > The general lesson is the one this document keeps relearning: **a survey is a measurement, and
+  > measurements go stale.** This one was taken before two milestones landed on the exact surface
+  > it was measuring.
 - **Actions call the rules directly.** `player.gd` calls `director.try_scurry(self)`;
   `class_swap.gd` acts on `_unhandled_input`; `dig_controller.gd` drives the network on a held
   button. On a client every one of those is a **request**, not an act. This is the same edit
   repeated four or five times, and it is the edit that makes cheating structurally impossible
   rather than merely discouraged.
-- **"The player" is singular, in eleven places.** All but one are in `scripts/ui/` — minimap,
-  roster, vitals, match_hud — asking *whose eyes am I behind*. That is a presentation question
-  with a different answer per client, not a rule, so it becomes `local_player()` and stops being
-  a director property. Cheap, but it is eleven sites and one of them (the director's own) is not
-  like the others.
+- **"The player" is singular, and this is the survey's second bad count.** It said eleven places,
+  "all but one in `scripts/ui/`", i.e. a presentation question with a different answer per client.
+  The real figure is **31 references across 11 files, and only three of those files are
+  `scripts/ui/`** — `class_bar.gd`, `contextual_hint.gd`, `depth_indicator.gd`. The rest are
+  gameplay: the four ability scripts, `dig_controller.gd`, `fall_guard.gd`, `depth_focus.gd` and
+  the director itself.
+
+  That reclassification is the important part, not the number. "Whose eyes am I behind" really is
+  presentation and really does become `local_player()`. **"Which mouse is this ability attached
+  to" is not the same question** — it is a rule about an actor, it has to resolve on the server for
+  every seat including bots, and answering it with "the player" is precisely the assumption that
+  breaks the moment there are two. The three UI files are cheap; the eight gameplay ones are the
+  same edit as making actions into requests, and should be done in the same pass rather than
+  counted as a separate cheap one.
 - **Bots assume they are on the machine that owns the world.** `_spawn_bots` already does the
   right shape — the player takes blue seat 0, bots fill the rest — but bots must run on the
   server only, and `crew_size` becomes *seats minus humans* rather than a constant.
@@ -1468,6 +1542,49 @@ architecture notes above made promises in week one; this is the audit of which o
 6. **Prediction only if it hurts.** Deferred on purpose. Displacement-over-damage, projectiles
    over hitscan and no crits were all chosen so that naive interpolation is survivable — find out
    whether it is before spending a week on reconciliation.
+
+#### In progress — the wire (landed)
+
+Step 1 is done. [`net_transport.gd`](scripts/net/net_transport.gd) is the interface the *Tech
+decisions* section has been promising since week one, and
+[`enet_transport.gd`](scripts/net/enet_transport.gd) is its only implementation. Nothing above this
+layer will ever name ENet, which is the entire point: whether this is a web build is an M9 question,
+and the price of keeping it open is this file.
+
+- **The interface is shaped like `MultiplayerPeer`, deliberately.** All three candidate backends
+  are `MultiplayerPeer` subclasses with identical packet APIs, so an interface in that shape makes
+  the swap genuinely one class rather than aspirationally one class.
+- **Godot's RPCs and `MultiplayerSynchronizer` are not used, for a reason specific to this game.**
+  Every client is owed a *different* payload — that is M5's pillar, and step 5 below says the filter
+  lives in one place so there is one place to audit. A synchronizer replicates a property to
+  everyone by construction; making it lie to one peer is fighting the tool.
+- **`OFFLINE` is a mode, not an error.** `is_server()` is true offline, so a single-player match
+  takes the same branch a host does. That is what stops the authoritative path being the one nobody
+  plays.
+- **The roster is kept by hand, because the peer does not keep one.** `get_peers()` is a
+  `MultiplayerAPI` method, not a `MultiplayerPeer` one — assumed otherwise, and the audit said no.
+
+> **`tools/net_audit.gd` is written BEFORE anything consumes the transport**, which reverses this
+> project's usual order and is the right way round here: a wrapper with one implementation and no
+> callers is at its least trustworthy, and by the time it has callers, five files have been written
+> against whatever it actually does. It stands up a real server and **two** real clients on a real
+> socket. Two, not one — with a single client every packet came from the only peer there is, so
+> attribution is right by luck.
+
+> **It caught two bugs on its first run, and the second is the one worth remembering.**
+> `get_peers()` not existing was a five-minute fix. The other: `_ready` called `set_process(false)`
+> unconditionally, and `_ready` does **not** run inside `add_child` when the parent is not yet in
+> the tree — it is deferred a frame. So `add_child(t); t.host(port)` turned the pump on and then
+> `_ready` turned it back off. The socket opened, the client connected, the status read CONNECTED,
+> and **nothing was ever polled or delivered.** A transport that is silently deaf, in the most
+> natural three-line call sequence there is, and indistinguishable from a network problem from
+> above. It is now derived (`set_process(_peer != null)`) rather than set.
+
+> **The attribution check was verified by breaking it**, by swapping `get_packet_peer` after
+> `get_packet` — which pops the packet and then reports the *next* sender. Both attribution
+> assertions fail and **every other check still passes**, which is the argument for two clients
+> stated as a result rather than as a worry. In a match that bug reads as one player's inputs
+> driving another player's mouse: a gameplay bug that isn't one.
 
 #### Sequencing — five checkpoints, each playable
 
@@ -1644,12 +1761,27 @@ from the live `InputMap`, fullscreen, the version label, the icon, file logging,
 export preset are all in. Four suites pass: 15 tunnel scenarios, 19 match rule groups, 37 cheese
 invariants and the screenshot probe.
 
-**What remains is the `.app`, and it is the half that cannot be reasoned about.** Export templates
-for 4.7.1 need installing, then: build from the same commit the audits passed on, confirm `tools/`
-and `greybox.tscn` really are absent from the `.pck`, and smoke-test by hand — with the compute pass
-the specific thing to look at, since `RenderingDevice` is what behaves differently on another GPU
-and it is the whole look. Then the question itself: a friend on another Mac, a full match, and their
-log file. Mac only — the web build is a rendering decision, not an export target, and stays at M9.
+**M6.5 is closed for the purpose it was inserted for.** The `.app` builds — 176 MB, universal,
+ad-hoc signed — and **runs on a 2020 MacBook Air and a 2026 MacBook Pro**. The compute pass, the
+resolution scaling and the signature all survive hardware that is not the development machine, and
+the five-year-old Air is the data point that could have said no. Still outstanding, and no longer a
+gate: a *friend*, which is the onboarding half rather than the portability half.
+
+**Immediate next: M7 — real multiplayer.** *Does it survive contact with a second human?*
+
+**Step 1 is done: `NetTransport` + `ENetTransport`, with `tools/net_audit.gd` connecting a real
+server and two real clients over a real socket.** Written before anything consumes it, which is the
+opposite of this project's usual order and correct for a wrapper with no callers yet. It caught a
+transport that opened its socket, accepted connections, reported CONNECTED, and silently never
+polled — in the most natural three-line call sequence there is.
+
+**Step 2 is the input frame, and the survey above was re-measured before starting it.** It said two
+gameplay files read input; it is six, four of them in an event-driven shape the survey did not
+anticipate. It said "the player" was singular in eleven mostly-presentational places; it is 31
+references across 11 files and only three are UI. Neither correction changes the plan's *shape* —
+`Mouse._control` is still the driver seam and `MatchDirector` is still the sim — but both make step
+2 larger than written, and the ability scripts want doing in the same pass as turning actions into
+requests rather than counted as a separate cheap one. Mac only — the web build is a rendering decision, not an export target, and stays at M9.
 
 **Then M7 — real multiplayer.** *Does it survive contact with a second human?* The
 survey above is the important part: `Mouse._control` is already the driver seam, `MatchDirector`

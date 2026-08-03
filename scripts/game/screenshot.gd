@@ -55,6 +55,27 @@ func _ready() -> void:
 
 	visible = false
 	set_process(false)
+	_log_session()
+
+
+## The first thing in every log, so a report from a machine we cannot inspect says which build it
+## came from and what it was running on.
+##
+## The engine writes its own version and renderer line above this; what it has no way to know is
+## the GAME's version, which is the number a bug report has to carry. The rest is the answer to
+## the questions asked first about any report from somebody else's Mac -- which GPU, what
+## resolution, was it a release build -- and every one of them is a question you cannot go back
+## and ask once the evening is over.
+func _log_session() -> void:
+	print("---- %s v%s | %s | %s | %s | %s ----" % [
+		ProjectSettings.get_setting("application/config/name", "?"),
+		ProjectSettings.get_setting("application/config/version", "dev"),
+		"debug build" if OS.is_debug_build() else "release build",
+		RenderingServer.get_video_adapter_name(),
+		DisplayServer.window_get_size(),
+		Time.get_datetime_string_from_system(),
+	])
+	print("evidence folder: %s" % user_folder())
 
 
 func _input(event: InputEvent) -> void:

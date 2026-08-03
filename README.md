@@ -15,7 +15,36 @@ Read these in order — they're the source of truth for what we're building and 
 | [`docs/01-gdd.md`](docs/01-gdd.md) | The **what** — digging, cheese-as-lives, classes, the world |
 | [`docs/02-implementation-plan.md`](docs/02-implementation-plan.md) | The **how** — tech, architecture, milestones M0–M9 |
 
-## Current state: M6.5 — a build you can hand to somebody (in progress)
+## Current state: M7 — real multiplayer (in progress)
+
+**M6.5 is closed.** The `.app` runs on a 2020 MacBook Air and a 2026 MacBook Pro — the compute
+pass, the resolution scaling and the ad-hoc signature all survive hardware that isn't the
+development machine, and the five-year-old Air is the one that could have said no.
+
+**The wire is up.** [`NetTransport`](scripts/net/net_transport.gd) is the interface the tech
+decisions have promised since week one; [`ENetTransport`](scripts/net/enet_transport.gd) is the only
+implementation, and nothing above it will ever name ENet — that's what keeps the browser question
+open for M9 at the cost of one file. Godot's RPCs and `MultiplayerSynchronizer` are deliberately
+unused: **every client is owed a different payload**, because a crew sees the tunnels it dug and not
+the ones it didn't, and a synchronizer replicates to everyone by construction.
+
+`OFFLINE` is a real mode — `is_server()` is true offline, so a single-player match takes the same
+branch a host does, which is what stops the authoritative path being the one nobody plays.
+
+```bash
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/net_audit.gd
+```
+
+Stands up a real server and **two** real clients on a real socket. Two, not one: with a single
+client every packet came from the only peer there is, so attribution is right by luck. It caught a
+transport that opened its socket, accepted connections, reported CONNECTED and **silently never
+polled** — `_ready` doesn't run inside `add_child` when the parent isn't in the tree yet, so
+`add_child(t); t.host(port)` switched the pump on and a deferred `_ready` switched it back off.
+
+**Next is the input frame**: intent has to become a value that can travel, so single-player runs
+through the identical path. Six gameplay files read input today, four of them as event handlers.
+
+## M6.5 — a build you can hand to somebody (closed)
 
 **There is a game you can enter and leave.** A title screen is the main scene now, the arena is
 somewhere you go, and `Escape` pauses — freezing the sim rather than hiding it, so a tester who
@@ -32,9 +61,24 @@ playtest is one directory to zip. `P` and not `F2` because macOS maps the top ro
 unless the tester has changed a setting they've never heard of — the one key whose whole job is to
 work in a stranger's hands has to work on the first press.
 
-**What's left is the `.app` itself**: install export templates, build, and smoke-test on a Mac that
-isn't this one. The export preset is written and validates; the compute pass behind the pixel look
-is the thing that has to be *seen* on another GPU rather than reasoned about.
+**And there's a `.app`.** 176 MB, universal, ad-hoc signed; it boots into a full match with no
+errors, and the log names the build it came from — game version, GPU, resolution, and whether it's a
+release build, which is how the F1-panel gate gets verified rather than assumed. `tools/` and
+`greybox.tscn` are confirmed absent from the `.pck`.
+
+```bash
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --export-release "macOS" "$PWD/build/Codename Mouse.app"
+```
+
+**What's left needs hands**: pause, fullscreen, the screenshot key in the shipped build, the look on
+a Retina panel, and what Gatekeeper says once the bundle has travelled. Transfer by `rsync`, `scp`
+or a USB stick — AirDrop and browsers set the quarantine attribute, and recent macOS refuses an
+ad-hoc-signed app that carries it.
+
+> **If a tester's log comes back empty, ask how they closed it.** Godot's file logger buffers, and a
+> Force Quit takes the buffer with it; a normal quit flushes, and errors and warnings are written
+> immediately either way. Four zero-byte logs looked exactly like file logging being broken in a
+> release build, and it was `pkill`.
 
 ## What's built, M0 through M6
 
@@ -516,6 +560,7 @@ scripts/ui/     score bug, minimap, roster, feed, title and pause menus, the con
                 sheet, and the two skins they share
 scripts/tunnels/the network, the routing graph, shaft transit, digging
 scripts/        player, camera, maps, input setup
+scripts/net/     the transport interface and its ENet implementation
 tools/          headless audits, a behaviour soak, and visual probes needing a real renderer
 ```
 

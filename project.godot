@@ -15,6 +15,15 @@ config/description="Top-down isometric, class-based capture the flag at mouse sc
 config/icon="res://assets/branding/png/app-icon-1024.png"
 config/version="0.1.0-alpha"
 run/main_scene="res://scenes/ui/title.tscn"
+; Put the shots and the log in ~/Library/Application Support/Codename Mouse/ rather than in
+; .../Application Support/Godot/app_userdata/Codename- Mouse/, which is where they land by default.
+;
+; This is an M6.5 finding and it came out of the first real .app: the whole point of the evidence
+; work is that a tester can FIND the folder and send it back, and the default buries it under a
+; directory named after an engine they do not have installed and have never heard of. It also
+; mixed the shipped build's log in with every editor run's.
+config/use_custom_user_dir=true
+config/custom_user_dir_name="Codename Mouse"
 config/features=PackedStringArray("4.7", "Forward Plus")
 
 [autoload]
