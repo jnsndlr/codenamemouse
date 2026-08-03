@@ -47,6 +47,8 @@ var _stamina: float = 0.0
 var _regen_timer: float = 0.0
 var _sprinting: bool = false
 var _since_forward_tap: float = 999.0
+## The physics frame `_input` was last built on. See `input()`.
+var _captured_on: int = -1
 
 
 func _ready() -> void:
@@ -78,7 +80,43 @@ func apply_class(definition: ClassDefinition) -> void:
 ## acorns, barricade placement and dig target all want it. The camera does NOT read it; it
 ## works out its own lead from screen space (see camera_rig.gd).
 func get_aim_point() -> Vector3:
-	return _aim_point
+	return input().aim_point
+
+
+## This machine's keyboard, as data, built AT MOST ONCE PER PHYSICS TICK and then handed to
+## everyone who asks.
+##
+## LAZY RATHER THAN CAPTURED IN `_control`, and that is a correctness fix rather than a style
+## choice. Six nodes read this intent and they are spread across the scene tree: `dig_controller`
+## and the four abilities have their own `_physics_process`, and Godot runs them in tree order.
+## Capturing inside `_control` would mean whichever of them happens to be readied *above* the
+## player reads last tick's frame — a one-frame lag that is invisible in single-player, differs by
+## scene layout, and is the exact species of bug that gets blamed on the network later.
+##
+## Keyed on the frame counter, so the first ask in a tick builds it and the rest get the same
+## object. Nobody has to be ordered.
+func input() -> InputFrame:
+	var now := Engine.get_physics_frames()
+	if now != _captured_on:
+		_captured_on = now
+		_input = InputCapture.read(self, _aim_point)
+		_aim_point = _input.aim_point
+	return _input
+
+
+## Intent from somewhere other than this keyboard, for this tick only.
+##
+## The base class just stores it; a `Player` additionally has to be told **not to capture over the
+## top of it**, or the frame it was handed is replaced by whatever the real keyboard is doing the
+## moment anything asks. Marking the tick as spoken for is the whole override.
+##
+## Not a test seam, though the audits are its first user: this is the shape a replay needs, and
+## the shape a listen-server host needs the day it drives a seat whose player has dropped. The
+## capture resumes by itself next tick, because `_captured_on` stops matching.
+func drive(frame: InputFrame) -> void:
+	super(frame)
+	_captured_on = Engine.get_physics_frames()
+	_aim_point = _input.aim_point
 
 
 func is_sprinting() -> bool:
@@ -100,29 +138,30 @@ func get_sprint_speed() -> float:
 
 ## The one method the base class asks for. Aim, then the ladder, then a heading.
 func _control(delta: float) -> void:
-	_update_aim()
-	_update_sprint(delta)
-	_face_toward(_aim_direction(), delta)
+	var frame := input()
+	_update_sprint(frame, delta)
+	_face_toward(_aim_direction(frame), delta)
 
-	if Input.is_action_just_pressed("attack") and not _pointer_over_ui():
+	if frame.is_pressed(InputFrame.Action.ATTACK):
 		swing()
 
 	# ASKED OF THE DIRECTOR, not done here. The price is a cheese out of the crew's pool and the
 	# pool is the director's, so the only thing this end owns is the keypress -- a mouse that
 	# could boost itself would be a mouse that could spend its team's lives without the thing
-	# holding the ledger ever hearing about it.
-	if Input.is_action_just_pressed("scurry"):
+	# holding the ledger ever hearing about it. That shape is why Scurry needs no work at M7:
+	# it was already a request rather than an act.
+	if frame.is_pressed(InputFrame.Action.SCURRY):
 		var director := get_tree().get_first_node_in_group(MatchDirector.DIRECTOR_GROUP)
 		if director != null:
 			director.try_scurry(self)
 
-	_wish = _wish_direction()
+	_wish = _wish_direction(frame)
 
 
 func _tier_multiplier() -> float:
 	if _sprinting:
 		return sprint_multiplier
-	if Input.is_action_pressed("slow"):
+	if input().is_held(InputFrame.Action.SLOW):
 		return slow_multiplier
 	return 1.0
 
@@ -130,8 +169,8 @@ func _tier_multiplier() -> float:
 ## Double-tap W. Sprint holds while W is held and dies the moment you stop pushing forward,
 ## run dry, or drop to Slow -- so it can never be left on by accident, which is why it doesn't
 ## need to be a toggle.
-func _update_sprint(delta: float) -> void:
-	if Input.is_action_just_pressed("move_forward"):
+func _update_sprint(frame: InputFrame, delta: float) -> void:
+	if frame.is_pressed(InputFrame.Action.FORWARD):
 		if _since_forward_tap <= double_tap_window and _stamina >= sprint_minimum:
 			_sprinting = true
 		_since_forward_tap = 0.0
@@ -139,10 +178,13 @@ func _update_sprint(delta: float) -> void:
 		_since_forward_tap += delta
 
 	# L3 on a pad, because you can't double-tap a stick.
-	if Input.is_action_just_pressed("sprint") and _stamina >= sprint_minimum:
+	if frame.is_pressed(InputFrame.Action.SPRINT) and _stamina >= sprint_minimum:
 		_sprinting = true
 
-	if Input.get_action_strength("move_forward") <= 0.0 or Input.is_action_pressed("slow"):
+	# Read off `move` rather than off the FORWARD bit, because a stick pushed a third of the way
+	# is forward without the action's threshold being crossed -- and letting it drift back to
+	# centre has to end a sprint, or a pad player sprints until the stamina runs out.
+	if frame.move.y <= 0.0 or frame.is_held(InputFrame.Action.SLOW):
 		_sprinting = false
 
 	if _sprinting:
@@ -160,15 +202,11 @@ func _update_sprint(delta: float) -> void:
 
 ## Facing-relative, which is the whole scheme. Note the penalties are applied AFTER the radial
 ## clamp, so holding W+D doesn't launder the strafe penalty away by renormalising.
-func _wish_direction() -> Vector3:
-	var raw := Vector2(
-		Input.get_action_strength("strafe_right") - Input.get_action_strength("strafe_left"),
-		Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
-	)
+func _wish_direction(frame: InputFrame) -> Vector3:
+	# Already radially clamped by the capture; the penalties below are still applied after it.
+	var raw := frame.move
 	if raw.length_squared() < 0.0001:
 		return Vector3.ZERO
-	if raw.length() > 1.0:
-		raw = raw.normalized()
 
 	var forward := get_facing_direction()
 	var right := forward.cross(Vector3.UP)
@@ -179,53 +217,18 @@ func _wish_direction() -> Vector3:
 ## Right stick wins when it's deflected; otherwise the cursor. A neutral stick returns zero,
 ## which `_face_toward` reads as "hold what you've got" -- that's what lets a pad player let
 ## go of the stick without the mouse snapping to a default heading.
-func _aim_direction() -> Vector3:
-	var stick := Vector2(
-		Input.get_action_strength("look_right") - Input.get_action_strength("look_left"),
-		Input.get_action_strength("look_down") - Input.get_action_strength("look_up")
-	)
-	if stick.length() > 0.25:
-		return _camera_relative(stick)
+## The camera-relative conversion the stick needs is resolved by the capture, because the camera
+## is local and a server has no idea which way this player is looking at the yard. What is left
+## here is the choice between the two aim sources, which is a rule and belongs on this side.
+func _aim_direction(frame: InputFrame) -> Vector3:
+	if frame.look != Vector3.ZERO:
+		return frame.look
 
-	var to_cursor := _aim_point - global_position
+	# Measured against the mouse's OWN position, not the client's idea of it: this runs wherever
+	# the sim runs, so it has to use the authoritative body rather than the point the aim was
+	# taken from.
+	var to_cursor := frame.aim_point - global_position
 	to_cursor.y = 0.0
 	if to_cursor.length() < aim_deadzone:
 		return Vector3.ZERO
 	return to_cursor.normalized()
-
-
-## Stick up means up-screen, which is what the fixed 45 degree camera yaw would otherwise make
-## a diagonal.
-func _camera_relative(input: Vector2) -> Vector3:
-	var camera := get_viewport().get_camera_3d()
-	if camera == null:
-		return Vector3(input.x, 0.0, input.y).normalized()
-
-	var basis := camera.global_transform.basis
-	var forward := -basis.z
-	forward.y = 0.0
-	var right := basis.x
-	right.y = 0.0
-	return (right.normalized() * input.x - forward.normalized() * input.y).normalized()
-
-
-func _update_aim() -> void:
-	var camera := get_viewport().get_camera_3d()
-	if camera == null:
-		return
-
-	var mouse := get_viewport().get_mouse_position()
-	var ground := Plane(Vector3.UP, global_position.y)
-	var hit: Variant = ground.intersects_ray(
-		camera.project_ray_origin(mouse), camera.project_ray_normal(mouse)
-	)
-	if hit != null:
-		_aim_point = hit
-
-
-## Whether the cursor is over a piece of UI rather than over the world. The same guard the dig
-## controller uses, and for the same reason -- swinging at the air every time you drag a slider
-## on the look panel would be a strange way to tune a picture.
-func _pointer_over_ui() -> bool:
-	var viewport := get_viewport()
-	return viewport != null and viewport.gui_get_hovered_control() != null

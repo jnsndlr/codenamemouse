@@ -41,8 +41,29 @@ transport that opened its socket, accepted connections, reported CONNECTED and *
 polled** — `_ready` doesn't run inside `add_child` when the parent isn't in the tree yet, so
 `add_child(t); t.host(port)` switched the pump on and a deferred `_ready` switched it back off.
 
-**Next is the input frame**: intent has to become a value that can travel, so single-player runs
-through the identical path. Six gameplay files read input today, four of them as event handlers.
+**And intent is a value now.** An [`InputFrame`](scripts/net/input_frame.gd) is one tick of what a
+player meant — movement, aim, and two masks of held and pressed actions —
+and [`InputCapture`](scripts/net/input_capture.gd) is **the only place in the game that reads a
+keyboard on a gameplay path**. Six files did before this. The four ability scripts stopped being
+`_unhandled_input` handlers, which was never going to survive a wire: an event handler fires on
+*this* machine's event stream, and a server has none for a peer three hundred miles away.
+
+Aim and look travel *resolved* — a world position and a direction, not a cursor and a stick —
+because both depend on the camera, the camera is permanently local, and a frame carrying screen
+coordinates is one the server can't interpret. Single-player runs the identical path, which is what
+stops the networked one being the path nobody tests.
+
+```bash
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/input_audit.gd
+```
+
+Round-trips every field through bytes, and checks a driven frame actually drives. Its first version
+**passed with the mechanism deleted** — the assertion immediately above it called `input()` and
+captured the tick, so the cache returned the driven frame regardless. Not a weak assertion: a good
+assertion whose side effect disarmed the next one.
+
+**Next: seats, then state at 30Hz** — a seat is a team, an index, and an occupant that's either a
+peer id or a bot. Then two windows, one seat each, which is where all of this holds or doesn't.
 
 ## M6.5 — a build you can hand to somebody (closed)
 
@@ -404,7 +425,8 @@ On **CameraRig**: `pitch_degrees` (48), `zoom_idle` / `zoom_run` / `zoom_sprint`
 
 ### Audits
 
-Three headless invariant suites. All must pass; each exits non-zero if it doesn't.
+**Five** headless invariant suites — the three below plus `net_audit.gd` and `input_audit.gd`,
+both documented under M7 above. All must pass; each exits non-zero if it doesn't.
 
 ```bash
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/tunnel_audit.gd
@@ -560,7 +582,7 @@ scripts/ui/     score bug, minimap, roster, feed, title and pause menus, the con
                 sheet, and the two skins they share
 scripts/tunnels/the network, the routing graph, shaft transit, digging
 scripts/        player, camera, maps, input setup
-scripts/net/     the transport interface and its ENet implementation
+scripts/net/     the transport interface, its ENet implementation, and the input frame
 tools/          headless audits, a behaviour soak, and visual probes needing a real renderer
 ```
 

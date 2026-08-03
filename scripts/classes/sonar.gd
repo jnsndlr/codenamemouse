@@ -126,20 +126,36 @@ func scan() -> int:
 	return found.size()
 
 
-func _unhandled_input(event: InputEvent) -> void:
-	if not event.is_action_pressed("ability"):
+## READ ON THE PHYSICS TICK, NOT FROM AN INPUT EVENT (M7).
+##
+## This was an `_unhandled_input` handler, which is the natural way to write it and the one shape
+## that cannot survive a server: an event handler fires on *this* machine's event stream, and a
+## server has no such stream for a peer three hundred miles away. It now reads the same
+## [InputFrame] everything else does, so a packet drives it exactly as a keyboard does.
+##
+## `_physics_process` AND NOT `_process`, and that distinction is load-bearing. The frame is built
+## once per physics tick and its pressed bits stay latched for that whole tick; idle frames can run
+## more than once per physics tick on a fast display, and this ability would fire twice from one
+## keypress at 120Hz and once at 60Hz. Cooldown ticking stays in `_process` -- that is a wall
+## clock, and it does not care.
+##
+## Nothing consumes the press any more. `set_input_as_handled` used to stop two ability nodes
+## reacting to the same key; the class gate below was always what actually did that work, since
+## only one node's `owner_class` can match the mouse.
+func _physics_process(_delta: float) -> void:
+	if _player == null:
 		return
-	if _player == null or _player.is_scruffed() or _player.mouse_class != owner_class:
+	if not _player.input().is_pressed(InputFrame.Action.ABILITY):
+		return
+	if _player.is_scruffed() or _player.mouse_class != owner_class:
 		return
 
 	var enemy := _nearest_enemy_mark()
 	if enemy != null:
 		_clear(enemy, _player.team)
-		get_viewport().set_input_as_handled()
 		return
 
 	scan()
-	get_viewport().set_input_as_handled()
 
 
 func _place_mark(source_plane: int, cell: Vector2i) -> SonarMark:

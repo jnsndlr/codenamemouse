@@ -1586,6 +1586,63 @@ and the price of keeping it open is this file.
 > stated as a result rather than as a worry. In a match that bug reads as one player's inputs
 > driving another player's mouse: a gameplay bug that isn't one.
 
+#### In progress — intent became a value (landed)
+
+Step 2 is done. [`input_frame.gd`](scripts/net/input_frame.gd) is one tick of what a player meant:
+`move`, `aim_point`, `look`, and two twelve-bit masks for held and pressed. **Six gameplay files
+read `Input` before this and one does now** — `input_capture.gd`, which is the only place in the
+game that asks a keyboard anything on a gameplay path. `camera_rig.gd`, the menus and the
+screenshot key still do and always will; they are presentation and permanently local.
+
+The four ability scripts stopped being input handlers, which was the half the survey missed.
+`_unhandled_input` fires on *this* machine's event stream and a server has none for a peer three
+hundred miles away, so there was no version of those four that could have worked over a wire.
+
+- **Two fields are resolved rather than raw**, and that is the design decision inside the type.
+  `aim_point` is a world position, not a cursor; `look` is a direction, not a stick deflection.
+  Both depend on the camera, the camera is permanently local, and **a frame carrying screen
+  coordinates is a frame the server cannot interpret**.
+- **Captured lazily, at most once per physics tick.** Six nodes read the intent and they are spread
+  across the scene tree with their own `_physics_process`. Capturing inside `_control` would hand
+  last tick's frame to whichever of them Godot happens to tick first — a one-frame lag that is
+  invisible in single-player, changes with scene layout, and would have been blamed on the network
+  later. Keyed on the frame counter, nobody has to be ordered.
+- **The abilities read on the physics tick, never on an idle one.** The pressed bits are latched
+  for the whole tick, and idle frames outnumber physics frames on a fast display — so the same
+  keypress would fire a cave-in twice at 120Hz and once at 60Hz.
+- **`Player.drive()` marks the tick as spoken for**, which is what stops a lazily-capturing player
+  overwriting a handed-in frame the instant anything asks. Not a test seam: it is the shape a
+  replay needs, and the shape a host needs the day it drives a seat whose player has dropped.
+
+> **Naming the enum `Button` silently retyped every call site.** `Button` is a Godot built-in — the
+> UI node — so `func is_pressed(button: Button)` typed the parameter as *that class* rather than as
+> the enum, and eight call sites failed with "argument 1 should be Button but is
+> `InputFrame.Button`", which reads like a compiler bug and is not one. It is `Action` now. The
+> trap generalises: `Key`, `MouseButton`, `JoyButton` and `Error` are all taken too, and an enum
+> named after any of them fails this way rather than by saying the name is in use.
+
+> **`tools/input_audit.gd` asserts the two claims nothing else can see:** that every field survives
+> `to_bytes`/`from_bytes` — the other suites build frames in-process, so a serializer that dropped
+> `look` would pass all nineteen match invariants and then disable pad aiming for every remote
+> player on the first packet — and that a driven frame actually drives.
+
+> **Its first version could not fail, which is the third time this project has caught that and the
+> first time it was caused by another assertion.** The driving check passed with the whole
+> mechanism deleted, because the "an untouched keyboard produces nothing" line immediately above it
+> called `input()` and *captured the tick* — so the driven frame was returned by the cache
+> regardless. The fix is one `await physics_frame` between them, and the lesson is new: it was not
+> a weak assertion or a subject arranged so the rule could not bite. **It was a good assertion
+> whose side effect disarmed the next one.** Verified by breaking `drive` and watching two lines
+> fail.
+
+> **`Input.action_press` cannot be used to drive a test**, which is worth writing down because it
+> is the obvious approach. Its pressed-frame bookkeeping does not line up with `await
+> physics_frame`, so `is_action_just_pressed` is already false by the time the next physics frame
+> runs — measured, not assumed. `match_audit` therefore hands mice frames directly, which also
+> replaced its ten `set("_aim_point", ...)` pokes: aim travels in the frame now, and a frame driven
+> earlier in the same tick is still what `input()` returns, so setting the private field alone read
+> back as whatever the previous check had aimed at.
+
 #### Sequencing — five checkpoints, each playable
 
 Ordered so that something is testable at every stage and the risky part is not last.
@@ -1775,13 +1832,22 @@ opposite of this project's usual order and correct for a wrapper with no callers
 transport that opened its socket, accepted connections, reported CONNECTED, and silently never
 polled — in the most natural three-line call sequence there is.
 
-**Step 2 is the input frame, and the survey above was re-measured before starting it.** It said two
-gameplay files read input; it is six, four of them in an event-driven shape the survey did not
-anticipate. It said "the player" was singular in eleven mostly-presentational places; it is 31
-references across 11 files and only three are UI. Neither correction changes the plan's *shape* —
-`Mouse._control` is still the driver seam and `MatchDirector` is still the sim — but both make step
-2 larger than written, and the ability scripts want doing in the same pass as turning actions into
-requests rather than counted as a separate cheap one. Mac only — the web build is a rendering decision, not an export target, and stays at M9.
+**Step 2 is done: intent is a value.** The survey was re-measured first and was wrong twice — two
+input files became six, four of them event handlers; "the player" in eleven mostly-presentational
+places became 31 references across 11 files of which only three are UI. Neither changes the plan's
+*shape*: `Mouse._control` is still the driver seam and `MatchDirector` is still the sim.
+
+`InputFrame` now carries a tick of intent, `InputCapture` is the only gameplay code that reads a
+keyboard, and `Mouse.drive()` is the door a packet will come through. Single-player runs the
+identical path. Five suites pass — 15 tunnel scenarios, 19 match groups, 37 cheese invariants, 22
+wire checks, 18 intent checks — and a 30-second soak still builds 73 cells across 2 mouths with
+nothing wedged.
+
+**Next: steps 3 and 4 — seats, then state at 30Hz.** A seat is a team, an index, and an occupant
+that is either a peer id or a bot; `MatchDirector.SEATS` already carries the role and class, and
+`crew_size` becomes seats-minus-humans. Then mice as transform plus a state byte, with clients
+interpolating. That is checkpoint 1 — two windows, one seat each, no bots — which is where the work
+so far either holds or does not. Mac only — the web build is a rendering decision, not an export target, and stays at M9.
 
 **Then M7 — real multiplayer.** *Does it survive contact with a second human?* The
 survey above is the important part: `Mouse._control` is already the driver seam, `MatchDirector`

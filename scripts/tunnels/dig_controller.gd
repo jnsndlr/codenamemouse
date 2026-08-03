@@ -66,27 +66,35 @@ func _physics_process(delta: float) -> void:
 	var standing := _network.world_to_cell(_player.global_position)
 	var side := _team()
 
-	if Input.is_action_just_pressed("shaft_down"):
+	# THE MOUSE'S INTENT, NOT THE KEYBOARD'S (M7). This used to ask `Input` directly, which is
+	# fine while the only intent in the process is the one at this keyboard and impossible the
+	# moment a second player's has to arrive from a socket. `_player.input()` is the same frame
+	# whoever built it -- a capture here, or a packet on a server.
+	var frame: InputFrame = _player.input()
+
+	if frame.is_pressed(InputFrame.Action.SHAFT_DOWN):
 		_network.dig_shaft_down(_plane, standing, side)
-	if Input.is_action_just_pressed("shaft_up"):
+	if frame.is_pressed(InputFrame.Action.SHAFT_UP):
 		_network.dig_shaft_up(_plane, standing, side)
-	if Input.is_action_just_pressed("burrow"):
+	if frame.is_pressed(InputFrame.Action.BURROW):
 		_take_shaft(standing)
 		return
 
-	_update_dig(delta)
+	_update_dig(frame, delta)
 
 
 ## Aim, hold, open. The target is re-chosen every frame from where the cursor is, and moving
 ## off a tile abandons it -- progress is a property of the tile you are pointing at, not of how
 ## long the button has been down.
-func _update_dig(delta: float) -> void:
+func _update_dig(frame: InputFrame, delta: float) -> void:
 	var wanted := _aimed_cell()
 	if wanted != _target:
 		_target = wanted
 		_progress = 0.0
 
-	var held := Input.is_action_pressed("dig") and not _pointer_over_ui()
+	# The cursor-over-HUD guard lives in the capture now: a click on a slider never becomes a DIG
+	# in the first place, rather than being filtered out here and again in `player.gd`.
+	var held := frame.is_held(InputFrame.Action.DIG)
 
 	# ROCK GETS ITS OWN CURSOR (GDD section 3). A seam is refused by the network, so without this
 	# the cursor simply vanishes over it -- which is what "out of reach" and "not adjacent" and
@@ -95,7 +103,7 @@ func _update_dig(delta: float) -> void:
 	if _target == Vector2i.MAX:
 		var rock := _blocked_cell()
 		if rock != Vector2i.MAX:
-			if held and Input.is_action_just_pressed("dig"):
+			if frame.is_pressed(InputFrame.Action.DIG):
 				_network.dig(_plane, rock, _team())
 				_learn_vein(rock)
 			_cursor.show_blocked(_network, _plane, rock)
@@ -181,20 +189,6 @@ func _dig_rate() -> float:
 	if _player != null and _player.has_method("get_dig_speed"):
 		return maxf(0.01, _player.call("get_dig_speed"))
 	return 1.0
-
-
-## Whether the cursor is over a piece of UI rather than over the world.
-##
-## Digging reads the mouse button by POLLING rather than from an input event, which is right
-## for a hold-to-act control but means it never sees the UI consume a click. Without this you
-## dig a tile every time you drag a slider on the look panel -- tuning the picture by editing
-## the level. Asking the viewport who is hovered covers any future UI for free, and the HUD
-## labels don't count because Label ignores the mouse by default.
-func _pointer_over_ui() -> bool:
-	var viewport := get_viewport()
-	return viewport != null and viewport.gui_get_hovered_control() != null
-
-
 ## The cell under the cursor, if it is one this player could legally open.
 ##
 ## Must touch the tunnel you already have. Without that you could stand in one corridor and

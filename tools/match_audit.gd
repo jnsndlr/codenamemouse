@@ -428,7 +428,7 @@ func _check_cave_in() -> void:
 	player.global_position = network.cell_to_world(1, Vector2i(-14, -17)) + Vector3.UP * 0.05
 	player.set_plane(1)
 	player.set_class(MouseClass.GENERALIST)
-	player.set("_aim_point", network.cell_to_world(1, Vector2i(-13, -17)))
+	_aim(player, network.cell_to_world(1, Vector2i(-13, -17)))
 
 	# NOT THE GENERALIST. Everyone digs; only the Engineer un-digs.
 	_fire(cave)
@@ -449,7 +449,7 @@ func _check_cave_in() -> void:
 
 	# And then has to wait. A second one on the same breath would make a corridor disappear
 	# faster than anyone could react to it.
-	player.set("_aim_point", network.cell_to_world(1, Vector2i(-15, -17)))
+	_aim(player, network.cell_to_world(1, Vector2i(-15, -17)))
 	_fire(cave)
 	_expect(
 		network.is_dug(1, Vector2i(-15, -17)),
@@ -458,24 +458,55 @@ func _check_cave_in() -> void:
 
 	# Never the cell you are standing in. Burying yourself is not a mechanic anyone asked for.
 	cave._cooldown_left = 0.0
-	player.set("_aim_point", network.cell_to_world(1, Vector2i(-14, -17)))
+	_aim(player, network.cell_to_world(1, Vector2i(-14, -17)))
 	_expect(cave.target() == Vector2i.MAX, "you cannot target the cell under your own feet")
 	_fire(cave)
 	_expect(network.is_dug(1, Vector2i(-14, -17)), "and it survives if you try")
 
 	# Nor anything out of arm's reach: this removes ground with people on it.
-	player.set("_aim_point", network.cell_to_world(1, Vector2i(-11, -17)))
+	_aim(player, network.cell_to_world(1, Vector2i(-11, -17)))
 	_expect(cave.target() == Vector2i.MAX, "a cell three along is out of reach")
 	_fire(cave)
 	_expect(network.is_dug(1, Vector2i(-11, -17)), "and stays up")
 
 
-## Press the ability key, the way the input map would deliver it.
+## Press the ability key, the way the game now delivers it (M7).
+##
+## This used to build an `InputEventAction` and call `_unhandled_input` directly. Abilities are no
+## longer input handlers -- they read the mouse's [InputFrame] on the physics tick, because an
+## event handler fires on *this* machine's event stream and a server has none for a remote peer.
+## So the audit hands the player a frame and ticks the ability, which is precisely what a received
+## packet will do.
+##
+## Driving through `Input.action_press` was tried and does not work: the pressed-frame bookkeeping
+## does not line up with `await physics_frame`, so `is_action_just_pressed` is already false by the
+## time the next physics frame runs.
 func _fire(cave: CaveIn) -> void:
-	var press := InputEventAction.new()
-	press.action = "ability"
-	press.pressed = true
-	cave._unhandled_input(press)
+	_intend(cave.get("_player"), InputFrame.Action.ABILITY)
+	cave._physics_process(0.0)
+
+
+## Point a mouse's aim at a world position.
+##
+## AS AN INTENT, not by poking `_aim_point`. Aim travels in the [InputFrame] now, and a frame
+## driven earlier in the same physics tick is still what `input()` returns -- so setting the field
+## alone reads back as whatever the previous `_fire` was aimed at, which is how two refusal checks
+## started passing for the wrong reason and then failing for the right one.
+func _aim(who: Node, at: Vector3) -> void:
+	var frame := InputFrame.new()
+	frame.aim_point = at
+	who.call("drive", frame)
+
+
+## Hand a mouse a one-tick intent: one action pressed and held, aimed wherever the check last put
+## the aim point. `Player.drive` marks the tick as spoken for, so the real keyboard does not
+## capture over the top of it before the ability reads it.
+func _intend(who: Node, action: int) -> void:
+	var frame := InputFrame.new()
+	frame.aim_point = who.get("_aim_point")
+	frame.set_pressed(action, true)
+	frame.set_held(action, true)
+	who.call("drive", frame)
 
 
 ## The Engineer's other capability: a boulder in the way, and the Brute who shifts it. (M4)
@@ -504,7 +535,7 @@ func _check_barricade() -> void:
 	player.global_position = network.cell_to_world(1, Vector2i(-14, -17)) + Vector3.UP * 0.05
 	player.set_plane(1)
 	player.set_class(MouseClass.GENERALIST)
-	player.set("_aim_point", network.cell_to_world(1, Vector2i(-13, -17)))
+	_aim(player, network.cell_to_world(1, Vector2i(-13, -17)))
 
 	# NOT THE GENERALIST. Everyone digs; only the Engineer shapes.
 	_place(wall)
@@ -528,7 +559,7 @@ func _check_barricade() -> void:
 
 	# And then a wait. Without it an Engineer could wall a corridor end to end in one breath, and
 	# three barricades in a row is a door rather than a delay.
-	player.set("_aim_point", network.cell_to_world(1, Vector2i(-15, -17)))
+	_aim(player, network.cell_to_world(1, Vector2i(-15, -17)))
 	_place(wall)
 	_expect(
 		not network.is_blocked(1, Vector2i(-15, -17)),
@@ -539,7 +570,7 @@ func _check_barricade() -> void:
 	# go on advertising a way out that nobody could take.
 	wall._cooldown_left = 0.0
 	player.global_position = network.cell_to_world(1, Vector2i(-16, -17)) + Vector3.UP * 0.05
-	player.set("_aim_point", network.cell_to_world(1, Vector2i(-17, -17)))
+	_aim(player, network.cell_to_world(1, Vector2i(-17, -17)))
 	_expect(wall.target() == Vector2i.MAX, "the cell under an entrance is not a barricade spot")
 
 	# Nor on top of somebody. A cave-in buries whoever is standing there; this is a rock being
@@ -548,7 +579,7 @@ func _check_barricade() -> void:
 	var bystander := _puppet(Team.RED, network.cell_to_world(1, Vector2i(-15, -17)) + Vector3.UP * 0.05)
 	bystander.set_plane(1)
 	await _advance(0.1)
-	player.set("_aim_point", network.cell_to_world(1, Vector2i(-15, -17)))
+	_aim(player, network.cell_to_world(1, Vector2i(-15, -17)))
 	_place(wall)
 	_expect(not network.is_blocked(1, Vector2i(-15, -17)), "a barricade cannot land on a mouse")
 	bystander.queue_free()
@@ -559,13 +590,13 @@ func _check_barricade() -> void:
 	for x in [-15, -12, -11]:
 		wall._cooldown_left = 0.0
 		player.global_position = network.cell_to_world(1, Vector2i(x + 1, -17)) + Vector3.UP * 0.05
-		player.set("_aim_point", network.cell_to_world(1, Vector2i(x, -17)))
+		_aim(player, network.cell_to_world(1, Vector2i(x, -17)))
 		_place(wall)
 		await _advance(0.1)
 	_expect(wall.in_hand() == 0, "three standing is the whole supply")
 	wall._cooldown_left = 0.0
 	player.global_position = network.cell_to_world(1, Vector2i(-17, -17)) + Vector3.UP * 0.05
-	player.set("_aim_point", network.cell_to_world(1, Vector2i(-16, -17)))
+	_aim(player, network.cell_to_world(1, Vector2i(-16, -17)))
 	_place(wall)
 	_expect(not network.is_blocked(1, Vector2i(-16, -17)), "and a fourth is refused")
 
@@ -704,10 +735,8 @@ func _check_sonar() -> void:
 	player.set_team(Team.RED)
 	player.set_class(MouseClass.SNEAK)
 	player.global_position = mark.global_position + Vector3.UP * 0.2
-	var press := InputEventAction.new()
-	press.action = "ability"
-	press.pressed = true
-	sonar._unhandled_input(press)
+	_intend(player, InputFrame.Action.ABILITY)
+	sonar._physics_process(0.0)
 	_expect(sonar.marks_for(Team.BLUE, MouseClass.GENERALIST, 0).is_empty(), "the rival Sneak erases it")
 
 
@@ -1019,10 +1048,8 @@ func _widest_boulder() -> Boulder:
 
 
 func _place(wall: Barricade) -> void:
-	var press := InputEventAction.new()
-	press.action = "barricade"
-	press.pressed = true
-	wall._unhandled_input(press)
+	_intend(wall.get("_player"), InputFrame.Action.BARRICADE)
+	wall._physics_process(0.0)
 
 
 func _standing_at(plane: int, cell: Vector2i) -> BarricadeRock:

@@ -145,6 +145,14 @@ var _facing: float = 0.0
 ## Where the driver wants to go this tick, in world space, already scaled for strafe and
 ## backpedal penalties. Subclasses set this in `_control`.
 var _wish: Vector3 = Vector3.ZERO
+## What this mouse is being *told* to do this tick (M7). Empty for a mouse nobody is driving,
+## which is the correct answer for a bot -- its decisions are a path, not a set of keypresses --
+## and for a seat whose player has dropped.
+##
+## THIS IS THE SEAM THE WHOLE MILESTONE TURNS ON. `Player` fills it from this machine's keyboard;
+## a server will fill it from a packet. Everything that reads it -- the swing, the dig, the four
+## abilities -- cannot tell the difference and must never be able to.
+var _input: InputFrame = InputFrame.new()
 ## Which tunnel layer this mouse is on. STATE, not a reading taken off its height -- see
 ## dig_controller.gd for the bug that taught us the difference.
 var _plane: int = 0
@@ -561,6 +569,20 @@ func _physics_process(delta: float) -> void:
 ## What the driver wants. Set `_wish` (world space, magnitude 0..1) and call `_face_toward`.
 func _control(_delta: float) -> void:
 	pass
+
+
+## This tick's intent. Never null — a mouse with no driver returns an empty frame rather than
+## making six callers each check.
+##
+## `Player` overrides this to build the frame from the keyboard on first ask; the base returns
+## whatever was last handed in, which is what a server-driven or bot-driven mouse wants.
+func input() -> InputFrame:
+	return _input
+
+
+## Hand this mouse somebody's intent. The door a received packet comes through.
+func drive(frame: InputFrame) -> void:
+	_input = frame if frame != null else InputFrame.new()
 
 
 func _tick_timers(delta: float) -> void:
