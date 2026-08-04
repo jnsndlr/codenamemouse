@@ -189,10 +189,16 @@ controller cuts nothing. Getting there cost three wrong versions, each a real pr
 control — aiming a metre ahead lands in the cell you're already standing in, moving the aim (or the
 mouse) resets progress, and holding E walks you down a shaft and straight back up it.
 
-**What's still missing is spawn replication, and it's one gap rather than three.** Barricade
-boulders, cant marks and dropped cheese wedges are all spawned at runtime, all real on the server,
-and all invisible to every client. A remote Engineer's barricades block the routing graph while
-nobody else can see the rock, which is the worst of the three and why it's next.
+**Cheese caches now cross the wire as a complete public world picture.** Twice a second the server
+sends every pile's position, wedge count and visual spread; clients reconcile that picture rather
+than trying to replay spawn/change/remove events. Authored caches therefore shrink and disappear,
+dropped wedges appear and merge correctly, a lost packet heals on the next picture, and a client
+entering late receives drops made before its arena existed. The two-process replication audit
+creates exactly that late drop and confirms it appears on the client.
+
+**What's still missing is runtime replication for barricades and cant marks.** A remote Engineer's
+barricades still block the server's routing graph while clients cannot see the rock, which remains
+the worse of the two and the reason it is next.
 
 ## M6.5 — a build you can hand to somebody (closed)
 

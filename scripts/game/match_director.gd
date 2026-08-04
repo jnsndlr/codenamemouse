@@ -169,6 +169,12 @@ var _seated: Dictionary = {}
 ## and this node's only remaining job is having spawned the mice.
 var _simulating: bool = true
 
+## Positions are sent as 32-bit floats. A cache created from a packet therefore need not compare
+## bit-for-bit with the same deterministically generated position on the client, even though it is
+## visibly the same place. Piles cannot be closer than the merge radius in ordinary play, so five
+## centimetres is generous for serialization error and far too small to confuse two real piles.
+const CACHE_RECONCILE_DISTANCE: float = 0.05
+
 
 func _ready() -> void:
 	add_to_group(DIRECTOR_GROUP)
@@ -308,6 +314,65 @@ func adopt_state(state: MatchState, crew: int) -> void:
 ## so the feed cannot tell the difference and there is one place that formats these.
 func adopt_event(text: String) -> void:
 	event.emit(text)
+
+
+## Replace the client's cheese world with the server's complete picture.
+##
+## MATCH BY PLACE, NOT NODE NAME. Authored caches have deterministic readable names, but runtime
+## drops do not, and names are scene-tree bookkeeping rather than game identity. Piles never move;
+## their position is their stable identity, with a small allowance for float serialization.
+func adopt_cheese_caches(state: CheeseState) -> void:
+	if _simulating or state == null:
+		return
+
+	var unmatched: Array[CheeseCache] = []
+	for node: Node in get_tree().get_nodes_in_group(CheeseCache.GROUP):
+		var cache := node as CheeseCache
+		if cache != null and not cache.is_queued_for_deletion():
+			unmatched.append(cache)
+
+	for reading: CheeseState.Cache in state.caches:
+		var at := Vector3(reading.position.x, 0.0, reading.position.y)
+		var cache := _cache_at(unmatched, at)
+		if cache == null:
+			cache = _make_cache(at, reading.wedges, reading.spread, "ReplicatedWedge")
+		else:
+			unmatched.erase(cache)
+			if cache.wedges != reading.wedges or not is_equal_approx(cache.spread, reading.spread):
+				cache.adopt(reading.wedges, reading.spread)
+
+	# Anything the client still has is absent from the authoritative picture. Remove it from the
+	# group immediately so the minimap and a second packet in this frame cannot find a phantom
+	# while `queue_free` waits for the end of the frame.
+	for stale: CheeseCache in unmatched:
+		stale.remove_from_group(CheeseCache.GROUP)
+		stale.queue_free()
+
+
+func _cache_at(caches: Array[CheeseCache], at: Vector3) -> CheeseCache:
+	var closest: CheeseCache = null
+	var distance := CACHE_RECONCILE_DISTANCE
+	for cache: CheeseCache in caches:
+		var gap := Vector2(cache.global_position.x - at.x, cache.global_position.z - at.z).length()
+		if gap <= distance:
+			closest = cache
+			distance = gap
+	return closest
+
+
+func _make_cache(at: Vector3, wedges: int, spread: float, cache_name: String) -> CheeseCache:
+	var pile := Node3D.new()
+	pile.set_script(CHEESE_CACHE)
+	pile.name = cache_name
+	pile.wedges = wedges
+	pile.spread = spread
+	var field := get_tree().get_first_node_in_group(&"cheese_field")
+	(field if field != null else self).add_child(pile)
+	pile.global_position = at
+	# `_ready` ran when the node was added, before its final global position was known. Rebuild once
+	# at the real position so the seeded wedge scatter is stable and matches a locally made pile.
+	pile.adopt(wedges, spread)
+	return pile as CheeseCache
 
 
 ## A client learning the seating for the first time: take our own chair, then fill the rest.
@@ -580,14 +645,7 @@ func _drop_cheese(at: Vector3, wedges: int) -> void:
 		nearby.add_wedges(wedges)
 		return
 
-	var pile := Node3D.new()
-	pile.set_script(CHEESE_CACHE)
-	pile.name = "DroppedWedge"
-	pile.wedges = wedges
-	pile.spread = 0.22
-	var field := get_tree().get_first_node_in_group(&"cheese_field")
-	(field if field != null else self).add_child(pile)
-	pile.global_position = here
+	_make_cache(here, wedges, 0.22, "DroppedWedge")
 
 
 ## Put cheese in a crew's pile. The only way the number ever goes up.

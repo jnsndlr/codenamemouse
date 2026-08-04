@@ -1996,12 +1996,16 @@ milliseconds away.
 > exactly like the thing the check exists for. The invariant is only asked where the two logs
 > overlap now. **A false alarm on an invariant is worse than a missing one**, for the second time.
 
-> **What is still missing is spawn replication, and it is now one gap rather than three.** A
-> barricade is a boulder spawned at runtime; a cant mark is a glyph spawned at runtime; a dropped
-> cheese wedge — outstanding since checkpoint 3 — is a wedge spawned at runtime. All three are
-> real on the server, all three are invisible to every client, and all three want the same message.
-> A remote Engineer's barricades block the routing graph and nobody else can see the rock, which is
-> the worst of the three and the reason this is the next piece.
+> **The cheese share of runtime replication is closed.** Every pile now travels as part of a small
+> complete world picture: position, wedge count and visual spread, twice a second. Reconciliation
+> makes spawning, merging, depletion and removal one idempotent operation, and means a lost packet
+> or a client entering late heals without replaying events. `cheese_audit.gd` checks creation,
+> update and removal; `replication_audit.gd` makes a drop before the client has an arena and proves
+> it appears after the client enters.
+>
+> **Barricades and cant marks remain.** A remote Engineer's barricades block the routing graph and
+> nobody else can see the rock, which is still the worse of the two and the next runtime object to
+> reproduce.
 
 #### Sequencing — five checkpoints, each playable
 
@@ -2015,10 +2019,9 @@ Ordered so that something is testable at every stage and the risky part is not l
    thinking. **Met** — ten mice, one simulation, and a client whose bots are pictures of bots.
    Except that they still do not Scurry, which the risk below says is now blocking and is right.
 3. **The objective loop over the wire** — banner, capture, scruff, respawn, cheese. All of it is
-   already in one node; this is mostly proving that. **Met, and it was mostly proving that**: the
-   scoreboard is one message, the HUD needed no changes at all, and the one thing still missing is
-   the cheese *caches* — the wedges lying in the yard are spawned at runtime when somebody drops
-   one, which is the spawn replication this protocol has so far been able to do without.
+   already in one node; this is mostly proving that. **Met, including the world caches**: the
+   scoreboard is one message, the HUD needed no changes at all, and the caches are a separate
+   complete public picture so authored and dropped piles converge after loss or a late join.
 4. **Tunnels and the visibility filter.** The riskiest checkpoint, and deliberately not last:
    add an assertion that a client's received tunnel set is a subset of its own crew's mask, and
    run it in the audits. **Met** — the assertion exists, it is in `replication_audit.gd`, it is
@@ -2026,8 +2029,7 @@ Ordered so that something is testable at every stage and the risky part is not l
    been verified by deleting the filter and watching it name the leaked cells. Digging *from* a
    client landed after it, as predicted, as a refactor of five singletons rather than anything to
    do with the wire — the suite now watches a headless client sink a shaft and open four cells.
-   What is left is spawn replication for the three things spawned at runtime: dropped wedges,
-   barricade boulders and cant marks.
+   What is left is runtime replication for barricade boulders and cant marks.
 5. **Over the internet, with a friend, for a full match.** The milestone's actual question.
 
 #### Risks

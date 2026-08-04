@@ -104,7 +104,7 @@ func _play_a_match() -> void:
 
 	var host_pid := OS.create_process(godot, [
 		"--headless", "--path", project, "--quit-after", LIFETIME_FRAMES,
-		"--", "--host", str(PORT), "--play", "--audit-log", host_log,
+		"--", "--host", str(PORT), "--play", "--audit-cheese", "--audit-log", host_log,
 	])
 	if host_pid <= 0:
 		_broken("could not launch a host process")
@@ -139,6 +139,7 @@ func _play_a_match() -> void:
 	_check_the_mouse(host_said, client_said)
 	_check_the_digging(host_said, client_said)
 	_check_the_scoreboard(host_said, client_said)
+	_check_the_cheese_world(host_said, client_said)
 	_check_the_earth(host_said, client_said)
 
 
@@ -342,6 +343,24 @@ func _check_the_scoreboard(host_said: String, client_said: String) -> void:
 	var apart: int = absi(mine[-1] - theirs_health[-1])
 	_check("both ends agree how hurt it is (%d vs %d)" % [mine[-1], theirs_health[-1]],
 		apart <= HEALTH_DRIFT)
+
+
+# ---------------------------------------------------------------- and cheese lying in the yard
+
+
+## A host creates this pile before the client enters its arena. It is absent from the client's
+## deterministic opening map and no event is waiting to be replayed, so the only way it can appear
+## is from a later complete cheese-world picture. That is spawn replication and late-join recovery
+## in one observable fact.
+func _check_the_cheese_world(host_said: String, client_said: String) -> void:
+	print("\n-- and the cheese lying in the yard")
+	var pictures := _totals(client_said, "(\\d+) cheese-world pictures")
+	_check("the client receives complete cheese pictures (%d)" % pictures, pictures > 0)
+	_check("the host made the late-join test pile",
+		host_said.contains("audit cheese placed before the client arena exists"))
+	var late_pile := "31.0,-31.0=3"
+	_check("a pile made before its arena appears on the client",
+		client_said.contains(late_pile))
 
 
 # --------------------------------------------------------------------- and no floor plan it didn't earn

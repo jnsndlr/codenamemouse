@@ -144,6 +144,13 @@ func add_wedges(amount: int) -> void:
 	wedges += amount
 
 
+## Take an authoritative cache reading off the wire. Kept on the cache so changing its count and
+## changing the mesh cannot become two operations a caller forgets to keep together.
+func adopt(amount: int, width: float) -> void:
+	spread = maxf(width, 0.0)
+	wedges = maxi(amount, 0)  # The setter rebuilds the visible pile.
+
+
 func _build() -> void:
 	if _wedges_node != null:
 		_wedges_node.queue_free()

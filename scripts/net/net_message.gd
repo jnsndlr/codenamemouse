@@ -1,7 +1,7 @@
 class_name NetMessage
 extends RefCounted
-## What can travel, and how each thing is packed. Three kinds, and the reliability of each is a
-## design decision rather than a default.
+## What can travel, and how each thing is packed. The reliability of every kind is a design
+## decision rather than a default.
 ##
 ## ONE PACKET STREAM, ONE LEADING BYTE. `NetTransport` delivers bytes and says who sent them and
 ## nothing else, so the first byte says what this is. That is deliberately cruder than Godot's
@@ -17,6 +17,7 @@ extends RefCounted
 ## | `MATCH` | server → clients | **no** | the whole scoreboard, resent four times a second |
 ## | `EVENT` | server → clients | yes | a line of commentary that never comes round again |
 ## | `TUNNELS` | server → **one** client | yes | the earth, filtered per crew — see below |
+## | `CHEESE` | server → clients | **no** | the complete public set of caches, resent twice a second |
 ##
 ## **`SNAPSHOT` is unreliable on purpose and that is the important one.** A snapshot resent after a
 ## drop arrives describing a world that has already moved on, and it holds the queue up behind it
@@ -70,6 +71,7 @@ enum Kind {
 	MATCH,
 	EVENT,
 	TUNNELS,
+	CHEESE,
 }
 
 

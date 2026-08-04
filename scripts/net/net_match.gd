@@ -11,7 +11,7 @@ extends Node
 ## demonstrably hurts and because the alternative is two implementations of every rule that have to
 ## agree. A client sends what its keyboard wanted and draws the world it is sent.
 ##
-## NO SPAWN MESSAGES, WHICH IS WHAT STEP 3 BOUGHT. The population of the world is the seat roster:
+## NO MOUSE SPAWN MESSAGES, WHICH IS WHAT STEP 3 BOUGHT. The population is the seat roster:
 ## ten chairs, always occupied. A client builds its mice from the seating message and every
 ## snapshot afterwards only has to say where they are. Spawn/despawn replication is one of the
 ## fiddliest parts of any netcode and this design does not have it.
@@ -20,9 +20,10 @@ extends Node
 ## goes out four times a second because none of it is. Splitting them is what lets the scoreboard be
 ## sent whole every time — see `net_message.gd` — instead of as a set of changes that can be missed.
 ##
-## WHAT IS NOT HERE YET, and neither is a stub pretending otherwise: the tunnel network, the cheese
-## caches sitting in the yard, and every ability that digs. Those are step 5 and the filtered half
-## of it. **Snapshots go to everyone unfiltered, so nothing secret may ever be added to one.**
+## Runtime cheese is a separate, slow, complete world picture. It cannot ride in the mouse
+## snapshot because a lost spawn or removal must heal, and it cannot ride in the tunnel payload
+## because cheese is deliberately public to both crews. Barricades and sonar marks remain the two
+## runtime objects this protocol does not yet reproduce on clients.
 
 ## Snapshots per second. The plan's number. Deliberately below the physics rate: the client
 ## interpolates, and sending every tick would double the bandwidth to buy smoothness the
@@ -43,6 +44,10 @@ const MATCH_HZ: float = 4.0
 ## when something has actually changed, so the ordinary tick is no packet at all.
 const EARTH_HZ: float = 2.0
 
+## Cheese piles do not move. Twice a second makes a pickup or drop visible within half a second,
+## while the complete-state shape means a lost packet needs no acknowledgement or special repair.
+const CHEESE_HZ: float = 2.0
+
 @export var director_path: NodePath
 
 var _net: NetSession
@@ -51,7 +56,9 @@ var _transport: NetTransport
 var _since_snapshot: float = 0.0
 var _since_state: float = 0.0
 var _since_earth: float = 0.0
+var _since_cheese: float = 0.0
 var _tick: int = 0
+var _cheese_tick: int = 0
 var _tunnels: TunnelNetwork
 ## The per-crew filter, on the server. See `tunnel_view.gd` -- it is the one place that decides
 ## what a client is allowed to know about the earth, and it is one place on purpose.
@@ -77,6 +84,9 @@ var _earth_forgotten: int = 0
 ## Scoreboards taken off the wire. Separate from the pose counters because they arrive on their own
 ## clock, and "the mice move but the score never changes" is a specific failure worth naming.
 var _states: int = 0
+## Complete cheese-world pictures received. Separate because a correct scoreboard alongside a
+## stale yard is exactly the disagreement this payload exists to prevent.
+var _cheese_states: int = 0
 ## Poses that arrived mid-swing. Counted because a swing is the only *action* in this protocol --
 ## everything else a snapshot carries is a position -- and "melee crosses the wire" is half of what
 ## checkpoint 1 claims. Poses rather than swings, deliberately: one swipe spans a dozen packets and
@@ -119,6 +129,11 @@ const REPORT_SECONDS: float = 5.0
 ## screen.
 const HELLO_SECONDS: float = 1.0
 
+## A cache safely outside every bot route, used only when the two-process audit asks for it. The
+## host creates it before the client even enters an arena, so seeing it at the other end proves a
+## complete state heals a missed runtime spawn rather than merely forwarding a well-timed event.
+const AUDIT_CHEESE_AT: Vector3 = Vector3(31.0, 0.0, -31.0)
+
 
 func _ready() -> void:
 	_net = get_node_or_null(^"/root/Net") as NetSession
@@ -144,6 +159,9 @@ func _ready() -> void:
 	_autopilot = OS.get_cmdline_user_args().has("--autopilot")
 	if _net.is_server():
 		_director.event.connect(_on_event)
+		if OS.get_cmdline_user_args().has("--audit-cheese"):
+			_director.call("_drop_cheese", AUDIT_CHEESE_AT, 3)
+			_net.log_line("audit cheese placed before the client arena exists")
 	else:
 		_become_client()
 	_on_seating_changed()
@@ -253,6 +271,10 @@ func _physics_process(delta: float) -> void:
 		if _since_earth >= 1.0 / EARTH_HZ:
 			_since_earth = 0.0
 			_send_earth()
+		_since_cheese += delta
+		if _since_cheese >= 1.0 / CHEESE_HZ:
+			_since_cheese = 0.0
+			_broadcast_cheese()
 		return
 	if _client_seats == null:
 		_say_hello(delta)
@@ -282,10 +304,12 @@ func _report(delta: float) -> void:
 			_received, _applied, _swings, _where(mine),
 		])
 		_net.log_line("and %d scoreboards" % _states)
+		_net.log_line("and %d cheese-world pictures" % _cheese_states)
 	# THE SAME LINE FROM BOTH ENDS, built by the same code out of the same accessors. Two formats
 	# would make the comparison a comparison of two formatters; one means the audit is reading the
 	# same question answered twice, which is the only version of this that proves anything.
 	_net.log_line(_scoreboard())
+	_report_cheese()
 	_report_earth()
 	_earth_sent = 0
 	_earth_taken = 0
@@ -295,6 +319,7 @@ func _report(delta: float) -> void:
 	_inputs = 0
 	_swings = 0
 	_states = 0
+	_cheese_states = 0
 
 
 ## The earth, as cells, from whichever end this is.
@@ -319,6 +344,21 @@ func _report_earth() -> void:
 	])
 	for side: int in [Team.BLUE, Team.RED]:
 		_net.log_line("earth %s may know %s" % [Team.name_of(side), _cells_of(side)])
+
+
+## The public cheese world, from either end. Positions and counts rather than only a total: two
+## worlds can both contain seven piles while disagreeing about every place and amount in them.
+func _report_cheese() -> void:
+	var parts := PackedStringArray()
+	for node: Node in get_tree().get_nodes_in_group(CheeseCache.GROUP):
+		var cache := node as CheeseCache
+		if cache == null or cache.is_empty() or cache.is_queued_for_deletion():
+			continue
+		parts.append("%.1f,%.1f=%d" % [
+			cache.global_position.x, cache.global_position.z, cache.wedges,
+		])
+	parts.sort()
+	_net.log_line("cheese world: hold [%s]" % " ".join(parts))
 
 
 ## `plane.x,y` for every cell, space separated. `side` of -1 is every dug cell there is.
@@ -472,6 +512,29 @@ func _broadcast_state() -> void:
 		flag.position = banner.global_position
 		flag.carrier = _key_of(banner.carrier, crew)
 
+	_transport.broadcast(state.to_bytes(), false)
+
+
+## Every public pile in the yard, as a complete picture. Sorted so identical worlds make identical
+## packets and logs even though scene-tree group order is not an identity contract.
+func _broadcast_cheese() -> void:
+	var caches: Array[CheeseCache] = []
+	for node: Node in get_tree().get_nodes_in_group(CheeseCache.GROUP):
+		var cache := node as CheeseCache
+		if cache != null and not cache.is_empty() and not cache.is_queued_for_deletion():
+			caches.append(cache)
+	caches.sort_custom(func(a: CheeseCache, b: CheeseCache) -> bool:
+		return a.global_position.x < b.global_position.x or (
+			is_equal_approx(a.global_position.x, b.global_position.x)
+			and a.global_position.z < b.global_position.z
+		)
+	)
+
+	var state := CheeseState.new()
+	_cheese_tick += 1
+	state.revision = _cheese_tick
+	for cache: CheeseCache in caches:
+		state.add(cache.global_position, cache.wedges, cache.spread)
 	_transport.broadcast(state.to_bytes(), false)
 
 
@@ -671,6 +734,15 @@ func _apply_state(bytes: PackedByteArray) -> void:
 	_states += 1
 
 
+func _apply_cheese(bytes: PackedByteArray) -> void:
+	var state := CheeseState.from_bytes(bytes)
+	if state == null or state.revision <= _cheese_tick:
+		return
+	_cheese_tick = state.revision
+	_director.adopt_cheese_caches(state)
+	_cheese_states += 1
+
+
 func _puppet_for(key: int) -> Mouse:
 	if _client_seats == null:
 		return null
@@ -768,3 +840,6 @@ func _on_packet(from: int, bytes: PackedByteArray) -> void:
 		NetMessage.Kind.TUNNELS:
 			if not _net.is_server() and from == NetTransport.SERVER_ID and _tunnels != null:
 				_apply_earth(bytes)
+		NetMessage.Kind.CHEESE:
+			if not _net.is_server() and from == NetTransport.SERVER_ID:
+				_apply_cheese(bytes)

@@ -32,6 +32,7 @@ func _initialize() -> void:
 	_check_ceiling()
 	await _check_scurry_costs_and_gates()
 	await _check_scurry_multiplies()
+	await _check_cache_replication()
 
 	print("\n" + "=".repeat(78))
 	if _failures.is_empty():
@@ -305,3 +306,53 @@ func _check_scurry_multiplies() -> void:
 			boosted, plain * _red.scurry_multiplier
 		])
 	_red.release_carry()
+
+
+## The cheese world crosses as a complete, replaceable picture. Exercise the wire format and the
+## reconciliation together: one authored-looking pile changes count, one disappears, and one new
+## dropped pile appears. Those are the three transitions that used to exist only on the server.
+func _check_cache_replication() -> void:
+	print("\n-- the cheese lying in the world can be reproduced")
+	var first := CheeseState.new()
+	first.revision = 41
+	first.add(Vector3(31.0, 0.0, -31.0), 2, 0.22)
+	first.add(Vector3(-31.0, 0.0, 31.0), 4, 0.34)
+	var bytes := first.to_bytes()
+	var decoded := CheeseState.from_bytes(bytes)
+	_ok("a complete cache picture survives bytes", decoded != null
+		and decoded.revision == 41 and decoded.caches.size() == 2)
+	_ok("the packet carries place, count and look", decoded != null
+		and decoded.caches[0].position.is_equal_approx(Vector2(31.0, -31.0))
+		and decoded.caches[0].wedges == 2
+		and is_equal_approx(decoded.caches[0].spread, 0.22))
+	_ok("a truncated cache picture is refused",
+		CheeseState.from_bytes(bytes.slice(0, bytes.size() - 1)) == null)
+	var padded := bytes.duplicate()
+	padded.append(0)
+	_ok("a padded cache picture is refused", CheeseState.from_bytes(padded) == null)
+
+	_director.set_simulating(false)
+	_director.adopt_cheese_caches(decoded)
+	await process_frame
+	var first_a := CheeseCache.nearest(self, Vector3(31.0, 0.0, -31.0))
+	var first_b := CheeseCache.nearest(self, Vector3(-31.0, 0.0, 31.0))
+	_ok("the client picture replaces its local cache set",
+		get_nodes_in_group(CheeseCache.GROUP).size() == 2)
+	_ok("a server pile is created at its authoritative position and count", first_a != null
+		and first_a.global_position.distance_to(Vector3(31.0, 0.0, -31.0)) < 0.01
+		and first_a.wedges == 2)
+
+	var second := CheeseState.new()
+	second.revision = 42
+	second.add(Vector3(31.0, 0.0, -31.0), 7, 0.22)
+	second.add(Vector3(29.0, 0.0, 29.0), 1, 0.22)
+	_director.adopt_cheese_caches(second)
+	await process_frame
+	var changed := CheeseCache.nearest(self, Vector3(31.0, 0.0, -31.0))
+	var spawned := CheeseCache.nearest(self, Vector3(29.0, 0.0, 29.0))
+	_ok("a count update changes the existing pile rather than duplicating it",
+		changed == first_a and changed.wedges == 7)
+	_ok("a new dropped pile appears", spawned != null and spawned.wedges == 1)
+	_ok("a pile absent from the next picture is removed",
+		not is_instance_valid(first_b)
+		and get_nodes_in_group(CheeseCache.GROUP).size() == 2)

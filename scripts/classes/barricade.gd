@@ -164,9 +164,9 @@ func _physics_process(_delta: float) -> void:
 		return
 
 	# A PUPPET RUNS ITS COOLDOWN AND PUTS NOTHING DOWN (M7). A boulder is a world object spawned at
-	# runtime, and this protocol has no spawn message -- the same gap the cheese wedges lying in
-	# the yard are still in. So a remote Engineer's barricades are real on the server, block the
-	# routing graph on the server, and are invisible to every client until that gap is closed.
+	# runtime, and this protocol does not replicate barricades yet. So a remote Engineer's
+	# barricades are real on the server, block the routing graph there, and are invisible to every
+	# client until that gap is closed.
 	# Placing one locally instead would be worse than invisible: it would be a wall that only one
 	# machine believes in.
 	if not acts():
