@@ -1793,6 +1793,75 @@ feature.
 > design rather than a coincidence. This is the fourth time this project has caught a test that
 > could not fail, and the first time the cause was **timing that happened to be favourable**.
 
+#### In progress — a match, not just mice (landed)
+
+Step 4's second half, and checkpoint 3. [`match_state.gd`](scripts/net/match_state.gd) carries
+everything on the HUD that is not a mouse — score, both cheese pools, the clock, the verdict, ten
+respawn countdowns and both banners — and health rides in the pose, where it belongs, because it
+moves every tick and belongs to a mouse.
+
+**No HUD file was touched, and that is the milestone's survey being right twice.** `score_bug`,
+`match_hud` and `roster` ask `MatchDirector` for these numbers; a client whose director holds the
+right numbers therefore has a correct HUD, and the wire writes them through one deliberate door
+(`adopt_state`) rather than through a setter per field.
+
+- **The plan said "on change" and it is periodic instead**, which is a reversal worth defending.
+  The instinct was bandwidth, and the numbers do not support it: the entire scoreboard is smaller
+  than one snapshot, and snapshots go out thirty times a second. What periodic buys is that it
+  **cannot get stuck wrong** — an on-change scheme is wrong for the rest of the match if a change
+  is ever missed, if a listener attaches late, or if some new rule mutates a field without
+  announcing it, and a full state four times a second heals all three by existing. Idempotent beats
+  incremental until bandwidth objects, and here it has nothing to say.
+- **The `CARRYING` flag was deleted, because it was the same fact twice.** `MatchState` says which
+  banner is on whose head — strictly more information, since it also says *which* — and two
+  encodings of one fact are two things that can disagree. The client sets up the real carry
+  relationship instead, so `is_carrying()` is true on a puppet for the ordinary reason and the
+  grass camouflage and the roster keep working without hearing that a network exists.
+- **A puppet banner still runs its clock and never acts on it.** Both crews are making a decision
+  off the twenty-second return countdown, so it has to keep counting on every machine; what a
+  client must not do is *send the banner home* when it reaches zero. It would agree with the server
+  for exactly as long as the two clocks did.
+- **A puppet does not heal.** Health arrives with every pose, and a local regeneration on top of it
+  is a second opinion: the bar creeps up between snapshots and jerks back down on each one, which
+  reads as packet loss and is a client quietly disagreeing about how hurt somebody is.
+- **The feed travels as text, on a condition.** Every event in the game today is public — a score,
+  a steal, a scruff, a spend, a whistle — so text costs a dozen lines a match and keeps the wording
+  in one place. The moment an event says something only one crew should know, it becomes a leak
+  with a broadcast in front of it and has to move behind step 5's filter.
+- **Bots Scurry now, which the risk list called blocking and was right to.** They spend on the two
+  moments the ranking already cares about: getting away with their banner, and catching whoever has
+  yours. There is deliberately no "hurt, break off" rule — nothing in the ranking retreats, so a
+  burst bought to escape would be spent closing the last metre on the thing that is killing you.
+  It is asked of the director exactly as a key press is, so there is no AI-flavoured Scurry with
+  its own opinion about the ledger.
+
+> **A parse error in the entire multiplayer match failed no suite.** `net_match.gd` was left with a
+> call whose signature had changed under it; all five in-process suites passed. They build arenas,
+> the arena's `NetMatch` node failed to load, Godot printed one line and carried on without it, and
+> every invariant about tunnels and cheese and mice was still perfectly true. **Nothing in `tools/`
+> had ever needed to assert that the code exists**, because until M7 every file was on a path some
+> suite walked. `net_audit` now loads every scene and every script and asserts none of them is
+> null — the dullest check in the project, and the only one that would have caught this.
+
+> **Scenes before scripts, and the order is load-bearing.** `bot.gd` reaches `MatchDirector`, which
+> preloads `bot.tscn`, which points back at `bot.gd`: an ordinary cycle the engine resolves quietly
+> when the scene is what is being loaded and complains about when the script is. Walking the scenes
+> first leaves them all in the cache. The alternative was a suite that printed a scary error while
+> passing, which is its own kind of broken.
+
+> **The audit's new checks were verified by deleting the broadcast**, and five of the seven failed
+> — including the one that matters most: a client that is sent no scoreboard **sits at the full
+> eight minutes forever** while the host counts down. The clock is the only field in that packet
+> guaranteed to move, which is what makes an agreement check on it bite when an agreement check on
+> the score does not.
+
+> **Two of the seven passed while broken, and they are labelled in the file rather than deleted.**
+> Nobody scores in twenty-five seconds of autopilot and nothing hits it, so score and health read
+> the same on both ends whether or not a packet arrived. They stay because they catch a *different*
+> failure — a field read at the wrong offset, which shows up as a score of 71 beside a perfectly
+> sensible clock — and the comment says which failure each one is for. A check that cannot fail is
+> only a lie when nobody has written down what it is doing there.
+
 #### Sequencing — five checkpoints, each playable
 
 Ordered so that something is testable at every stage and the risky part is not last.
@@ -1805,7 +1874,10 @@ Ordered so that something is testable at every stage and the risky part is not l
    thinking. **Met** — ten mice, one simulation, and a client whose bots are pictures of bots.
    Except that they still do not Scurry, which the risk below says is now blocking and is right.
 3. **The objective loop over the wire** — banner, capture, scruff, respawn, cheese. All of it is
-   already in one node; this is mostly proving that.
+   already in one node; this is mostly proving that. **Met, and it was mostly proving that**: the
+   scoreboard is one message, the HUD needed no changes at all, and the one thing still missing is
+   the cheese *caches* — the wedges lying in the yard are spawned at runtime when somebody drops
+   one, which is the spawn replication this protocol has so far been able to do without.
 4. **Tunnels and the visibility filter.** The riskiest checkpoint, and deliberately not last:
    add an assertion that a client's received tunnel set is a subset of its own crew's mask, and
    run it in the audits.
@@ -2012,14 +2084,23 @@ arena and compares what each says about where the same mouse is; it found that a
 connects *before* it enters a match was never told its seat, and that the first version of itself
 had been passing on favourable timing. Seven suites pass.
 
-**Next: the other half of step 4 — the things that change rather than move.** Score, cheese,
-health, the banner and the clock, sent on change instead of thirty times a second. That is
-checkpoint 3, the objective loop over the wire, and it is mostly proving that `MatchDirector`
-really is the one place every rule resolves.
+**Step 4 is done, and checkpoint 3 with it.** The scoreboard is one message carrying the whole
+state four times a second rather than a stream of changes — the plan said "on change" and the
+numbers said otherwise, and a full state cannot get stuck wrong. Health rides in the pose. **No HUD
+file was touched**, because the HUD already asked `MatchDirector` and the wire writes what the
+rules would have. Bots Scurry, which the risk list called blocking. `net_audit` now also asserts
+that every scene and script in the game loads, after a parse error in the entire multiplayer match
+failed no suite at all. Seven suites pass, nineteen checks in the replication audit alone.
 
-> **What a client still cannot see:** its own health bar, the score, the cheese pool, whether
-> anybody is carrying a banner, and every tunnel in the arena. Two people can meet in a yard and
-> hit each other; they cannot yet play a match. Mac only — the web build is a rendering decision, not an export target, and stays at M9.
+**Next: step 5 — the visibility filter, and the tunnels behind it.** The riskiest checkpoint and
+deliberately not last. The rule is that the per-crew filter lives where the packet is built and
+nowhere else, so there is exactly one place to audit for *did we just send them the enemy's floor
+plan* — and the audit is an invariant, not a playtest, because a leak looks like nothing at all
+from inside a match.
+
+> **What a client still cannot see:** every tunnel in the arena, the cheese lying in the yard, and
+> anything an ability does. Two people can play the banner game against each other with a full HUD;
+> they cannot dig. Mac only — the web build is a rendering decision, not an export target, and stays at M9.
 
 **Then M7 — real multiplayer.** *Does it survive contact with a second human?* The
 survey above is the important part: `Mouse._control` is already the driver seam, `MatchDirector`

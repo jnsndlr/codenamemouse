@@ -106,8 +106,30 @@ client connecting *before* it enters a match was never told its seat — snapsho
 healthy rate, **zero applied** — and that the first version of the audit had been passing on
 favourable timing rather than on design.
 
-**What a client still can't see:** the score, the cheese pool, its own health, who's carrying a
-banner, and every tunnel in the arena. That's the rest of step 4 and all of step 5.
+**And there's a match around it.** [`MatchState`](scripts/net/match_state.gd) carries everything on
+the HUD that isn't a mouse — score, both cheese pools, the clock, the verdict, ten respawn
+countdowns and both banners — four times a second, **whole rather than as changes**. The plan said
+"on change"; the numbers said otherwise (the entire scoreboard is smaller than one snapshot) and a
+full state can't get stuck wrong the way a missed change can. Health rides in the pose, where it
+belongs.
+
+**No HUD file was touched.** `score_bug`, `match_hud` and `roster` already asked `MatchDirector`
+for these numbers, so a client whose director holds the right numbers has a correct HUD — the wire
+writes through one door and no UI file learns that a network exists.
+
+**Bots Scurry now**, which the plan called blocking for this milestone: a crew whose AI seats never
+spend cheese is playing a different economy from the crew across the yard. They spend on the two
+moments the ranking already cares about — getting away with their banner, and catching whoever has
+yours — by asking the director exactly as a key press does.
+
+**A parse error in the entire multiplayer match failed no suite.** `net_match.gd` was left with a
+call whose signature had changed under it and all five in-process suites passed: they build arenas,
+the `NetMatch` node failed to load, Godot printed one line and carried on, and every invariant about
+tunnels and cheese and mice was still true. `net_audit` now loads every scene and every script and
+asserts none is null — the dullest check here, and the only one that catches that.
+
+**What a client still can't see:** every tunnel in the arena, the cheese lying in the yard, and
+anything an ability does. That's step 5, the visibility filter, and it's the risky one.
 
 ## M6.5 — a build you can hand to somebody (closed)
 
@@ -463,7 +485,10 @@ On a **Bot**: `role` (raider or defender), `defend_radius` (9 — measured from 
 defender can't be lured off its post), `engage_radius` (4.5 — who it squares up to, never where
 it goes; conflating those two produced bots that brawled in the midfield and never scored),
 `tunnel_bias` (1.0 — how much a tunnel has to beat the surface by before a bot bothers; only
-applies when *both* ends are above ground, since following someone down is not a preference).
+applies when *both* ends are above ground, since following someone down is not a preference),
+`scurry_pursuit` (7 — how close a chaser has to be before a carrying bot spends a life getting
+away; a burst is for a chase, not for a commute) and `scurry_chase` (18 — how far off a thief can
+be and still be worth catching).
 
 On **CameraRig**: `pitch_degrees` (48), `zoom_idle` / `zoom_run` / `zoom_sprint`, `follow_speed`.
 
@@ -628,7 +653,8 @@ scripts/ui/     score bug, minimap, roster, feed, title and pause menus, the con
                 sheet, and the two skins they share
 scripts/tunnels/the network, the routing graph, shaft transit, digging
 scripts/        player, camera, maps, input setup
-scripts/net/     transport, input frames, seats, snapshots, and the session that owns them
+scripts/net/     transport, input frames, seats, snapshots, match state, and the session
+                that owns them
 tools/          headless audits, a behaviour soak, and visual probes needing a real renderer
 ```
 

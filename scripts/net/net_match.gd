@@ -16,14 +16,24 @@ extends Node
 ## snapshot afterwards only has to say where they are. Spawn/despawn replication is one of the
 ## fiddliest parts of any netcode and this design does not have it.
 ##
-## WHAT IS NOT HERE YET, and neither is a stub pretending otherwise: score, cheese, health, the
-## banner, and the tunnel network. Those are the "on change" half of step 4 and the filtered half
-## of step 5. **Snapshots go to everyone unfiltered, so nothing secret may ever be added to one.**
+## TWO CLOCKS, NOT ONE. Poses go out thirty times a second because they are smooth; the scoreboard
+## goes out four times a second because none of it is. Splitting them is what lets the scoreboard be
+## sent whole every time — see `net_message.gd` — instead of as a set of changes that can be missed.
+##
+## WHAT IS NOT HERE YET, and neither is a stub pretending otherwise: the tunnel network, the cheese
+## caches sitting in the yard, and every ability that digs. Those are step 5 and the filtered half
+## of it. **Snapshots go to everyone unfiltered, so nothing secret may ever be added to one.**
 
 ## Snapshots per second. The plan's number. Deliberately below the physics rate: the client
 ## interpolates, and sending every tick would double the bandwidth to buy smoothness the
 ## interpolation already provides.
 const SNAPSHOT_HZ: float = 30.0
+
+## Scoreboards per second. A tenth of the pose rate, because none of what it carries is smooth --
+## the clock is read in whole seconds, the score changes a handful of times a match, and a quarter
+## second of a stale cheese counter is not a thing anybody can perceive. See `net_message.gd` for
+## why this is periodic rather than sent on change.
+const MATCH_HZ: float = 4.0
 
 @export var director_path: NodePath
 
@@ -31,6 +41,7 @@ var _net: NetSession
 var _director: MatchDirector
 var _transport: NetTransport
 var _since_snapshot: float = 0.0
+var _since_state: float = 0.0
 var _tick: int = 0
 ## Mice this client built for seats it does not simulate, keyed the way `Snapshot` keys them.
 var _puppets: Dictionary = {}
@@ -43,6 +54,9 @@ var _hello_left: float = 0.0
 ## four snapshots arrived in the last five seconds.
 var _received: int = 0
 var _applied: int = 0
+## Scoreboards taken off the wire. Separate from the pose counters because they arrive on their own
+## clock, and "the mice move but the score never changes" is a specific failure worth naming.
+var _states: int = 0
 ## Poses that arrived mid-swing. Counted because a swing is the only *action* in this protocol --
 ## everything else a snapshot carries is a position -- and "melee crosses the wire" is half of what
 ## checkpoint 1 claims. Poses rather than swings, deliberately: one swipe spans a dozen packets and
@@ -89,7 +103,9 @@ func _ready() -> void:
 	_net.seating_changed.connect(_on_seating_changed)
 
 	_autopilot = OS.get_cmdline_user_args().has("--autopilot")
-	if not _net.is_server():
+	if _net.is_server():
+		_director.event.connect(_on_event)
+	else:
 		_become_client()
 	_on_seating_changed()
 
@@ -122,6 +138,10 @@ func _physics_process(delta: float) -> void:
 			_since_snapshot = 0.0
 			_broadcast_snapshot()
 			_received += 1
+		_since_state += delta
+		if _since_state >= 1.0 / MATCH_HZ:
+			_since_state = 0.0
+			_broadcast_state()
 		return
 	if _client_seats == null:
 		_say_hello(delta)
@@ -150,10 +170,28 @@ func _report(delta: float) -> void:
 		_net.log_line("received %d snapshots, %d poses, a swing in %d of them, mine at %s" % [
 			_received, _applied, _swings, _where(mine),
 		])
+		_net.log_line("and %d scoreboards" % _states)
+	# THE SAME LINE FROM BOTH ENDS, built by the same code out of the same accessors. Two formats
+	# would make the comparison a comparison of two formatters; one means the audit is reading the
+	# same question answered twice, which is the only version of this that proves anything.
+	_net.log_line(_scoreboard())
 	_received = 0
 	_applied = 0
 	_inputs = 0
 	_swings = 0
+	_states = 0
+
+
+## What this machine believes the match is. Asked of the director, which on a host is the sim and
+## on a client is whatever the last scoreboard said -- so the two lines are comparable exactly when
+## replication is working, and not otherwise.
+func _scoreboard() -> String:
+	return "score %d-%d, cheese %d/%d, clock %d, banners %d/%d" % [
+		_director.score_of(Team.BLUE), _director.score_of(Team.RED),
+		_director.cheese_of(Team.BLUE), _director.cheese_of(Team.RED),
+		ceili(_director.time_left()),
+		_director.banner_of(Team.BLUE).state, _director.banner_of(Team.RED).state,
+	]
 
 
 ## Where the server thinks each remote human's mouse is -- one line per person in the match.
@@ -174,8 +212,18 @@ func _report_remotes() -> void:
 
 
 ## Rounded to a decimetre. The log is read by another process and a full float is noise in it.
+##
+## Health rides along because it is the one part of a pose that is neither a position nor a bit,
+## and a byte that is quietly always 255 -- because nothing ever wrote it, or because the ratio was
+## scaled by the wrong maximum -- is invisible in a game where most mice are unhurt most of the
+## time. Said out loud on both ends, it can be compared.
 func _where(mouse: Mouse) -> String:
-	return "?" if mouse == null else str(mouse.global_position.snapped(Vector3.ONE * 0.1))
+	if mouse == null:
+		return "?"
+	return "%s health %d" % [
+		str(mouse.global_position.snapped(Vector3.ONE * 0.1)),
+		int(mouse.get_health_ratio() * 255.0),
+	]
 
 
 func _seated_count() -> int:
@@ -205,19 +253,98 @@ func _broadcast_snapshot() -> void:
 			var flags := 0
 			if mouse.is_scruffed():
 				flags |= Snapshot.Flag.SCRUFFED
-			if mouse.is_carrying():
-				flags |= Snapshot.Flag.CARRYING
 			if mouse.is_swinging():
 				flags |= Snapshot.Flag.SWINGING
 			shot.add(
 				Snapshot.key_for(side, seat, roster.crew_size()),
 				mouse.global_position,
 				mouse.get_facing_angle(),
-				flags
+				flags,
+				int(mouse.get_health_ratio() * 255.0)
 			)
 
 	# Unreliable, and see `net_message.gd` for why that is a decision rather than a default.
 	_transport.broadcast(shot.to_bytes(), false)
+
+
+## The scoreboard: everything on the HUD that is not a mouse.
+##
+## Read entirely through the director's ordinary public accessors -- the same ones the HUD calls --
+## rather than through anything added for the network. Writing it on a client goes through one
+## deliberate door (`adopt_state`); reading it here needs no door at all, and that asymmetry is the
+## right way round.
+func _broadcast_state() -> void:
+	var roster := _net.seats()
+	var crew := roster.crew_size()
+	var state := MatchState.new()
+	state.score = [_director.score_of(Team.BLUE), _director.score_of(Team.RED)]
+	state.cheese = [_director.cheese_of(Team.BLUE), _director.cheese_of(Team.RED)]
+	state.clock = _director.time_left()
+	state.playing = _director.is_playing()
+	state.winner = _director.get_winner()
+
+	for side: int in [Team.BLUE, Team.RED]:
+		for seat: int in range(crew):
+			var mouse := _director.seat_mouse(side, seat)
+			if mouse == null:
+				continue
+			# Rounded UP, so a mouse with a tenth of a second left still reads as down rather than
+			# as standing. The HUD ceils this number anyway; what matters is that zero means up.
+			var left := ceili(_director.respawn_left(mouse))
+			state.respawns[Snapshot.key_for(side, seat, crew)] = mini(left, 255)
+
+	for side: int in [Team.BLUE, Team.RED]:
+		var banner := _director.banner_of(side)
+		var flag: MatchState.Flag = state.flags[side]
+		flag.state = banner.state
+		flag.position = banner.global_position
+		flag.carrier = _key_of(banner.carrier, crew)
+
+	_transport.broadcast(state.to_bytes(), false)
+
+
+## A line of the feed, forwarded as the server wrote it.
+##
+## TEXT ON THE WIRE, WHICH IS A DECISION AND HAS A CONDITION ON IT. The alternative is an event id
+## plus arguments, formatted at each end -- more compact, and it would put the wording in two
+## places that have to agree. Text wins here because the feed is a dozen lines a match and every
+## one of them is already public: every current event is a score, a steal, a scruff, a spend or a
+## whistle, and both crews are meant to see all of them.
+##
+## **The condition is that this stays true.** The moment an event says something only one crew
+## should know -- "OTTO breaks into a vein", anything about a tunnel -- this becomes a leak with a
+## broadcast in front of it, and it has to move behind step 5's filter with the rest of M5's
+## pillar. That is the whole reason this note is here rather than in a commit message.
+func _on_event(text: String) -> void:
+	if not _net.is_established():
+		return
+	var out := NetMessage.head(NetMessage.Kind.EVENT)
+	out.put_utf8_string(text)
+	_transport.broadcast(out.data_array, true)
+
+
+func _apply_event(bytes: PackedByteArray) -> void:
+	var into := NetMessage.body(bytes, 5)
+	if into == null:
+		return
+	var text := into.get_utf8_string()
+	if not text.is_empty():
+		_director.adopt_event(text)
+
+
+## Which chair a mouse is sitting in, as a snapshot key, or `NOBODY`.
+##
+## Searched rather than stored, because ten comparisons four times a second is nothing and the
+## alternative is a second table that has to be kept in step with the first one. The failure mode
+## of a stale reverse index here would be a banner drawn on the wrong mouse.
+func _key_of(mouse: Mouse, crew: int) -> int:
+	if mouse == null:
+		return MatchState.NOBODY
+	for side: int in [Team.BLUE, Team.RED]:
+		for seat: int in range(crew):
+			if _director.seat_mouse(side, seat) == mouse:
+				return Snapshot.key_for(side, seat, crew)
+	return MatchState.NOBODY
 
 
 ## Somebody's keyboard, from somewhere else. Applied to the mouse in THEIR seat and nowhere else.
@@ -287,10 +414,22 @@ func _apply_snapshot(bytes: PackedByteArray) -> void:
 	for pose: Snapshot.Pose in shot.poses:
 		var mouse := _puppet_for(pose.key)
 		if mouse != null:
-			mouse.apply_pose(pose.position, pose.facing, pose.flags)
+			mouse.apply_pose(pose.position, pose.facing, pose.flags, pose.health)
 			_applied += 1
 			if (pose.flags & Snapshot.Flag.SWINGING) != 0:
 				_swings += 1
+
+
+## The scoreboard, applied. Dropped whole if the client does not yet know the seating, since every
+## index in it is a seat key and a key without a table is a number.
+func _apply_state(bytes: PackedByteArray) -> void:
+	if _client_seats == null:
+		return
+	var state := MatchState.from_bytes(bytes)
+	if state == null:
+		return
+	_director.adopt_state(state, _client_seats.crew_size())
+	_states += 1
 
 
 func _puppet_for(key: int) -> Mouse:
@@ -381,3 +520,9 @@ func _on_packet(from: int, bytes: PackedByteArray) -> void:
 		NetMessage.Kind.HELLO:
 			if _net.is_server():
 				_send_seating(from)
+		NetMessage.Kind.MATCH:
+			if not _net.is_server() and from == NetTransport.SERVER_ID:
+				_apply_state(bytes)
+		NetMessage.Kind.EVENT:
+			if not _net.is_server() and from == NetTransport.SERVER_ID:
+				_apply_event(bytes)

@@ -41,6 +41,9 @@ var _home: Vector3 = Vector3.ZERO
 var _left_alone: float = 0.0
 var _age: float = 0.0
 var _cloth: MeshInstance3D
+## A banner this machine does not decide anything about (M7). Same three states, same bob and
+## spin, same countdown on the HUD -- what stops is the countdown *expiring into an action*.
+var _puppet: bool = false
 
 
 ## Built rather than authored, like the rest of the grey box. One less scene to keep in sync
@@ -104,6 +107,37 @@ func send_home() -> void:
 	returned.emit(self)
 
 
+## Whether this machine decides where this banner goes, or is told.
+##
+## A PUPPET STILL RUNS ITS CLOCK, and that is the distinction worth keeping straight. The HUD shows
+## a dropped banner's countdown and both crews are making a decision from it, so it has to keep
+## counting on every machine; what a puppet must not do is *act* when it reaches zero. The server
+## will send it home and say so, and a client that sent it home too would be right by luck for as
+## long as the two numbers happened to agree.
+func set_puppet(on: bool) -> void:
+	_puppet = on
+
+
+## What the server says: the state, who is holding it, and where it is.
+##
+## Applied through the same three methods the rules use rather than by poking the fields, so a
+## carried banner really does get attached to its carrier and `is_carrying()` is true on a puppet
+## for the ordinary reason. That is what lets the grass camouflage and the roster keep working on a
+## client without either of them hearing about the network.
+func adopt(what: int, by: Mouse, at: Vector3) -> void:
+	match what:
+		CARRIED:
+			if by != null and carrier != by:
+				take(by)
+		DROPPED:
+			if state != DROPPED:
+				drop()
+			global_position = Vector3(at.x, 0.0, at.z)
+		AT_NEST:
+			if state != AT_NEST:
+				send_home()
+
+
 func _process(delta: float) -> void:
 	_age += delta
 
@@ -111,6 +145,8 @@ func _process(delta: float) -> void:
 		if carrier == null or not is_instance_valid(carrier):
 			# The carrier went away without telling anyone -- freed, or scruffed by something
 			# that forgot to say so. Dropping is the safe failure: the banner stays playable.
+			# Safe on a puppet too: a banner riding a mouse that no longer exists is worse than a
+			# banner in the wrong place, and the next state message corrects it either way.
 			drop()
 		else:
 			global_position = carrier.global_position + Vector3.UP * CARRY_LIFT
@@ -119,7 +155,7 @@ func _process(delta: float) -> void:
 
 	if state == DROPPED:
 		_left_alone += delta
-		if _left_alone >= return_seconds:
+		if _left_alone >= return_seconds and not _puppet:
 			send_home()
 
 	# At rest, and only at rest. A carried banner spinning on someone's back reads as a pickup

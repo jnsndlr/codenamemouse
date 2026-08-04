@@ -55,6 +55,18 @@ const WANDERED: float = 5.0
 ## four bots that leave at the whistle, so it is allowed to be shoved a little.
 const STOOD_STILL: float = 3.0
 
+## Seconds the two ends' clocks may differ by. Both are sampled on their own five-second timer, so
+## this is phase, not drift -- and the failure it exists to catch is out by minutes.
+const CLOCK_DRIFT: int = 8
+## Wedges the two ends' stores may differ by, for the same reason: a Scurry spent between the two
+## reports is a real difference between two true readings.
+const CHEESE_DRIFT: int = 4
+## `MatchDirector.starting_cheese`. Duplicated rather than read, because the point of the check is
+## that the number MOVED, and a constant that follows the game's own would move with it.
+const STARTING_CHEESE: int = 20
+## Health is 0..255 and regenerates, so two readings five seconds apart are legitimately unequal.
+const HEALTH_DRIFT: int = 40
+
 var _failures: int = 0
 
 
@@ -115,6 +127,7 @@ func _play_a_match() -> void:
 
 	_check_the_pipe(host_said, client_said)
 	_check_the_mouse(host_said, client_said)
+	_check_the_scoreboard(host_said, client_said)
 
 
 # ------------------------------------------------------------------------------ bytes are moving
@@ -197,6 +210,75 @@ func _check_the_mouse(host_said: String, client_said: String) -> void:
 		disagreement < AGREEMENT)
 
 
+# --------------------------------------------------------------- and a match, not just a puppet show
+
+
+## The HUD's numbers, asked of both processes and compared.
+##
+## THE CLOCK IS WHAT MAKES THIS BITE. Score and stores can sit unchanged for a long stretch of a
+## quiet match, so two ends agreeing about them proves little on its own -- but a client that never
+## received a scoreboard sits at the full eight minutes forever while the host counts down, and no
+## amount of the rest of the netcode working can hide that. It is the one field guaranteed to move.
+func _check_the_scoreboard(host_said: String, client_said: String) -> void:
+	print("\n-- and a match around it")
+
+	var host_board := _boards(host_said)
+	var client_board := _boards(client_said)
+	if host_board.size() < 3 or client_board.size() < 3:
+		_broken("not enough scoreboards to judge (%d host, %d client)"
+			% [host_board.size(), client_board.size()])
+		return
+
+	var seen := _totals(client_said, "and (\\d+) scoreboards")
+	_check("the client is sent the scoreboard (%d)" % seen, seen > 0)
+
+	var first: Dictionary = client_board[0]
+	var last: Dictionary = client_board[-1]
+	var theirs: Dictionary = host_board[-1]
+	_check("its clock is running (%ds to %ds)" % [first["clock"], last["clock"]],
+		last["clock"] < first["clock"])
+
+	# Sampled up to five seconds apart on unsynchronised timers, so this is a tolerance rather than
+	# an equality -- and a client with no scoreboard at all is out by hundreds, not by seconds.
+	var drift: int = absi(last["clock"] - theirs["clock"])
+	_check("and it is the host's clock (%ds apart)" % drift, drift <= CLOCK_DRIFT)
+
+	# THE STORES ARE LIVES (GDD section 10) and until this milestone the AI never spent one. Both
+	# halves matter: that the number moved at all is bots actually Scurrying, and that both ends
+	# moved together is the pool being replicated rather than each end keeping its own.
+	var blue: int = last["cheese_blue"]
+	var red: int = last["cheese_red"]
+	_check("the crews have been spending (%d/%d)" % [blue, red], blue < STARTING_CHEESE
+		or red < STARTING_CHEESE)
+	var gap: int = absi(blue - theirs["cheese_blue"]) + absi(red - theirs["cheese_red"])
+	_check("and both ends see the same stores (%d/%d vs %d/%d)"
+		% [blue, red, theirs["cheese_blue"], theirs["cheese_red"]], gap <= CHEESE_DRIFT)
+
+	# THIS ONE CANNOT FAIL BY DELIVERY AND IS NOT MEANT TO. Nobody scores in twenty-five seconds of
+	# autopilot, so both ends read 0-0 whether or not a single scoreboard arrived -- verified, by
+	# deleting the broadcast and watching this check pass while five others failed. What it is here
+	# for is the OTHER failure: a field read at the wrong offset. Score, stores and clock share one
+	# packet, so a mis-sized header shows up as a score of 71 next to a perfectly sensible clock,
+	# and only a field-by-field comparison sees it.
+	_check("the score agrees (%d-%d vs %d-%d)" % [
+		last["blue"], last["red"], theirs["blue"], theirs["red"],
+	], last["blue"] == theirs["blue"] and last["red"] == theirs["red"])
+
+	# WEAKER THAN IT LOOKS, FOR THE SAME REASON AND SAID OUT LOUD FOR THE SAME REASON: nothing hits
+	# the autopilot in a quiet run, so both ends usually read full health and this cannot fail by
+	# delivery either. It catches the byte being scaled by the wrong maximum or read at the wrong
+	# offset, which are the mistakes it is actually possible to make here. **Whoever adds combat to
+	# this suite should promote it to a real check**, because at that point it can be one.
+	var mine := _healths(client_said, "received.*health (\\d+)")
+	var theirs_health := _healths(host_said, "drives RED seat \\d+ at [^\\n]*health (\\d+)")
+	if mine.is_empty() or theirs_health.is_empty():
+		_broken("neither end reported a health")
+		return
+	var apart: int = absi(mine[-1] - theirs_health[-1])
+	_check("both ends agree how hurt it is (%d vs %d)" % [mine[-1], theirs_health[-1]],
+		apart <= HEALTH_DRIFT)
+
+
 # --------------------------------------------------------------------------------------- plumbing
 
 
@@ -246,6 +328,34 @@ func _centre(samples: Array[Vector3]) -> Vector3:
 	for at: Vector3 in samples:
 		sum += at
 	return sum / maxf(1.0, float(samples.size()))
+
+
+## Every scoreboard line a process wrote, in order. Both ends log it from the same code, so this
+## parses one format and not two -- the comparison is a question answered twice, not two formatters
+## agreeing.
+func _boards(text: String) -> Array[Dictionary]:
+	var re := RegEx.create_from_string(
+		"score (\\d+)-(\\d+), cheese (\\d+)/(\\d+), clock (\\d+), banners (\\d+)/(\\d+)")
+	var out: Array[Dictionary] = []
+	for hit: RegExMatch in re.search_all(text):
+		out.append({
+			"blue": hit.get_string(1).to_int(),
+			"red": hit.get_string(2).to_int(),
+			"cheese_blue": hit.get_string(3).to_int(),
+			"cheese_red": hit.get_string(4).to_int(),
+			"clock": hit.get_string(5).to_int(),
+			"banner_blue": hit.get_string(6).to_int(),
+			"banner_red": hit.get_string(7).to_int(),
+		})
+	return out
+
+
+func _healths(text: String, pattern: String) -> Array[int]:
+	var re := RegEx.create_from_string(pattern)
+	var out: Array[int] = []
+	for hit: RegExMatch in re.search_all(text):
+		out.append(hit.get_string(1).to_int())
+	return out
 
 
 ## The launched processes write to their own file rather than to stdout: `create_process` hands

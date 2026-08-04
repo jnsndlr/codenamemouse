@@ -14,6 +14,8 @@ extends RefCounted
 ## | `SNAPSHOT` | server → clients | **no** | stale the moment the next one is built |
 ## | `SEATING` | server → clients | yes | rare, and a client that misses it never knows who it is |
 ## | `HELLO` | client → server | yes | "I am in a match now" — see below |
+## | `MATCH` | server → clients | **no** | the whole scoreboard, resent four times a second |
+## | `EVENT` | server → clients | yes | a line of commentary that never comes round again |
 ##
 ## **`SNAPSHOT` is unreliable on purpose and that is the important one.** A snapshot resent after a
 ## drop arrives describing a world that has already moved on, and it holds the queue up behind it
@@ -38,11 +40,25 @@ extends RefCounted
 ## it until it is answered — the state it needs is small, and asking for it is cheaper than any
 ## scheme for delivering it at exactly the right moment.
 
+## **`MATCH` is the whole scoreboard every time, and the plan said "on change".** That instinct was
+## about bandwidth, and the numbers do not support it: the entire state — two scores, two cheese
+## pools, the clock, the winner, ten respawn timers and both banners — is smaller than one snapshot,
+## and a snapshot goes out thirty times a second. What the periodic version buys is that it cannot
+## get stuck wrong. An on-change scheme is wrong for the rest of the match if a change is ever
+## missed, if a listener is attached late, or if some new rule mutates a field without announcing
+## it; a full state four times a second heals from all three by existing. **Idempotent beats
+## incremental until bandwidth says otherwise**, and here bandwidth has nothing to say.
+##
+## That is also why it is unreliable. Losing one costs a quarter-second of a stale scoreboard and
+## the next one fixes it, which is exactly the `SNAPSHOT` argument applied to a different payload.
+
 enum Kind {
 	INPUT,
 	SNAPSHOT,
 	SEATING,
 	HELLO,
+	MATCH,
+	EVENT,
 }
 
 

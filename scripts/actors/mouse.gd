@@ -641,7 +641,11 @@ func is_puppet() -> bool:
 ## The previous target becomes the starting point rather than the mouse's CURRENT position, so a
 ## packet that arrives late does not restart the blend from wherever the interpolation had got to
 ## -- that turns every hiccup into a visible stutter backwards.
-func apply_pose(at: Vector3, facing: float, flags: int) -> void:
+func apply_pose(at: Vector3, facing: float, flags: int, health: int) -> void:
+	# A RATIO OFF THE WIRE, SCALED BY OUR OWN MAXIMUM. The class table is not replicated, so the
+	# packet cannot say "62 points" and be understood -- but every end knows what this mouse's
+	# maximum is, and a fraction of it means the same thing everywhere.
+	_health = (health / 255.0) * max_health
 	_pose_from = _pose_to if _pose_blend < 1.0 else global_position
 	_facing_from = _facing_to if _pose_blend < 1.0 else _facing
 	_pose_to = at
@@ -719,6 +723,12 @@ func _tick_timers(delta: float) -> void:
 			_cooldown_left = attack_cooldown
 
 	if _scruffed:
+		return
+	# A PUPPET DOES NOT HEAL, because healing is a rule. Its health arrives with every pose, and a
+	# local regeneration on top of that is a second opinion the server never asked for: the bar
+	# would creep upward between snapshots and jerk back down on each one, which reads as packet
+	# loss and is a client quietly disagreeing about how hurt somebody is.
+	if _puppet:
 		return
 	_since_damage += delta
 	if _since_damage >= regen_delay and _health < max_health:

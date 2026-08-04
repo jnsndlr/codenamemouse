@@ -69,6 +69,18 @@ enum { RAIDER, DEFENDER }
 ## so a bot doesn't clip you with the very edge of a cone it never aimed.
 @export var strike_arc: float = 40.0
 
+@export_group("Scurry")
+## How close a pursuer has to be before a carrying bot spends a life on getting away.
+##
+## THE POINT OF THE GATE IS THAT A BURST IS FOR A CHASE, NOT FOR A COMMUTE. A bot that scurried the
+## instant it picked the banner up would arrive home fractionally sooner having spent one of its
+## crew's lives on an empty lawn, and the counter would drop for no reason anybody watching could
+## see -- which is the opposite of what GDD section 2 wants the spend to feel like.
+@export var scurry_pursuit: float = 7.0
+## How far away a thief can be and still be worth burning a life to catch. Beyond this the burst
+## runs out long before the gap does, and the cheese bought two seconds of jogging.
+@export var scurry_chase: float = 18.0
+
 @export_group("Navigation")
 ## How near a waypoint counts as reached.
 @export var waypoint_slack: float = 0.35
@@ -149,6 +161,7 @@ func _control(delta: float) -> void:
 		_since_think = 0.0
 		_reclass()
 		_decide()
+		_consider_scurry()
 		# Taken here, once, straight off the ranking -- before anything downstream is allowed to
 		# point the feet somewhere else for a frame.
 		_errand = _goal
@@ -277,6 +290,47 @@ func _decide() -> void:
 	_intent = "going for their banner"
 	_goal = theirs.global_position
 	_raiding = true
+
+
+## Spend a life, or don't. The economy half of the ranking above.
+##
+## THIS WAS MISSING UNTIL M7 AND IT WAS A REAL GAP, not a polish item. A crew whose AI seats never
+## spend cheese is a crew playing a different economy from the crew across the yard: it ends every
+## match with full stores and never once trades a life for a metre. That was tolerable at M6, where
+## the question was whether a *human* agonises over a spend. It stops being tolerable the moment
+## the other side is a second human, because then the two crews are being scored against each other
+## and only one of them is playing the game.
+##
+## ASKED OF THE DIRECTOR, exactly as a player's key press is. The pool is the crew's, the ledger is
+## the director's, and a bot that could boost itself would be a bot that could spend its team's
+## lives without the thing holding the ledger hearing about it. Same call, same refusals, same
+## line in the feed -- there is no AI-flavoured Scurry.
+##
+## TWO MOMENTS, AND THEY ARE THE TWO THE RANKING ALREADY CARES ABOUT: getting away with their
+## banner, and catching whoever has yours. Both are "a distance that has to close or open right
+## now", which is what the burst is for.
+##
+## THERE IS DELIBERATELY NO "HURT, BREAK OFF" RULE, which is the obvious third one and would be
+## wrong here. Nothing in the ranking retreats -- a hurt bot's destination is still the mouse
+## hitting it -- so a burst bought to escape would be spent closing the last metre on the thing
+## that is killing it. That rule belongs with a flee behaviour or not at all.
+func _consider_scurry() -> void:
+	if not scurry_ready():
+		return
+
+	if is_carrying():
+		if _nearest_enemy_within(global_position, scurry_pursuit) != null:
+			_director.try_scurry(self)
+		return
+
+	var thief := _director.carrier_of(team)
+	if thief == null or thief.is_scruffed():
+		return
+	var gap := global_position.distance_to(thief.global_position)
+	# Already on top of them: a burst adds nothing a swing would not, and the cooldown means it is
+	# not there for the next thief.
+	if gap > strike_radius * 2.0 and gap < scurry_chase:
+		_director.try_scurry(self)
 
 
 ## Where a defender stands when nothing is happening: a step out of the nest, toward the middle

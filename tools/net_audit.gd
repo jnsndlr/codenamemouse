@@ -18,6 +18,10 @@ extends SceneTree
 ## Runs headless; ENet needs no renderer.
 ##   godot --headless --path . --script res://tools/net_audit.gd
 
+## Where the game lives. Walked, not listed, so a new file is covered by existing.
+const SCRIPTS: String = "res://scripts"
+const SCENES: String = "res://scenes"
+
 ## High and unloved. Retried upward if something else has it, because a busy port must fail as
 ## "try again" rather than as "the transport is broken" -- the two look identical in a CI log.
 const FIRST_PORT: int = 47921
@@ -31,6 +35,8 @@ var _inbox: Dictionary = {}
 
 
 func _initialize() -> void:
+	_check_everything_parses()
+
 	var server := ENetTransport.new()
 	var alice := ENetTransport.new()
 	var bob := ENetTransport.new()
@@ -192,6 +198,52 @@ func _await_until(done: Callable, frames: int) -> bool:
 			return true
 		await process_frame
 	return done.call()
+
+
+## Every scene and every script in the game loads.
+##
+## THE DULLEST CHECK IN THE PROJECT AND IT EARNED ITS PLACE. `net_match.gd` was left with a call
+## whose signature had changed under it — a parse error, on the file that is the entire multiplayer
+## match — and **all five in-process suites passed**. They build arenas; the arena's `NetMatch` node
+## failed to load; Godot printed one line and carried on without it; and every invariant about
+## tunnels and cheese and mice was still perfectly true. Nothing in `tools/` had ever needed to
+## assert that the code exists, because until M7 every file was on a path some suite walked. This
+## is the check for the ones that are not.
+##
+## It lives here rather than in a suite of its own because this is the file that already answers
+## "does the plumbing work at all", and because an unloadable file is a broken wire before it is
+## anything else. `load()` returning null is the whole mechanism.
+##
+## SCENES FIRST, AND THAT ORDER IS LOAD-BEARING. `bot.gd` reaches `MatchDirector`, which preloads
+## `bot.tscn`, which points back at `bot.gd` — an ordinary cycle that the engine resolves fine when
+## the scene is the thing being loaded, and complains about when the script is. Walking the scenes
+## first leaves every one of them in the cache, so the scripts' preloads hit it instead of
+## re-entering a parse. The alternative was a suite that printed a scary error while passing.
+func _check_everything_parses() -> void:
+	print("-- the code is code")
+	var broken: Array[String] = []
+	var scenes := _walk(SCENES, ".tscn", broken)
+	var scripts := _walk(SCRIPTS, ".gd", broken)
+	for path: String in broken:
+		print("   FAIL  %s does not load" % path)
+	_check("all %d scenes and %d scripts load" % [scenes, scripts], broken.is_empty())
+	_failures += broken.size()
+
+
+## Returns how many files were loaded, appending the ones that would not.
+func _walk(folder: String, suffix: String, broken: Array[String]) -> int:
+	var count := 0
+	for name: String in DirAccess.get_directories_at(folder):
+		count += _walk("%s/%s" % [folder, name], suffix, broken)
+	for name: String in DirAccess.get_files_at(folder):
+		# Also on disk: `.gd.uid`, and in an exported build `.tscn.remap`. Only the source counts.
+		if not name.ends_with(suffix):
+			continue
+		var path := "%s/%s" % [folder, name]
+		count += 1
+		if load(path) == null:
+			broken.append(path)
+	return count
 
 
 func _check(what: String, ok: bool) -> void:

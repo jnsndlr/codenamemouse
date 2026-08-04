@@ -253,6 +253,61 @@ func seat_mouse(side: int, seat: int) -> Mouse:
 func set_simulating(on: bool) -> void:
 	_simulating = on
 	set_physics_process(on)
+	# The banners go with it. They own a return clock that expires into an action, and an action is
+	# a rule -- a client counting the same twenty seconds down and sending the banner home itself
+	# would agree with the server right up until the two clocks did not.
+	for banner: Banner in _banners:
+		if banner != null:
+			banner.set_puppet(not on)
+
+
+## The scoreboard, from the wire. The one door through which a client's match state is written.
+##
+## EVERY FIELD HERE IS ONE THE RULES ABOVE WOULD HAVE SET, which is why this is a single method
+## rather than a setter each: it is not an API, it is the seam where "this machine worked it out"
+## becomes "this machine was told". Nothing else may call it and nothing on a host ever does.
+##
+## The HUD is not involved and does not need to be. `score_bug`, `match_hud` and `roster` ask this
+## node for these numbers already, so writing them here is the whole of making a client's HUD
+## correct -- no UI file learns that a network exists.
+func adopt_state(state: MatchState, crew: int) -> void:
+	_score[Team.BLUE] = state.score[Team.BLUE]
+	_score[Team.RED] = state.score[Team.RED]
+	_clock = state.clock
+	_winner = state.winner
+	if _playing != state.playing:
+		_playing = state.playing
+		match_ended.emit(_winner)
+	for side: int in [Team.BLUE, Team.RED]:
+		if _cheese[side] != state.cheese[side]:
+			_cheese[side] = state.cheese[side]
+			# Emitted rather than merely stored, because the cheese counter is the one HUD element
+			# that ANIMATES on change (GDD section 2: the visibility of the spend is the feature),
+			# and a client that only ever saw the number arrive would show the count without the
+			# thing that makes a Scurry feel like it cost something.
+			cheese_changed.emit(side, _cheese[side])
+	score_changed.emit(_score[Team.BLUE], _score[Team.RED])
+
+	_down.clear()
+	for side: int in [Team.BLUE, Team.RED]:
+		for seat: int in range(crew):
+			var mouse := seat_mouse(side, seat)
+			var left := float(state.respawns[Snapshot.key_for(side, seat, crew)])
+			if mouse != null and left > 0.0:
+				_down[mouse] = left
+
+	for side: int in [Team.BLUE, Team.RED]:
+		var flag: MatchState.Flag = state.flags[side]
+		var by: Mouse = null
+		if flag.carrier != MatchState.NOBODY:
+			by = seat_mouse(flag.carrier / crew, flag.carrier % crew)
+		_banners[side].adopt(flag.state, by, flag.position)
+
+
+## A line of commentary that was written somewhere else. Emitted exactly as a local one would be,
+## so the feed cannot tell the difference and there is one place that formats these.
+func adopt_event(text: String) -> void:
+	event.emit(text)
 
 
 ## A client learning the seating for the first time: take our own chair, then fill the rest.
