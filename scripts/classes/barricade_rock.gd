@@ -52,6 +52,9 @@ var owner_mouse: Mouse = null
 var _network: TunnelNetwork
 ## Kept so the pieces can be cut from the boulder's own triangles when it goes. See rock_debris.gd.
 var _shell: ArrayMesh
+## A client-side transcription of a server rock. It draws and collides, but it never edits the
+## route graph and cannot take a locally resolved hit; both decisions belong to the server.
+var _replica: bool = false
 
 
 ## Built and placed in one call, because a barricade that exists but has not yet chosen a cell is
@@ -72,9 +75,34 @@ static func place(
 	return rock
 
 
+## Reproduce a server-owned rock without acquiring authority over the tunnel beneath it.
+static func reproduce(
+	network: TunnelNetwork,
+	at_plane: int,
+	at_cell: Vector2i,
+	by: Mouse,
+	hits_left: int,
+	hits_total: int
+) -> BarricadeRock:
+	var rock := BarricadeRock.new()
+	rock._replica = true
+	rock.hits_to_clear = maxi(hits_total, 1)
+	rock.plane = at_plane
+	rock.cell = at_cell
+	rock.owner_mouse = by
+	rock._network = network
+	network.add_child(rock)
+	rock.adopt_replica(by, hits_left, hits_total)
+	return rock
+
+
 func _ready() -> void:
 	super()
 	add_to_group(BARRICADE_GROUP)
+	if _replica:
+		# Puppet mice never resolve their swing, but removing this from the generic target set makes
+		# that authority boundary structural rather than dependent on every mouse staying a puppet.
+		remove_from_group(Breakable.GROUP)
 	if _network == null:
 		_network = get_parent() as TunnelNetwork
 	global_position = _network.cell_to_world(plane, cell)
@@ -84,20 +112,53 @@ func _ready() -> void:
 	_build_mesh(span, tall)
 	_build_body(span, tall)
 
-	# The cell leaves the routing graph for as long as this stands.
-	_network.block_cell(plane, cell)
-	# An Engineer can bring down the ground a barricade is standing on. Nothing catches that on
-	# the way past, so the rock listens for its own floor disappearing -- otherwise it hangs in
-	# the air over a sealed cell, still blocking a route that no longer exists.
-	_network.cell_collapsed.connect(_on_cell_collapsed)
+	if not _replica:
+		# The cell leaves the routing graph for as long as this stands. A replica deliberately does
+		# not: its TunnelNetwork is a puppet and the client never makes routing decisions anyway.
+		_network.block_cell(plane, cell)
+		# An Engineer can bring down the ground a barricade is standing on. Nothing catches that on
+		# the way past, so the rock listens for its own floor disappearing -- otherwise it hangs in
+		# the air over a sealed cell, still blocking a route that no longer exists.
+		_network.cell_collapsed.connect(_on_cell_collapsed)
 
 
 func _exit_tree() -> void:
 	# Guarded for the case where the whole scene is going down and the network is already gone --
 	# which is every scene change and every audit teardown, and would otherwise be an error printed
 	# after the run has finished, where nobody reads it.
-	if is_instance_valid(_network):
+	if not _replica and is_instance_valid(_network):
 		_network.unblock_cell(plane, cell)
+
+
+## A replica is scenery with collision, not a second simulation target.
+func hit_by(who: Mouse) -> bool:
+	if _replica:
+		return false
+	return super.hit_by(who)
+
+
+## Apply the fields that can change while a barricade stands. Scaling is the base Breakable's
+## damage language, repeated here because calling `_on_damaged` after setting the count keeps the
+## client at exactly the same visual stage without emitting an authoritative damage signal.
+func adopt_replica(by: Mouse, hits_left: int, hits_total: int) -> void:
+	if not _replica:
+		return
+	owner_mouse = by
+	hits_to_clear = maxi(hits_total, 1)
+	_left = clampi(hits_left, 1, hits_to_clear)
+	_on_damaged()
+
+
+## Remove immediately from both presentation groups, then defer freeing like every other world
+## object. There is deliberately no debris burst here: absence can mean either "the Brute broke
+## it" or "your crew forgot that enemy corridor", and inventing an explosion for the latter would
+## leak information the filter just took away.
+func discard_replica() -> void:
+	if not _replica:
+		return
+	remove_from_group(BARRICADE_GROUP)
+	remove_from_group(Breakable.GROUP)
+	queue_free()
 
 
 ## THE ROCK DIES NOW; the pieces are somebody else's problem. Handing the break to a separate node

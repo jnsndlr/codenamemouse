@@ -1866,9 +1866,10 @@ right numbers therefore has a correct HUD, and the wire writes them through one 
 
 Step 5, and checkpoint 4 — the one the risk register said could silently fail.
 [`tunnel_view.gd`](scripts/net/tunnel_view.gd) is the filter, and it is the only place in the game
-that decides what a client may know about the earth. `TUNNELS` is the one message addressed to a
+that decides what a client may know about the earth. `TUNNELS` is addressed to a
 single client on purpose: **two clients on opposite crews are owed different worlds**, so there is
-no packet that is correct for both of them.
+no packet that is correct for both of them. Barricades later reuse the same predicate and
+addressed boundary in a complete-state payload.
 
 - **The predicate already existed, and using it was the whole design.**
   `TunnelSight.knows(side, plane, cell)` was written at M5 for the minimap — "does this crew have
@@ -2003,9 +2004,24 @@ milliseconds away.
 > update and removal; `replication_audit.gd` makes a drop before the client has an arena and proves
 > it appears after the client enters.
 >
-> **Barricades and cant marks remain.** A remote Engineer's barricades block the routing graph and
-> nobody else can see the rock, which is still the worse of the two and the next runtime object to
-> reproduce.
+> **The barricade share is closed too, behind the tunnel boundary rather than in public.** Each
+> peer receives a complete picture only of barricades in cells `TunnelSight.knows` for its crew:
+> plane, cell, owner seat, remaining hits and total hits. It also privately carries only the
+> receiving player's standing count, preserving their three-rock budget when fog hides an old
+> coordinate without disclosing enemy activity. A client replica carries the collider, seeded rock
+> shape and damage shrink, but is removed from `Breakable.GROUP` and never blocks its puppet route
+> graph. Placement, Brute hits and obstruction remain server decisions; loss, removal, cave-in,
+> fog and late joining converge through the next full picture.
+>
+> The late-join audit exposed a terrain cursor bug beside it. `TunnelView` had remembered cells
+> sent while a connected peer was still on the title screen, so its later arena was never offered
+> them again. `HELLO` now means “this peer has an arena now”: it resets that peer's delivery cursor
+> before the permitted earth is replayed. The audit creates a damaged red-owned rock and a
+> blue-only control before the client arena exists, proves owner/hits arrive for the first, follows
+> it through another damage stage and removal, and proves the second never crosses the visibility
+> boundary.
+>
+> **Cant marks remain as the last runtime-spawned replication gap.**
 
 #### Sequencing — five checkpoints, each playable
 
@@ -2029,7 +2045,9 @@ Ordered so that something is testable at every stage and the risky part is not l
    been verified by deleting the filter and watching it name the leaked cells. Digging *from* a
    client landed after it, as predicted, as a refactor of five singletons rather than anything to
    do with the wire — the suite now watches a headless client sink a shaft and open four cells.
-   What is left is runtime replication for barricade boulders and cant marks.
+   Barricade boulders now use the same visibility predicate in a complete per-peer picture, and
+   the two-process suite proves a blue-only boulder is not leaked to its red client. What is left
+   is runtime replication for cant marks.
 5. **Over the internet, with a friend, for a full match.** The milestone's actual question.
 
 #### Risks

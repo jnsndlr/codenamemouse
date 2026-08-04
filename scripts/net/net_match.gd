@@ -20,10 +20,10 @@ extends Node
 ## goes out four times a second because none of it is. Splitting them is what lets the scoreboard be
 ## sent whole every time — see `net_message.gd` — instead of as a set of changes that can be missed.
 ##
-## Runtime cheese is a separate, slow, complete world picture. It cannot ride in the mouse
-## snapshot because a lost spawn or removal must heal, and it cannot ride in the tunnel payload
-## because cheese is deliberately public to both crews. Barricades and sonar marks remain the two
-## runtime objects this protocol does not yet reproduce on clients.
+## Runtime cheese and barricades are separate, slow, complete world pictures. They cannot ride in
+## the mouse snapshot because a lost spawn or removal must heal. Cheese is public and broadcasts;
+## barricades reveal tunnel cells, so each peer receives only those its crew may know. Sonar cant
+## marks are now the one runtime object this protocol does not yet reproduce on clients.
 
 ## Snapshots per second. The plan's number. Deliberately below the physics rate: the client
 ## interpolates, and sending every tick would double the bandwidth to buy smoothness the
@@ -48,6 +48,10 @@ const EARTH_HZ: float = 2.0
 ## while the complete-state shape means a lost packet needs no acknowledgement or special repair.
 const CHEESE_HZ: float = 2.0
 
+## Barricade damage is discrete but happens in combat, so it updates faster than an immobile cheese
+## pile. The complete-state shape still makes every missed spawn, hit, or removal self-healing.
+const BARRICADE_HZ: float = 4.0
+
 @export var director_path: NodePath
 
 var _net: NetSession
@@ -57,9 +61,12 @@ var _since_snapshot: float = 0.0
 var _since_state: float = 0.0
 var _since_earth: float = 0.0
 var _since_cheese: float = 0.0
+var _since_barricades: float = 0.0
 var _tick: int = 0
 var _cheese_tick: int = 0
+var _barricade_tick: int = 0
 var _tunnels: TunnelNetwork
+var _sight: TunnelSight
 ## The per-crew filter, on the server. See `tunnel_view.gd` -- it is the one place that decides
 ## what a client is allowed to know about the earth, and it is one place on purpose.
 var _view: TunnelView
@@ -87,6 +94,8 @@ var _states: int = 0
 ## Complete cheese-world pictures received. Separate because a correct scoreboard alongside a
 ## stale yard is exactly the disagreement this payload exists to prevent.
 var _cheese_states: int = 0
+## Complete, crew-filtered barricade pictures received.
+var _barricade_states: int = 0
 ## Poses that arrived mid-swing. Counted because a swing is the only *action* in this protocol --
 ## everything else a snapshot carries is a position -- and "melee crosses the wire" is half of what
 ## checkpoint 1 claims. Poses rather than swings, deliberately: one swipe spans a dozen packets and
@@ -133,6 +142,15 @@ const HELLO_SECONDS: float = 1.0
 ## host creates it before the client even enters an arena, so seeing it at the other end proves a
 ## complete state heals a missed runtime spawn rather than merely forwarding a well-timed event.
 const AUDIT_CHEESE_AT: Vector3 = Vector3(31.0, 0.0, -31.0)
+## Two cells under the nests. The replication audit puts one red-visible and one blue-only rock
+## here before the joining client enters its arena, proving both late-join healing and no leak.
+const AUDIT_BARRICADE_RED: Vector2i = Vector2i(10, 10)
+const AUDIT_BARRICADE_BLUE: Vector2i = Vector2i(-18, 18)
+var _audit_barricades: bool = false
+var _audit_barricades_done: bool = false
+var _audit_barricade_age: float = 0.0
+var _audit_barricade_stage: int = 0
+var _audit_red_rock: BarricadeRock
 
 
 func _ready() -> void:
@@ -152,13 +170,14 @@ func _ready() -> void:
 	# spawned at runtime. Both are optional: an arena without tunnels is a valid arena, and the
 	# audits build several.
 	_tunnels = get_tree().get_first_node_in_group(TunnelNetwork.NETWORK_GROUP) as TunnelNetwork
-	var sight := get_tree().get_first_node_in_group(TunnelSight.SIGHT_GROUP) as TunnelSight
-	if _tunnels != null and sight != null:
-		_view = TunnelView.new(_tunnels, sight)
+	_sight = get_tree().get_first_node_in_group(TunnelSight.SIGHT_GROUP) as TunnelSight
+	if _tunnels != null and _sight != null:
+		_view = TunnelView.new(_tunnels, _sight)
 
 	_autopilot = OS.get_cmdline_user_args().has("--autopilot")
 	if _net.is_server():
 		_director.event.connect(_on_event)
+		_audit_barricades = OS.get_cmdline_user_args().has("--audit-barricades")
 		if OS.get_cmdline_user_args().has("--audit-cheese"):
 			_director.call("_drop_cheese", AUDIT_CHEESE_AT, 3)
 			_net.log_line("audit cheese placed before the client arena exists")
@@ -258,6 +277,8 @@ func _physics_process(delta: float) -> void:
 		return
 	_report(delta)
 	if _net.is_server():
+		if _audit_barricades:
+			_tick_audit_barricades(delta)
 		_since_snapshot += delta
 		if _since_snapshot >= 1.0 / SNAPSHOT_HZ:
 			_since_snapshot = 0.0
@@ -275,6 +296,10 @@ func _physics_process(delta: float) -> void:
 		if _since_cheese >= 1.0 / CHEESE_HZ:
 			_since_cheese = 0.0
 			_broadcast_cheese()
+		_since_barricades += delta
+		if _since_barricades >= 1.0 / BARRICADE_HZ:
+			_since_barricades = 0.0
+			_send_barricades()
 		return
 	if _client_seats == null:
 		_say_hello(delta)
@@ -305,11 +330,13 @@ func _report(delta: float) -> void:
 		])
 		_net.log_line("and %d scoreboards" % _states)
 		_net.log_line("and %d cheese-world pictures" % _cheese_states)
+		_net.log_line("and %d barricade-world pictures" % _barricade_states)
 	# THE SAME LINE FROM BOTH ENDS, built by the same code out of the same accessors. Two formats
 	# would make the comparison a comparison of two formatters; one means the audit is reading the
 	# same question answered twice, which is the only version of this that proves anything.
 	_net.log_line(_scoreboard())
 	_report_cheese()
+	_report_barricades()
 	_report_earth()
 	_earth_sent = 0
 	_earth_taken = 0
@@ -320,6 +347,7 @@ func _report(delta: float) -> void:
 	_swings = 0
 	_states = 0
 	_cheese_states = 0
+	_barricade_states = 0
 
 
 ## The earth, as cells, from whichever end this is.
@@ -359,6 +387,54 @@ func _report_cheese() -> void:
 		])
 	parts.sort()
 	_net.log_line("cheese world: hold [%s]" % " ".join(parts))
+
+
+## Barricades are terrain knowledge, so the server reports both the complete world and each
+## crew's permitted subset. The client reports only what it holds. The two-process audit uses the
+## red-visible test rock to prove delivery and the blue-only one to prove the filter is real.
+func _report_barricades() -> void:
+	if _tunnels == null:
+		return
+	if not _net.is_server():
+		_net.log_line("barricade world: hold %s" % _barricades_of(-1))
+		_report_barricade_supply()
+		return
+	_net.log_line("barricade world: all %s" % _barricades_of(-1))
+	for side: int in [Team.BLUE, Team.RED]:
+		_net.log_line("barricade %s may know %s" % [
+			Team.name_of(side), _barricades_of(side),
+		])
+	_report_barricade_supply()
+
+
+func _report_barricade_supply() -> void:
+	var mouse := _director.local_mouse()
+	var wall: Barricade = null
+	if mouse != null:
+		wall = mouse.get_node_or_null(^"Barricade") as Barricade
+	var standing := wall.max_standing - wall.in_hand() if wall != null else 0
+	_net.log_line("barricade supply: mine %d standing" % standing)
+
+
+func _barricades_of(side: int) -> String:
+	var parts := PackedStringArray()
+	var crew := (
+		_net.seats().crew_size() if _net.is_server()
+		else (_client_seats.crew_size() if _client_seats != null else 0)
+	)
+	for node: Node in get_tree().get_nodes_in_group(BarricadeRock.BARRICADE_GROUP):
+		var rock := node as BarricadeRock
+		if rock == null or rock.is_queued_for_deletion():
+			continue
+		if side >= 0 and (_sight == null or not _sight.knows(side, rock.plane, rock.cell)):
+			continue
+		var owner := _key_of(rock.owner_mouse, crew) if crew > 0 else BarricadeState.NOBODY
+		parts.append("%d.%d,%d=%d/%d@%d" % [
+			rock.plane, rock.cell.x, rock.cell.y,
+			rock.hits_left(), rock.hits_to_clear, owner,
+		])
+	parts.sort()
+	return "[%s]" % " ".join(parts)
 
 
 ## `plane.x,y` for every cell, space separated. `side` of -1 is every dug cell there is.
@@ -536,6 +612,132 @@ func _broadcast_cheese() -> void:
 	for cache: CheeseCache in caches:
 		state.add(cache.global_position, cache.wedges, cache.spread)
 	_transport.broadcast(state.to_bytes(), false)
+
+
+## Every barricade this peer's crew is currently entitled to see.
+##
+## ADDRESSED FOR THE SAME REASON AS EARTH. A rock names its plane and cell, so putting all of them
+## in a broadcast would be a compact enemy tunnel map. Unlike earth this remains a full picture:
+## at three standing per Engineer the set is tiny, and absence is what makes breakage, cave-ins,
+## fog loss, packet loss and late joining all converge through the same reconciliation.
+func _send_barricades() -> void:
+	if _tunnels == null or _sight == null:
+		return
+	var roster := _net.seats()
+	var rocks: Array[BarricadeRock] = []
+	for node: Node in get_tree().get_nodes_in_group(BarricadeRock.BARRICADE_GROUP):
+		var rock := node as BarricadeRock
+		if rock != null and not rock.is_queued_for_deletion() and rock.hits_left() > 0:
+			rocks.append(rock)
+	rocks.sort_custom(func(a: BarricadeRock, b: BarricadeRock) -> bool:
+		return a.plane < b.plane or (
+			a.plane == b.plane and (
+				a.cell.x < b.cell.x or (a.cell.x == b.cell.x and a.cell.y < b.cell.y)
+			)
+		)
+	)
+	var standing := PackedByteArray()
+	standing.resize(roster.crew_size() * 2)
+	for rock: BarricadeRock in rocks:
+		var owner := _key_of(rock.owner_mouse, roster.crew_size())
+		if owner != BarricadeState.NOBODY and owner < standing.size():
+			standing[owner] = mini(int(standing[owner]) + 1, 255)
+
+	_barricade_tick += 1
+	for peer: int in roster.peers():
+		if peer == _net.local_peer():
+			continue
+		var seated := roster.seat_of(peer)
+		if seated.is_empty():
+			continue
+		var state := BarricadeState.new()
+		state.revision = _barricade_tick
+		# Supply is private to the player whose HUD needs it. Sending every seat's count would reveal
+		# hidden enemy fortification activity even though their coordinates were filtered correctly.
+		var own_standing := PackedByteArray()
+		own_standing.resize(standing.size())
+		var own_key := Snapshot.key_for(seated[0], seated[1], roster.crew_size())
+		own_standing[own_key] = standing[own_key]
+		state.set_standing(own_standing)
+		for rock: BarricadeRock in rocks:
+			if not _sight.knows(seated[0], rock.plane, rock.cell):
+				continue
+			state.add(
+				rock.plane, rock.cell,
+				_key_of(rock.owner_mouse, roster.crew_size()),
+				rock.hits_left(), rock.hits_to_clear
+			)
+		_transport.send(peer, state.to_bytes(), false)
+
+
+## Build the replication audit's pair only after the remote seat has become a real Player. The
+## joining process remains on its title screen for eight seconds, so these rocks predate its arena:
+## a later appearance proves state recovery, not a conveniently timed spawn event.
+func _try_audit_barricades() -> void:
+	if _tunnels == null:
+		return
+	var roster := _net.seats()
+	var remote: Mouse = null
+	for peer: int in roster.peers():
+		if peer == _net.local_peer():
+			continue
+		var seated := roster.seat_of(peer)
+		if seated.is_empty():
+			continue
+		var candidate := _director.seat_mouse(seated[0], seated[1])
+		if candidate is Player:
+			remote = candidate
+			break
+	if remote == null:
+		return
+
+	_tunnels.dig(1, AUDIT_BARRICADE_RED, Team.RED)
+	# The hidden control sits away from both crews' normal routes. Clear a generated vein only in
+	# this audit world so the coordinate remains deterministic across seeds.
+	_tunnels.remove_rock(1, AUDIT_BARRICADE_BLUE)
+	_tunnels.dig(1, AUDIT_BARRICADE_BLUE, Team.BLUE)
+	if not _tunnels.is_dug(1, AUDIT_BARRICADE_RED):
+		return
+	_audit_red_rock = BarricadeRock.place(_tunnels, 1, AUDIT_BARRICADE_RED, remote)
+	# One authoritative damage step, so the client has to reproduce visual/remaining-hit state and
+	# not merely the existence of a fresh default rock.
+	var brute := Mouse.new()
+	brute.mouse_class = MouseClass.BRUTE
+	_audit_red_rock.hit_by(brute)
+	brute.free()
+	if _tunnels.is_dug(1, AUDIT_BARRICADE_BLUE):
+		BarricadeRock.place(
+			_tunnels, 1, AUDIT_BARRICADE_BLUE, _director.local_mouse()
+		)
+	_audit_barricades_done = true
+	_net.log_line("audit barricades placed before the client arena exists")
+
+
+## After late-join spawn has had time to appear in a five-second report, move the same rock
+## through one more damage stage and then clear it. The real two-process audit can therefore prove
+## update and removal, not only creation.
+func _tick_audit_barricades(delta: float) -> void:
+	if not _audit_barricades_done:
+		_try_audit_barricades()
+		return
+	_audit_barricade_age += delta
+	if _audit_barricade_stage == 0 and _audit_barricade_age >= 18.0:
+		if is_instance_valid(_audit_red_rock):
+			_audit_brute_hit(_audit_red_rock)
+			_net.log_line("audit barricade damaged to one hit")
+		_audit_barricade_stage = 1
+	elif _audit_barricade_stage == 1 and _audit_barricade_age >= 30.0:
+		if is_instance_valid(_audit_red_rock):
+			_audit_brute_hit(_audit_red_rock)
+			_net.log_line("audit barricade cleared")
+		_audit_barricade_stage = 2
+
+
+func _audit_brute_hit(rock: BarricadeRock) -> void:
+	var brute := Mouse.new()
+	brute.mouse_class = MouseClass.BRUTE
+	rock.hit_by(brute)
+	brute.free()
 
 
 ## A line of the feed, forwarded as the server wrote it.
@@ -743,6 +945,72 @@ func _apply_cheese(bytes: PackedByteArray) -> void:
 	_cheese_states += 1
 
 
+func _apply_barricades(bytes: PackedByteArray) -> void:
+	# Owner is a seat key. Like the scoreboard, this picture has no meaning until the seating table
+	# exists; it is complete and periodic, so dropping an early one is repaired by the next.
+	if _client_seats == null or _tunnels == null:
+		return
+	var state := BarricadeState.from_bytes(bytes)
+	if state == null or state.revision <= _barricade_tick:
+		return
+	_reconcile_barricades(state)
+	_barricade_tick = state.revision
+	_barricade_states += 1
+
+
+func _reconcile_barricades(state: BarricadeState) -> void:
+	_adopt_barricade_supplies(state.standing)
+	var unmatched: Array[BarricadeRock] = []
+	for node: Node in get_tree().get_nodes_in_group(BarricadeRock.BARRICADE_GROUP):
+		var rock := node as BarricadeRock
+		if rock != null and not rock.is_queued_for_deletion():
+			unmatched.append(rock)
+
+	for reading: BarricadeState.Rock in state.rocks:
+		# Earth is reliable but may still be a packet behind this unreliable picture on first join.
+		# A rock without its tunnel would float in closed earth; skip it and let the next complete
+		# picture create it once the cell has arrived.
+		if not _tunnels.is_dug(reading.plane, reading.cell):
+			continue
+		var rock := _barricade_at(unmatched, reading.plane, reading.cell)
+		var owner: Mouse = null
+		if reading.owner != BarricadeState.NOBODY:
+			owner = _puppet_for(reading.owner)
+		if rock == null:
+			rock = BarricadeRock.reproduce(
+				_tunnels, reading.plane, reading.cell, owner,
+				reading.hits_left, reading.hits_total
+			)
+		else:
+			unmatched.erase(rock)
+			rock.adopt_replica(owner, reading.hits_left, reading.hits_total)
+
+	# Missing means broken, collapsed, or no longer permitted by fog. All three remove the local
+	# picture; only the server mutates the real graph.
+	for stale: BarricadeRock in unmatched:
+		stale.discard_replica()
+
+
+func _adopt_barricade_supplies(standing: PackedByteArray) -> void:
+	var keys := _client_seats.crew_size() * 2 if _client_seats != null else 0
+	for key: int in range(keys):
+		var mouse := _puppet_for(key)
+		if mouse == null:
+			continue
+		var wall := mouse.get_node_or_null(^"Barricade") as Barricade
+		if wall != null:
+			wall.adopt_standing(int(standing[key]) if key < standing.size() else 0)
+
+
+func _barricade_at(
+	rocks: Array[BarricadeRock], plane: int, cell: Vector2i
+) -> BarricadeRock:
+	for rock: BarricadeRock in rocks:
+		if rock.plane == plane and rock.cell == cell:
+			return rock
+	return null
+
+
 func _puppet_for(key: int) -> Mouse:
 	if _client_seats == null:
 		return null
@@ -830,6 +1098,11 @@ func _on_packet(from: int, bytes: PackedByteArray) -> void:
 				_apply_seating(bytes)
 		NetMessage.Kind.HELLO:
 			if _net.is_server():
+				# HELLO means the peer has an arena NOW. Terrain sent while it was connected on
+				# the title screen had no NetMatch to consume it, so forget the delivery cursor
+				# and replay everything this crew currently knows. Barricades wait for that earth.
+				if _view != null:
+					_view.forget_peer(from)
 				_send_seating(from)
 		NetMessage.Kind.MATCH:
 			if not _net.is_server() and from == NetTransport.SERVER_ID:
@@ -843,3 +1116,6 @@ func _on_packet(from: int, bytes: PackedByteArray) -> void:
 		NetMessage.Kind.CHEESE:
 			if not _net.is_server() and from == NetTransport.SERVER_ID:
 				_apply_cheese(bytes)
+		NetMessage.Kind.BARRICADES:
+			if not _net.is_server() and from == NetTransport.SERVER_ID:
+				_apply_barricades(bytes)

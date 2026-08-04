@@ -129,9 +129,10 @@ tunnels and cheese and mice was still true. `net_audit` now loads every scene an
 asserts none is null — the dullest check here, and the only one that catches that.
 
 **And the earth arrives one crew at a time.** [`TunnelView`](scripts/net/tunnel_view.gd) is the
-only place in the game that decides what a client may know about the ground, and `TUNNELS` is the
-one message **addressed to a single client on purpose**: two clients on opposite crews are owed
-different worlds, so there's no packet that's correct for both. A client's network holds only what
+only place in the game that decides what a client may know about the ground, and `TUNNELS` is
+**addressed to a single client on purpose**: two clients on opposite crews are owed different
+worlds, so there's no packet that's correct for both. Barricades later adopted the same addressed
+boundary. A client's network holds only what
 its crew cut or can currently see — M5's pillar as geometry rather than as a minimap rule — and it
 works visually because sight underground was already defined as *every cell between here and there
 is open*, so what's missing was behind a bend anyway.
@@ -196,9 +197,23 @@ dropped wedges appear and merge correctly, a lost packet heals on the next pictu
 entering late receives drops made before its arena existed. The two-process replication audit
 creates exactly that late drop and confirms it appears on the client.
 
-**What's still missing is runtime replication for barricades and cant marks.** A remote Engineer's
-barricades still block the server's routing graph while clients cannot see the rock, which remains
-the worse of the two and the reason it is next.
+**Barricades cross as a complete, crew-filtered world picture.** Four times a second each peer gets
+only the rocks in tunnel cells its crew currently knows, including plane, cell, owner and remaining
+Brute hits. The same picture privately carries only the receiving player's standing count, so fog
+can hide an old coordinate without refunding its slot or exposing somebody else's fortification
+activity. Client replicas draw the same damaged rock and collider, but they are excluded from local
+melee and never touch the client routing graph — the server remains the only authority for
+placement, damage and obstruction. Absence removes a broken, collapsed or forgotten rock on the
+next picture.
+
+The late-join test found a neighbouring terrain bug: the server remembered earth packets sent
+while a connected client was still on the title screen, so its arena never received those cells.
+An arena's `HELLO` now resets that peer's terrain delivery cursor before replaying its permitted
+earth. The two-process audit creates a damaged red-owned barricade and a blue-only control rock
+before the client arena exists, then proves the first arrives with its owner/hits, updates after
+another blow, disappears when cleared, and the second is never leaked.
+
+**What's still missing is runtime replication for cant marks.**
 
 ## M6.5 — a build you can hand to somebody (closed)
 

@@ -104,7 +104,8 @@ func _play_a_match() -> void:
 
 	var host_pid := OS.create_process(godot, [
 		"--headless", "--path", project, "--quit-after", LIFETIME_FRAMES,
-		"--", "--host", str(PORT), "--play", "--audit-cheese", "--audit-log", host_log,
+		"--", "--host", str(PORT), "--play", "--audit-cheese", "--audit-barricades",
+		"--audit-log", host_log,
 	])
 	if host_pid <= 0:
 		_broken("could not launch a host process")
@@ -140,6 +141,7 @@ func _play_a_match() -> void:
 	_check_the_digging(host_said, client_said)
 	_check_the_scoreboard(host_said, client_said)
 	_check_the_cheese_world(host_said, client_said)
+	_check_the_barricade_world(host_said, client_said)
 	_check_the_earth(host_said, client_said)
 
 
@@ -363,6 +365,38 @@ func _check_the_cheese_world(host_said: String, client_said: String) -> void:
 		client_said.contains(late_pile))
 
 
+# ------------------------------------------------------------- and barricades inside the earth
+
+
+## Two rocks predate the client's arena. One is in red's own cell and must arrive with its damage
+## and owner; the other is in a blue-only cell and must not. Together those are the feature and
+## its security boundary -- checking only the first would let a broadcast pass.
+func _check_the_barricade_world(host_said: String, client_said: String) -> void:
+	print("\n-- and the barricades inside the earth")
+	var pictures := _totals(client_said, "(\\d+) barricade-world pictures")
+	_check("the client receives complete barricade pictures (%d)" % pictures, pictures > 0)
+	_check("the host made the late-join test rocks",
+		host_said.contains("audit barricades placed before the client arena exists"))
+	_check("a damaged rock made before its arena appears with its remaining hits",
+		client_said.contains("1.10,10=2/3@"))
+	_check("and its owner is the remote Engineer's seat",
+		client_said.contains("1.10,10=2/3@5"))
+	_check("the owning Engineer's client supply includes it",
+		client_said.contains("barricade supply: mine 1 standing"))
+	_check("a later hit updates the same client rock",
+		host_said.contains("audit barricade damaged to one hit")
+		and client_said.contains("1.10,10=1/3@5"))
+	var last_hold := _last_capture(client_said, "barricade world: hold \\[([^\\]]*)\\]")
+	_check("and clearing it removes it from the next complete picture",
+		host_said.contains("audit barricade cleared")
+		and not last_hold.contains("1.10,10=")
+		and _last_capture(
+			client_said, "barricade supply: mine (\\d+) standing"
+		) == "0")
+	_check("a rock in blue-only earth is not leaked to red",
+		not client_said.contains("1.-18,18=3/3@"))
+
+
 # --------------------------------------------------------------------- and no floor plan it didn't earn
 
 
@@ -444,6 +478,11 @@ func _totals(text: String, pattern: String) -> int:
 	for hit: RegExMatch in re.search_all(text):
 		sum += hit.get_string(1).to_int()
 	return sum
+
+
+func _last_capture(source: String, pattern: String) -> String:
+	var matches := RegEx.create_from_string(pattern).search_all(source)
+	return "" if matches.is_empty() else matches[-1].get_string(1)
 
 
 ## Every `(x, y, z)` a pattern's first capture group matched. Written by `Vector3.snapped`, so the

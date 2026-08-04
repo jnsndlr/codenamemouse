@@ -46,9 +46,9 @@ signal refused(reason: String)
 @export var reach_cells: float = 1.6
 
 var _cooldown_left: float = 0.0
-## Barricades this Engineer has standing. Pruned rather than counted from the group, because the
-## limit is per-Engineer and a shared group would let one crew's boulders eat another's budget.
-var _standing: Array[BarricadeRock] = []
+## Client-only authoritative count. A rock can remain standing in an enemy corridor after that
+## corridor leaves this crew's fog, so visible replicas alone cannot always answer the supply HUD.
+var _replicated_standing: int = -1
 
 
 func _ready() -> void:
@@ -64,14 +64,6 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_cooldown_left = maxf(0.0, _cooldown_left - delta)
-	# Walked rather than filtered: `Array.filter` hands back an UNTYPED array, and assigning one to
-	# a typed variable aborts the call at runtime. That is the same GDScript trap that let the
-	# tunnel audit spend its whole life passing without testing anything.
-	var still: Array[BarricadeRock] = []
-	for rock: BarricadeRock in _standing:
-		if is_instance_valid(rock):
-			still.append(rock)
-	_standing = still
 
 
 func cooldown_left() -> float:
@@ -80,8 +72,28 @@ func cooldown_left() -> float:
 
 ## How many more you could put down right now, ignoring the cooldown. For a HUD that wants to draw
 ## the supply rather than make the player count boulders.
+##
+## The server counts by OWNER, not merely by group, which preserves the per-Engineer budget. A
+## puppet reads its own private replicated count because visible rocks are deliberately incomplete:
+## fog may hide a coordinate that still consumes one of this Engineer's slots.
 func in_hand() -> int:
-	return maxi(0, max_standing - _standing.size())
+	if _player != null and _player.is_puppet() and _replicated_standing >= 0:
+		return maxi(0, max_standing - _replicated_standing)
+	var standing := 0
+	for node: Node in get_tree().get_nodes_in_group(BarricadeRock.BARRICADE_GROUP):
+		var rock := node as BarricadeRock
+		if (
+			rock != null and not rock.is_queued_for_deletion()
+			and rock.owner_mouse == _player
+		):
+			standing += 1
+	return maxi(0, max_standing - standing)
+
+
+## The count from the server, separate from the visible rocks so fog can hide a coordinate without
+## refunding a slot that is still occupied.
+func adopt_standing(count: int) -> void:
+	_replicated_standing = clampi(count, 0, max_standing)
 
 
 func is_ready() -> bool:
@@ -163,18 +175,14 @@ func _physics_process(_delta: float) -> void:
 		refused.emit("somebody is standing there")
 		return
 
-	# A PUPPET RUNS ITS COOLDOWN AND PUTS NOTHING DOWN (M7). A boulder is a world object spawned at
-	# runtime, and this protocol does not replicate barricades yet. So a remote Engineer's
-	# barricades are real on the server, block the routing graph there, and are invisible to every
-	# client until that gap is closed.
-	# Placing one locally instead would be worse than invisible: it would be a wall that only one
-	# machine believes in.
+	# A PUPPET RUNS ITS COOLDOWN AND PUTS NOTHING DOWN. The authoritative server will place the
+	# boulder and its complete barricade picture will reproduce it here. Placing one speculatively
+	# would create a wall that only this machine believes in whenever the server refuses the move.
 	if not acts():
 		_cooldown_left = cooldown
 		return
 
-	var rock := BarricadeRock.place(_network, plane, cell, _player)
-	_standing.append(rock)
+	BarricadeRock.place(_network, plane, cell, _player)
 	_cooldown_left = cooldown
 	placed.emit(plane, cell)
 

@@ -660,6 +660,60 @@ func _check_barricade() -> void:
 	)
 	_expect(wall.in_hand() == 1, "and the Engineer gets the slot back")
 
+	# THE CLIENT'S VERSION IS A PICTURE, NOT A SECOND ROCK WITH OPINIONS. First prove the compact
+	# picture preserves signed cells, ownership, and damage, and rejects a partial replacement.
+	var state := BarricadeState.new()
+	state.revision = 71
+	var supplies := PackedByteArray()
+	supplies.resize(10)
+	supplies[5] = 2
+	state.set_standing(supplies)
+	state.add(2, Vector2i(-123, 321), 5, 2, 3)
+	var bytes := state.to_bytes()
+	var decoded := BarricadeState.from_bytes(bytes)
+	_expect(decoded != null and decoded.revision == 71 and decoded.rocks.size() == 1,
+		"a complete barricade picture survives bytes")
+	_expect(decoded != null and decoded.rocks[0].plane == 2
+		and decoded.rocks[0].cell == Vector2i(-123, 321)
+		and decoded.rocks[0].owner == 5
+		and decoded.standing.size() == 10 and decoded.standing[5] == 2
+		and decoded.rocks[0].hits_left == 2 and decoded.rocks[0].hits_total == 3,
+		"and carries signed place, owner, supply, and remaining hits")
+	_expect(BarricadeState.from_bytes(bytes.slice(0, bytes.size() - 1)) == null,
+		"a truncated barricade picture is refused")
+	var padded := bytes.duplicate()
+	padded.append(0)
+	_expect(BarricadeState.from_bytes(padded) == null,
+		"a padded barricade picture is refused")
+
+	# A reproduced rock looks damaged and counts against the correct Engineer's supply, while
+	# leaving both the route graph and the local melee rules untouched.
+	var replica := BarricadeRock.reproduce(
+		network, 1, Vector2i(-10, -17), player, 2, 3
+	)
+	_expect(replica.hits_left() == 2 and replica.scale.x < 1.0,
+		"a client rock adopts its damage state")
+	_expect(not network.is_blocked(1, Vector2i(-10, -17)),
+		"but a client rock never edits the routing graph")
+	_expect(not replica.is_in_group(Breakable.GROUP),
+		"and is not a local melee target")
+	var before_replica_hit := replica.hits_left()
+	_expect(not replica.hit_by(hitter) and replica.hits_left() == before_replica_hit,
+		"even a direct local Brute hit cannot damage it")
+	_expect(wall.in_hand() == 0,
+		"its replicated owner makes the Engineer's supply agree")
+	replica.discard_replica()
+	_expect(wall.in_hand() == 1,
+		"and removing the picture gives that owner's slot back")
+	wall.adopt_standing(3)
+	player.set_puppet(true)
+	_expect(wall.in_hand() == 0,
+		"a hidden owned rock can still consume replicated supply")
+	player.set_puppet(false)
+	_expect(wall.in_hand() == 1,
+		"while the authority continues deriving supply from real rocks")
+	await _advance(0.1)
+
 
 ## Hidden tunnel knowledge and the Sneak's way of sampling it. (M5)
 ##
