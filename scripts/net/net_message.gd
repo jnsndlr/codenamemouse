@@ -1,0 +1,71 @@
+class_name NetMessage
+extends RefCounted
+## What can travel, and how each thing is packed. Three kinds, and the reliability of each is a
+## design decision rather than a default.
+##
+## ONE PACKET STREAM, ONE LEADING BYTE. `NetTransport` delivers bytes and says who sent them and
+## nothing else, so the first byte says what this is. That is deliberately cruder than Godot's
+## RPC dispatch and it is the point: there is exactly one place that decides what a packet means,
+## which is the same argument the plan makes for the per-crew filter living at the serializer.
+##
+## | Kind | Direction | Reliable? | Why |
+## |---|---|---|---|
+## | `INPUT` | client → server | yes | a lost press is a swing that never happened |
+## | `SNAPSHOT` | server → clients | **no** | stale the moment the next one is built |
+## | `SEATING` | server → clients | yes | rare, and a client that misses it never knows who it is |
+## | `HELLO` | client → server | yes | "I am in a match now" — see below |
+##
+## **`SNAPSHOT` is unreliable on purpose and that is the important one.** A snapshot resent after a
+## drop arrives describing a world that has already moved on, and it holds the queue up behind it
+## while doing so. Losing one costs a thirtieth of a second of smoothness; retransmitting one costs
+## a visible hitch. This is the classic mistake and it is easiest to make by not choosing.
+##
+## **`INPUT` is reliable, which is the arguable one.** Reliable-ordered input can head-of-line
+## block: one lost packet delays every input behind it. The alternative — resending the last few
+## frames in every packet — is what a shipping game does, and it is not worth building against a
+## loopback connection with no loss. The plan's own posture is "prediction only if it hurts"; this
+## is the same bet on the same reasoning, and **the trigger to revisit is the first playtest with
+## real loss**, not a hunch.
+##
+## **`HELLO` exists because being connected and being in a match are different things**, and the
+## seating was originally sent only when the roster changed — which is a moment that belongs to the
+## *server's* clock. A client sitting on the title screen, or one that quit to the menu and came
+## back, has no arena and therefore nothing listening; the one message telling it who it is went
+## into a process that could not use it, and it never asked again. Found by
+## `tools/replication_audit.gd` the moment that gap was made to happen on purpose: snapshots
+## arriving at a healthy rate, **zero of them applied**, and a mouse the host was walking around a
+## yard its owner could not see. So a client says hello when its match comes up, and keeps saying
+## it until it is answered — the state it needs is small, and asking for it is cheaper than any
+## scheme for delivering it at exactly the right moment.
+
+enum Kind {
+	INPUT,
+	SNAPSHOT,
+	SEATING,
+	HELLO,
+}
+
+
+## Whatever `bytes` says it is, or -1 for an empty packet.
+##
+## Total is asked of every arriving packet before anything else looks at it, so a malformed or
+## truncated message is dropped at the door rather than half-applied. A client is not trusted to
+## send a well-formed packet and neither, structurally, is a server.
+static func kind_of(bytes: PackedByteArray) -> int:
+	return -1 if bytes.is_empty() else bytes[0]
+
+
+static func head(kind: Kind) -> StreamPeerBuffer:
+	var out := StreamPeerBuffer.new()
+	out.put_u8(kind)
+	return out
+
+
+## A reader positioned just past the kind byte, or null when the packet is too short to be one.
+static func body(bytes: PackedByteArray, least: int = 1) -> StreamPeerBuffer:
+	if bytes.size() < least:
+		return null
+	var into := StreamPeerBuffer.new()
+	into.data_array = bytes
+	into.get_u8()
+	return into

@@ -107,5 +107,18 @@ func is_connected_up() -> bool:
 	return _mode != Mode.OFFLINE
 
 
+## Whether there is actually somebody on the other end yet.
+##
+## DIFFERENT FROM `is_connected_up`, AND THE DIFFERENCE IS A BUG THIS FILE SHIPPED. A client is
+## "online" the instant `join()` returns — the socket exists and the mode is CLIENT — but the
+## handshake takes a moment, and on a slow start it takes several seconds while the arena loads.
+## Anything that sent during that window got a wall of *"The multiplayer instance isn't currently
+## connected"*, once per physics tick, which is alarming, useless, and entirely self-inflicted.
+##
+## Overridden where a backend can tell; the default is honest about not knowing.
+func is_established() -> bool:
+	return is_connected_up()
+
+
 func broadcast(bytes: PackedByteArray, reliable: bool) -> void:
 	send(ALL_PEERS, bytes, reliable)

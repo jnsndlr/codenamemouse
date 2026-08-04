@@ -117,8 +117,19 @@ func _forget(delta: float) -> void:
 	for side in [Team.BLUE, Team.RED]:
 		var book: Dictionary = _contacts[side]
 		for key: Variant in book.keys():
+			# VALIDITY BEFORE THE CAST. `key as Mouse` performs the cast on assignment and throws
+			# outright on a freed object, so the guard below it never got the chance to run -- the
+			# check was written the right way round and evaluated the wrong way round.
+			#
+			# Nothing had ever exercised it: through M6 a mouse was scruffed and respawned but
+			# never *freed*, so the contact book only ever held live nodes. M7 frees one every time
+			# somebody joins and a bot gives up its chair, which is the first mid-match free in the
+			# game's history and turned this into an error every frame for every stale contact.
+			if key == null or not is_instance_valid(key):
+				book.erase(key)
+				continue
 			var mouse := key as Mouse
-			if mouse == null or not is_instance_valid(mouse):
+			if mouse == null:
 				book.erase(key)
 				continue
 			var entry: Dictionary = book[key]

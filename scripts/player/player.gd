@@ -49,6 +49,14 @@ var _sprinting: bool = false
 var _since_forward_tap: float = 999.0
 ## The physics frame `_input` was last built on. See `input()`.
 var _captured_on: int = -1
+## A player sitting at a different keyboard (M7). Same class, same rules, same stamina -- the only
+## difference is where the intent comes from, which is the entire point of the input frame.
+##
+## WITHOUT THIS FLAG A REMOTE PLAYER MIRRORS THE HOST'S KEYBOARD, because `input()` captures on the
+## first ask of each tick and the host's `_control` is an ask. The seat would be driven by whoever
+## is sitting at the server. It is the same hazard `drive()` guards against for one tick, made
+## permanent for a mouse that must never read this machine's input at all.
+var _remote: bool = false
 
 
 func _ready() -> void:
@@ -95,7 +103,14 @@ func get_aim_point() -> Vector3:
 ##
 ## Keyed on the frame counter, so the first ask in a tick builds it and the rest get the same
 ## object. Nobody has to be ordered.
+## Never capture; only ever be driven. For a seat whose human is somewhere else.
+func set_remote(on: bool) -> void:
+	_remote = on
+
+
 func input() -> InputFrame:
+	if _remote:
+		return _input
 	var now := Engine.get_physics_frames()
 	if now != _captured_on:
 		_captured_on = now

@@ -1,4 +1,4 @@
-[gd_scene load_steps=39 format=3]
+[gd_scene load_steps=40 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="Script" path="res://scripts/game/nest.gd" id="14_nest"]
@@ -32,6 +32,7 @@
 [ext_resource type="Script" path="res://scripts/player/grass_camouflage.gd" id="13_camo"]
 [ext_resource type="Script" path="res://scripts/maps/cache_field.gd" id="29_cheese"]
 [ext_resource type="Script" path="res://scripts/ui/pause_menu.gd" id="31_pause"]
+[ext_resource type="Script" path="res://scripts/net/net_match.gd" id="32_netmatch"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_top_color = Color(0.28, 0.44, 0.66, 1)
@@ -350,3 +351,7 @@ swap_path = NodePath("../../ClassSwap")
 [node name="PauseMenu" type="CanvasLayer" parent="."]
 script = ExtResource("31_pause")
 hud_path = NodePath("../HUD")
+
+[node name="NetMatch" type="Node" parent="."]
+script = ExtResource("32_netmatch")
+director_path = NodePath("../MatchDirector")

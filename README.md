@@ -62,8 +62,52 @@ Round-trips every field through bytes, and checks a driven frame actually drives
 captured the tick, so the cache returned the driven frame regardless. Not a weak assertion: a good
 assertion whose side effect disarmed the next one.
 
-**Next: seats, then state at 30Hz** — a seat is a team, an index, and an occupant that's either a
-peer id or a bot. Then two windows, one seat each, which is where all of this holds or doesn't.
+**And there are seats.** Ten chairs, five a crew, each holding either a peer id or a bot.
+[`Seats`](scripts/net/seats.gd) is the table and [`NetSession`](scripts/net/net_session.gd) owns it
+alongside the transport — the only object in the game with a socket. Joining takes a chair on the
+crew with fewer *people* (every chair is always occupied, so counting free ones is meaningless);
+leaving hands it straight back to a bot, and **the chair never disappears**, because a crew that
+loses a human must not lose a mouse.
+
+Offline is the same table with peer 1 in blue seat 0 and bots everywhere else. Single player is a
+listen server with no clients, and there's no second code path to keep alive.
+
+```bash
+godot --path . -- --host 47800
+godot --path . -- --join 127.0.0.1:47800
+```
+
+Flags before buttons, deliberately: checkpoint 1 is *two windows on one machine*, and
+`tools/seat_audit.gd` launches two real Godot processes and asserts the seating out of their logs.
+With a Host button alone it could be demonstrated and never checked — and the failures that matter
+here are the ones that still look right from inside a match.
+
+**And two people can now meet in a yard.** Mice go out as poses at 30Hz — position, facing and a
+byte of state — and clients interpolate between them. The snapshot is **indexed by seat**, which is
+what makes the protocol have no spawn messages at all: the roster already says which ten chairs
+exist, so a client builds its mice from the seating and every packet afterwards just says *chair 7
+is here now*. A client simulates nothing; a puppet is a flag on `Mouse`, not a subclass, because
+authority changes hands mid-match when somebody disconnects.
+
+```bash
+godot --path . -- --host 47800 --play
+godot --path . -- --join 127.0.0.1:47800 --play
+```
+
+**A host logging 285 inputs a second while the mouse stood still** is what that cost to learn: the
+seat held a `Bot`, and a bot's controller reads a navigation path, so the frames arrived, applied,
+and did nothing. Every count on both ends looked healthy. A remote human's chair holds a `Player`
+now, so a networked player runs the identical code a local one does.
+
+`tools/replication_audit.gd` puts two real processes in a **real arena**, drives one with
+`--autopilot`, and compares the two logs: the client's mouse went somewhere, it isn't the host's
+mouse, nobody drove the host's mouse, and both ends agree which mouse is whose. It found that a
+client connecting *before* it enters a match was never told its seat — snapshots arriving at a
+healthy rate, **zero applied** — and that the first version of the audit had been passing on
+favourable timing rather than on design.
+
+**What a client still can't see:** the score, the cheese pool, its own health, who's carrying a
+banner, and every tunnel in the arena. That's the rest of step 4 and all of step 5.
 
 ## M6.5 — a build you can hand to somebody (closed)
 
@@ -425,8 +469,10 @@ On **CameraRig**: `pitch_degrees` (48), `zoom_idle` / `zoom_run` / `zoom_sprint`
 
 ### Audits
 
-**Five** headless invariant suites — the three below plus `net_audit.gd` and `input_audit.gd`,
-both documented under M7 above. All must pass; each exits non-zero if it doesn't.
+**Seven** headless invariant suites — the three below plus `net_audit.gd`, `input_audit.gd`,
+`seat_audit.gd` and `replication_audit.gd`, all documented under M7 above. All must pass; each
+exits non-zero if it doesn't. The last two launch **real Godot processes** and take about a minute
+between them, which is why they're listed last and not why they should be skipped.
 
 ```bash
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/tunnel_audit.gd
@@ -440,7 +486,7 @@ both documented under M7 above. All must pass; each exits non-zero if it doesn't
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/cheese_audit.gd
 ```
 
-**Run all three before cutting a build.** An exported release template does not accept `--script`,
+**Run all seven before cutting a build.** An exported release template does not accept `--script`,
 so none of them can ever run against the `.app` — the honest procedure is to run them on the same
 commit the export is built from and then smoke-test the binary by hand. A build that inherits
 confidence the audits didn't actually give it is the failure this whole project keeps warning about.
@@ -582,7 +628,7 @@ scripts/ui/     score bug, minimap, roster, feed, title and pause menus, the con
                 sheet, and the two skins they share
 scripts/tunnels/the network, the routing graph, shaft transit, digging
 scripts/        player, camera, maps, input setup
-scripts/net/     the transport interface, its ENet implementation, and the input frame
+scripts/net/     transport, input frames, seats, snapshots, and the session that owns them
 tools/          headless audits, a behaviour soak, and visual probes needing a real renderer
 ```
 

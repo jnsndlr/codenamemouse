@@ -30,6 +30,7 @@ config/features=PackedStringArray("4.7", "Forward Plus")
 
 InputSetup="*res://scripts/input_setup.gd"
 Screenshot="*res://scripts/game/screenshot.gd"
+Net="*res://scripts/net/net_session.gd"
 
 [debug]
 

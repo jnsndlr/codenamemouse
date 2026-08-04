@@ -63,6 +63,34 @@ func _ready() -> void:
 	_rebuild()
 	get_viewport().size_changed.connect(_rebuild)
 
+	_apply_command_line()
+
+
+## `--play [seconds]`: press Play without a person, optionally after waiting here a while.
+##
+## THE SAME ARGUMENT `--host` AND `--join` MAKE, one screen later. Those two get a process onto a
+## socket; neither gets it into an arena, and replication only exists inside one. A headless
+## process has nobody to press Play, so without this the only way to test two ends of the wire is
+## a human clicking through two windows -- a demonstration rather than a check.
+##
+## THE OPTIONAL DELAY IS NOT A CONVENIENCE. Connecting and *entering a match* are separate moments
+## and a real player leaves a gap between them: they join from the command line and then sit on
+## this screen, or they quit a match to the title and go back in. Anything the server says during
+## that gap is said to a process with no arena in it, and the bug that hides there looks like a
+## working game right up until you check whose mouse is whose. Without a way to make the gap
+## happen on purpose, the only run this suite could ever produce is the lucky one.
+func _apply_command_line() -> void:
+	var args := OS.get_cmdline_user_args()
+	var at := args.find("--play")
+	if at < 0:
+		return
+	var next := String(args[at + 1]) if at + 1 < args.size() else ""
+	var delay := next.to_float() if next.is_valid_float() else 0.0
+	if delay <= 0.0:
+		_on_play()
+		return
+	get_tree().create_timer(delay).timeout.connect(_on_play)
+
 
 # ------------------------------------------------------------------------------------ the menu
 

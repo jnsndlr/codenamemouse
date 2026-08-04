@@ -167,6 +167,16 @@ func send(to: int, bytes: PackedByteArray, reliable: bool) -> void:
 	_peer.put_packet(bytes)
 
 
+## Hosting is established the moment the socket is open; joining is not established until ENet
+## says the handshake finished.
+func is_established() -> bool:
+	if _peer == null:
+		return false
+	if _mode == Mode.SERVER:
+		return true
+	return _peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
+
+
 func peers() -> PackedInt32Array:
 	var out := PackedInt32Array()
 	for id: int in _roster:

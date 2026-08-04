@@ -153,6 +153,27 @@ var _wish: Vector3 = Vector3.ZERO
 ## a server will fill it from a packet. Everything that reads it -- the swing, the dig, the four
 ## abilities -- cannot tell the difference and must never be able to.
 var _input: InputFrame = InputFrame.new()
+## A mouse this machine does not simulate (M7 step 4). On a client every mouse is one of these,
+## including your own: the server owns the world and this end draws what it is told.
+##
+## NOT A SUBCLASS, because the thing that changes is one branch in the tick and everything else --
+## the model, the grass bend, the banner over your head, the swing arc -- has to keep working
+## identically. A `PuppetMouse` would have to re-inherit all of that from whichever of `Player` or
+## `Bot` it happened to be replacing, and a mouse's authority can change mid-match when somebody
+## disconnects and a bot takes their chair.
+var _puppet: bool = false
+## Where the server last said this mouse was, and where it said so before that. Two, because one
+## is a position to snap to and two are something to move between.
+var _pose_from: Vector3 = Vector3.ZERO
+var _pose_to: Vector3 = Vector3.ZERO
+var _facing_from: float = 0.0
+var _facing_to: float = 0.0
+## 0..1 across the gap between those two poses.
+var _pose_blend: float = 1.0
+## Whether the last pose said this puppet was mid-swing. Kept separately from `_swing_left`, which
+## is the timer a real swing runs on and which a puppet never sets -- what is being tracked here is
+## an EDGE in somebody else's state, not a swing of our own.
+var _shown_swing: bool = false
 ## Which tunnel layer this mouse is on. STATE, not a reading taken off its height -- see
 ## dig_controller.gd for the bug that taught us the difference.
 var _plane: int = 0
@@ -309,6 +330,12 @@ func get_plane() -> int:
 ## answers with the nose -- anything aiming (thrown acorns, barricades) then works for both.
 func get_aim_point() -> Vector3:
 	return global_position + get_facing_direction() * 2.0
+
+
+## The raw angle, for the wire. `get_facing_direction` is the vector everything in the game uses;
+## a snapshot wants one float rather than three.
+func get_facing_angle() -> float:
+	return _facing
 
 
 func get_facing_direction() -> Vector3:
@@ -550,6 +577,14 @@ func _resolve_swing_on_breakables(forward: Vector3, limit: float) -> void:
 func _physics_process(delta: float) -> void:
 	_tick_timers(delta)
 
+	# A PUPPET DOES NOT SIMULATE. Not its controller, not its physics, not gravity -- it is shown
+	# where the server says it is. Running `move_and_slide` here as well would fight the incoming
+	# poses and produce a mouse that jitters against every wall it stands near, which is the
+	# classic look of a client that thinks it is also the authority.
+	if _puppet:
+		_follow_pose(delta)
+		return
+
 	if _scruffed:
 		# Still falls, still slides off whatever it was knocked onto. A scruffed mouse frozen
 		# in mid-air is the sort of thing you notice from across the arena.
@@ -583,6 +618,87 @@ func input() -> InputFrame:
 ## Hand this mouse somebody's intent. The door a received packet comes through.
 func drive(frame: InputFrame) -> void:
 	_input = frame if frame != null else InputFrame.new()
+
+
+## Whether this machine simulates this mouse, or merely draws it.
+func set_puppet(on: bool) -> void:
+	if _puppet == on:
+		return
+	_puppet = on
+	# A puppet must not be shoved around by anybody else's physics either -- it has no authority
+	# to be pushed, and a depenetration here would be a position the server never agreed to.
+	set_collision_layer_value(1, not on)
+	if on:
+		velocity = Vector3.ZERO
+
+
+func is_puppet() -> bool:
+	return _puppet
+
+
+## What the server says. Called once per snapshot, not once per frame.
+##
+## The previous target becomes the starting point rather than the mouse's CURRENT position, so a
+## packet that arrives late does not restart the blend from wherever the interpolation had got to
+## -- that turns every hiccup into a visible stutter backwards.
+func apply_pose(at: Vector3, facing: float, flags: int) -> void:
+	_pose_from = _pose_to if _pose_blend < 1.0 else global_position
+	_facing_from = _facing_to if _pose_blend < 1.0 else _facing
+	_pose_to = at
+	_facing_to = facing
+	_pose_blend = 0.0
+
+	# THE SWING IS AN EDGE, NOT A STATE, which is why it is the one flag not simply assigned. A
+	# swing is an animation with a length of its own; setting a bool every thirtieth of a second
+	# would restart the arc four times over the course of one swipe. The damage is not replicated
+	# at all and must not be -- it resolved on the server, and this end is drawing what happened.
+	#
+	# A swing shorter than the snapshot interval could fall between two packets and never be seen.
+	# `attack_swing` is an order of magnitude longer than 1/30s, so that is a real limit of this
+	# approach and not a live one; a fast attack added later is the thing that would break it.
+	var swinging := (flags & Snapshot.Flag.SWINGING) != 0
+	if swinging and not _shown_swing and _swing_arc != null:
+		_swing_arc.play(attack_windup)
+	_shown_swing = swinging
+
+	var down := (flags & Snapshot.Flag.SCRUFFED) != 0
+	if down != _scruffed:
+		# Set directly rather than through `scruff()`: that is the RULE, and rules resolve on the
+		# server. This is the picture of a rule that already resolved somewhere else.
+		_scruffed = down
+
+	# A TELEPORT, NOT A GLIDE, when the gap is absurd. Respawns put a mouse most of an arena away
+	# and interpolating across that draws it skating through the yard at fifty metres a second --
+	# which reads as a bug in the movement rather than as a respawn.
+	if global_position.distance_to(at) > POSE_SNAP:
+		_pose_from = at
+		_facing_from = facing
+		_pose_blend = 1.0
+		global_position = at
+		_face_instantly(facing)
+
+
+## Metres of disagreement past which a puppet stops interpolating and simply appears. Roughly a
+## body length times ten -- comfortably more than a bad frame of lag at sprint speed, comfortably
+## less than a respawn.
+const POSE_SNAP: float = 4.0
+
+## How much of the remaining gap to close each tick. Not a fixed duration, because snapshots do
+## not arrive on a fixed schedule once there is a real network under them; an exponential chase
+## degrades into "a bit behind" rather than into "arrived early and stopped".
+const POSE_CATCHUP: float = 18.0
+
+
+func _follow_pose(delta: float) -> void:
+	_pose_blend = minf(1.0, _pose_blend + delta * POSE_CATCHUP)
+	global_position = _pose_from.lerp(_pose_to, _pose_blend)
+	_face_instantly(lerp_angle(_facing_from, _facing_to, _pose_blend))
+
+
+func _face_instantly(angle: float) -> void:
+	_facing = wrapf(angle, -PI, PI)
+	if _visual != null:
+		_visual.rotation.y = _facing
 
 
 func _tick_timers(delta: float) -> void:

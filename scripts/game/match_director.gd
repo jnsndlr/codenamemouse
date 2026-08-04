@@ -143,6 +143,9 @@ const SEATS: Array[Dictionary] = [
 ## line up.
 @export var crew_size: int = 5
 @export var bot_scene: PackedScene = preload("res://scenes/actors/bot.tscn")
+## What a seat holding a remote human gets. The same scene the local player is, because a
+## networked player must not be a different kind of thing from a local one.
+@export var player_scene: PackedScene = preload("res://scenes/player/player.tscn")
 
 var _nests: Array[Nest] = []
 var _banners: Array[Banner] = []
@@ -159,6 +162,12 @@ var _spawned: int = 0
 var _down: Dictionary = {}
 ## Mice whose signals are already connected, so the roster can be rescanned freely.
 var _known: Dictionary = {}
+## "side:seat" -> Mouse (M7 step 4). The snapshot is seat-indexed, so replication needs to be able
+## to ask "who is in chair 7" without searching the tree and hoping the answer is stable.
+var _seated: Dictionary = {}
+## Whether this machine applies the rules. False on a client, where the server owns all of them
+## and this node's only remaining job is having spawned the mice.
+var _simulating: bool = true
 
 
 func _ready() -> void:
@@ -175,16 +184,35 @@ func _ready() -> void:
 	_clock = match_seconds
 	_cheese = [starting_cheese, starting_cheese]
 
+	# The local human takes whatever seat this machine holds -- blue 0 when hosting or offline,
+	# and whatever the host handed out when joining. `local_seat` is empty only while a client is
+	# still connecting, which is the one case where blue 0 is a guess rather than an answer.
 	_player = get_node_or_null(player_path) as Mouse
 	if _player != null:
-		_player.set_team(Team.BLUE)
-		_name_seat(_player, Team.BLUE, 0)
+		var mine := _seats().seat_of(_local_peer())
+		var side: int = mine[0] if not mine.is_empty() else Team.BLUE
+		var seat: int = mine[1] if not mine.is_empty() else 0
+		_player.set_team(side)
+		_name_seat(_player, side, seat)
+		# ONLY THE SERVER MAY REGISTER A CHAIR HERE. A client does not know its seat yet -- the
+		# fallback above guesses blue 0 -- and registering that guess made `adopt_seating` see a
+		# non-empty table and decline to correct it. The client then listened to blue 0's poses
+		# for the whole match: its mouse stood exactly where the host's was standing, which looks
+		# like "no input is getting through" and is nothing of the kind.
+		if _local_is_server():
+			_remember_seat(_player, side, seat)
 		_send_home(_player)
 
 	# Deferred, because a node cannot gain siblings while its parent is still building its
 	# children -- `add_sibling` refuses outright during `_ready`. One frame later the arena is
 	# whole, which is also when the navmesh is finished baking and there is somewhere to walk.
-	_spawn_bots.call_deferred()
+	#
+	# A CLIENT WAITS FOR ITS SEATING INSTEAD. It cannot know which chair is its own until the
+	# server says so, and spawning first would put a bot in the chair the human is about to sit
+	# in -- two mice in one seat, which the snapshot has no way to express and the player would
+	# see as their own body standing next to them.
+	if _local_is_server():
+		_spawn_bots.call_deferred()
 	event.emit("MATCH START -- steal the %s banner" % Team.name_of(Team.RED))
 
 
@@ -195,6 +223,102 @@ func _ready() -> void:
 ## and, later, the per-team visibility filter at M5.
 func get_player() -> Mouse:
 	return _player
+
+
+## The mouse this machine's human is driving. The same thing as `get_player` today, and named
+## separately because M7's survey found "the player" assumed singular in thirty-one places -- this
+## is the one that means "mine" rather than "the only one".
+func local_mouse() -> Mouse:
+	return _player
+
+
+## Who is in a given chair, or null. The question replication asks thirty times a second.
+func seat_mouse(side: int, seat: int) -> Mouse:
+	# VALIDITY BEFORE THE CAST, not after. Typing the variable `Mouse` performs the cast on
+	# assignment, and casting a freed object throws -- so the `is_instance_valid` guard that looks
+	# like it covers this was already too late. Swapping a bot for a remote player frees a mouse
+	# every time somebody joins, and this is asked ten times per snapshot, thirty times a second.
+	var who: Variant = _seated.get("%d:%d" % [side, seat])
+	if who == null or not is_instance_valid(who):
+		return null
+	return who as Mouse
+
+
+## Stop applying the rules. Called on a client, where every rule resolves on the server.
+##
+## The mice stay, the HUD stays, the scene stays -- what stops is this node's `_physics_process`,
+## which is where pickup, capture, scruffing, respawn and the whole cheese loop live. That they are
+## all in one place is what makes this one line instead of a client-side flag on every rule, and it
+## is the survey's "MatchDirector is already the sim" being cashed in.
+func set_simulating(on: bool) -> void:
+	_simulating = on
+	set_physics_process(on)
+
+
+## A client learning the seating for the first time: take our own chair, then fill the rest.
+##
+## Called once, when the first seating message arrives. Everything here is deferred until then
+## because a client that guessed would guess blue seat 0 and be wrong for every player but the
+## host.
+func adopt_seating(roster: Seats, local_peer: int) -> void:
+	var mine := roster.seat_of(local_peer)
+	if mine.is_empty() or _player == null:
+		return
+	if not _seated.is_empty():
+		return
+
+	_player.set_team(mine[0])
+	_name_seat(_player, mine[0], mine[1])
+	_remember_seat(_player, mine[0], mine[1])
+	_spawn_bots()
+
+
+## Put a remote human's mouse in a chair a bot was holding, or hand it back.
+##
+## THE MOUSE IS REPLACED RATHER THAN RETROFITTED. A `Bot` ignores the input frame -- its `_control`
+## reads a navigation path -- so driving one with a received frame arrives, is applied, and does
+## nothing, which is exactly the failure this was found by: the host logged 285 inputs a second
+## while the mouse stood still. The seat gets a `Player` marked remote instead, so a networked
+## human runs the *identical* code a local one does, stamina and speed ladder included.
+##
+## Placed at the nest rather than where the bot was standing, for the same reason a respawn is:
+## a mouse that appears mid-corridor belongs to a match nobody was watching.
+func seat_remote(side: int, seat: int, remote: bool) -> void:
+	if not _simulating or player_scene == null or bot_scene == null:
+		return
+	var current := seat_mouse(side, seat)
+	if current != null:
+		var already_remote := current is Player
+		if already_remote == remote:
+			return
+		_known.erase(current)
+		current.queue_free()
+
+	var mouse: Mouse = (player_scene if remote else bot_scene).instantiate()
+	if mouse == null:
+		return
+	var post: Dictionary = SEATS[seat % SEATS.size()]
+	mouse.name = "%s%s%d" % ["Peer" if remote else "Bot", Team.name_of(side), seat]
+	mouse.team = side
+	if remote:
+		mouse.call("set_remote", true)
+	else:
+		mouse.role = Bot.DEFENDER if bool(post["defends"]) else Bot.RAIDER
+		mouse.preferred_class = int(post["class"])
+	_name_seat(mouse, side, seat)
+	_remember_seat(mouse, side, seat)
+	mouse.position = _nests[side].spawn_point()
+	add_sibling(mouse)
+	_send_home(mouse)
+
+
+func _local_is_server() -> bool:
+	var net := get_node_or_null(^"/root/Net")
+	return net == null or bool(net.call("is_server"))
+
+
+func _remember_seat(mouse: Mouse, side: int, seat: int) -> void:
+	_seated["%d:%d" % [side, seat]] = mouse
 
 
 func nest_of(side: int) -> Nest:
@@ -610,6 +734,29 @@ func _scan_roster() -> void:
 		mouse.scruffed.connect(_on_scruffed)
 
 
+## The seat roster this match is being played from.
+##
+## Asked of the `Net` autoload rather than owned here, because occupancy outlives the arena: a
+## client is seated the moment it connects, which is before the scene it will play in exists. The
+## fallback is for the audits, which build a director without a session.
+##
+## OFFLINE IS THE SAME TABLE with one human in blue 0, so there is no branch below for
+## "single player" -- that phrase does not appear anywhere in this file and should not start now.
+func _seats() -> Seats:
+	var net := get_node_or_null(^"/root/Net")
+	if net != null:
+		net.call("ensure_crew_size", crew_size)
+		return net.call("seats")
+	var solo := Seats.new(crew_size)
+	solo.seat_host(NetTransport.SERVER_ID)
+	return solo
+
+
+func _local_peer() -> int:
+	var net := get_node_or_null(^"/root/Net")
+	return net.call("local_peer") if net != null else NetTransport.SERVER_ID
+
+
 ## Fill both crews from `SEATS`. Seat 0 on blue is the player's, if there is one.
 ##
 ## Both crews read the same table, so they are mirror images. That is worth more than variety
@@ -619,9 +766,21 @@ func _scan_roster() -> void:
 func _spawn_bots() -> void:
 	if bot_scene == null:
 		return
+	var roster := _seats()
 	for side in [Team.BLUE, Team.RED]:
-		var first := 1 if side == Team.BLUE and _player != null else 0
-		for seat in range(first, maxi(first, crew_size)):
+		for seat in range(roster.crew_size()):
+			# A SEAT, NOT A BOT COUNT (M7 step 3). This used to be `range(first, crew_size)` with
+			# `first` being 1 when a player happened to exist -- which is correct, and cannot
+			# answer "seat 3 just disconnected mid-match, whose bot is that now". The roster
+			# answers it: every seat is filled, and the ones with a human in them are skipped
+			# here because that human's mouse arrives another way.
+			# On a client the only chair to skip is our own -- every other seat gets a mouse here,
+			# human or bot, because a remote player's mouse is drawn from snapshots exactly as a
+			# remote bot's is and there is nothing to tell them apart at this end.
+			if seat_mouse(side, seat) != null:
+				continue
+			if _simulating and roster.is_human(side, seat):
+				continue
 			var bot := bot_scene.instantiate() as Mouse
 			if bot == null:
 				push_error("match director: bot scene is not a Mouse")
@@ -642,6 +801,12 @@ func _spawn_bots() -> void:
 			# frame and is moved afterwards depenetrates against its old overlap and its new
 			# transform at once, which fires whoever was standing there across the arena.
 			bot.position = _nests[side].spawn_point()
+			_remember_seat(bot, side, seat)
+			# On a client nothing simulates, including the AI: this mouse is a picture of a bot
+			# the server is thinking for, and letting it also think here would have it walk away
+			# from where the snapshots keep putting it.
+			if not _simulating:
+				bot.set_puppet(true)
 			add_sibling(bot)
 			# Then placed properly, once the model exists to be turned. The same call a respawn
 			# uses -- one way to put a mouse on its feet, first time or fifth.

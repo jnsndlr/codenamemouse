@@ -1643,14 +1643,167 @@ hundred miles away, so there was no version of those four that could have worked
 > earlier in the same tick is still what `input()` returns, so setting the private field alone read
 > back as whatever the previous check had aimed at.
 
+#### In progress — seats (landed)
+
+Step 3 is done. [`seats.gd`](scripts/net/seats.gd) is ten chairs — five a crew — each holding
+either a peer id or a bot, and [`net_session.gd`](scripts/net/net_session.gd) is the one object
+that owns a transport and a roster. `MatchDirector` asks it questions; nothing else in the game has
+heard of a socket.
+
+- **Occupancy is a table now, not an emergent property of a `for` loop.** It used to be
+  `range(first, crew_size)` with `first` being 1 when a player happened to exist — a perfectly good
+  line that cannot answer *"seat 3 just disconnected mid-match, whose bot is that now"*.
+- **The occupant is a peer id and `BOT` is zero**, because `NetTransport` already promises ids start
+  at 1. So "is this seat human" is `> 0` rather than a parallel boolean nobody keeps in step — and
+  **offline needs no special case at all**: it is the same table with peer 1 in blue seat 0 and
+  bots everywhere else. Single player is a listen server with no clients. The phrase "single
+  player" does not appear in the director and should not start now.
+- **Joiners balance by human count, not by free seats.** Every seat is always occupied by
+  somebody, so "which crew has room" is meaningless; the question is which has fewer *people*,
+  since a bot is not the opponent anyone came for.
+- **Leaving hands the chair to a bot and the seat never disappears.** The alternative is that
+  quitting hands your opponents a numbers advantage — a crew that loses a human must not lose a
+  mouse.
+
+> **`crew_size` would have become a dial that does nothing**, which is the worst kind of broken
+> setting because it still looks adjustable. The roster was built to its own default of five, the
+> director asks `roster.crew_size()`, and the `@export` the README tells you to fiddle with would
+> have been silently ignored. `ensure_crew_size` reconciles them, and refuses once anybody else is
+> seated — resizing crews mid-match either strands a peer in a chair that no longer exists or
+> invents chairs nobody is in.
+
+**`--host [port]` and `--join <address[:port]>` exist before any Host button**, and that is a
+testability decision rather than a shortcut. Checkpoint 1 is *two windows on one machine*; with
+flags a tool can launch both and assert what happened, and with buttons only it can be demonstrated
+and never checked. The plan's own warning about this milestone is that the failures that matter
+still look right from inside a match.
+
+> **`tools/seat_audit.gd` launches two real Godot processes** and reads what each concluded about
+> its own seating. Slower and uglier than anything else in `tools/`, and the only kind of test that
+> can see the failures this step can have: a client that connects but is never seated, a host that
+> seats it and spawns a bot in the same chair, a disconnect that deletes the chair instead of
+> handing it over. Verified by breaking the balancing — five assertions fail, and **the socket half
+> catches it as well as the table half**, which is the argument for the expensive test arriving as
+> a result rather than as a hope.
+
+> **`--quit-after` counts FRAMES, not seconds, and that cost the first run of the audit.** At 1200
+> the host had already exited before the client was launched twenty-five seconds later, and the
+> symptom was an unconnectable socket — which reads as a broken transport rather than as a process
+> that is no longer running.
+
+> **And then the audit found a real one: quitting behaved exactly like crashing.** The departure
+> checks failed once the waits were tightened, because the test killed its client outright and ENet
+> only learns about a hard kill when the peer timeout expires — five to thirty seconds, during
+> which the crew is a mouse short and the chair is still nominally occupied. That is *correct* for
+> a crash and was hiding the fact that the ordinary case, a person quitting, was no better.
+> `NetSession._exit_tree` now closes the socket, so leaving says so and the host reseats at once.
+> The audit was changed to let its client end itself rather than be killed, which is both the case
+> worth asserting and the reason the fix exists.
+
+> **Two smaller traps, both about evidence.** `OS.create_process` hands back no pipe and both
+> processes share one `user://logs/` that they would clobber, hence `--audit-log <path>`; and the
+> command line is acted on only *after* the whole line is parsed, because `--audit-log` may follow
+> `--host` and starting the socket first would send the interesting lines to stdout alone. Also,
+> **`timeout` discards a windowed run's stdout** — the same SIGTERM-loses-the-buffer finding M6.5
+> made about the log file, met again from the other direction, and worth remembering as a property
+> of the tooling rather than of either subsystem.
+
+#### In progress — mice on a wire (landed)
+
+Step 4's first half is done, and it is the first half of this milestone a person can look at.
+[`snapshot.gd`](scripts/net/snapshot.gd) is where every mouse is thirty times a second,
+[`net_message.gd`](scripts/net/net_message.gd) is what may travel and how reliably, and
+[`net_match.gd`](scripts/net/net_match.gd) is the two ends of the pipe. Two windows, one seat each,
+bots in the other eight — checkpoints 1 and 2, met.
+
+Score, cheese, health and the tunnel network are **not** in it. That is the "on change" half and
+step 5's filtered half; the file says so out loud rather than shipping a stub that looks like a
+feature.
+
+- **The snapshot is seat-indexed, and that is what step 3 bought.** There are no spawn messages in
+  this protocol and there do not need to be: the roster says which chairs exist, so a client builds
+  its ten mice from the seating and every packet afterwards only says *"chair 7 is here now"*.
+  Spawn/despawn replication is one of the fiddliest parts of any netcode and this design does not
+  have one. A key is `team * crew_size + seat`, one byte.
+- **A puppet is a flag on `Mouse`, not a subclass.** What changes is one branch in the tick; the
+  model, the grass bend, the banner and the swing arc all have to keep working identically, and a
+  `PuppetMouse` would have to re-inherit them from whichever of `Player` or `Bot` it was replacing.
+  Authority also *changes mid-match* — somebody disconnects and a bot takes their chair — which a
+  class cannot do and a flag can.
+- **Snapshots are unreliable and inputs are reliable, and both are decisions.** A resent snapshot
+  describes a world that has moved on and holds the queue up while doing so; a lost keypress is a
+  swing that never happened. The arguable one is input, which can head-of-line block — the trigger
+  to revisit is a playtest with real loss, not a hunch.
+- **The seat lookup is the security boundary.** A packet cannot name the mouse it wants to drive;
+  it drives whichever chair its sender is sitting in. Cheating becomes structurally impossible
+  rather than merely discouraged, and it costs one line.
+- **The swing replicates as an edge, not a state.** Assigning a bool at 30Hz would restart the arc
+  a dozen times across one swipe. The damage is not replicated at all and must not be — it resolved
+  on the server, and the client is drawing what already happened.
+
+> **A host logging 285 inputs a second while the mouse stood perfectly still.** The seat held a
+> `Bot`, and a bot's `_control` reads a navigation path — so a received frame arrived, was applied,
+> and did nothing. Every count on both ends was healthy. A seat with a human in it gets a `Player`
+> marked remote instead, so a networked player runs the *identical* code a local one does, stamina
+> and speed ladder included. **The lesson is the general one for this milestone**: the pipe moving
+> bytes and the pipe moving the right mouse are different claims that look the same from inside.
+
+> **A client that guessed its seat mirrored the host.** The director's fallback is blue seat 0,
+> which is right for a host and wrong for everybody else, and registering that guess made
+> `adopt_seating` see a table already filled and decline to correct it. The client then listened to
+> blue 0's poses for the whole match: **its own body stood exactly where the host's was standing**
+> while its keys moved a mouse somewhere else entirely. It reads as "no input is getting through"
+> and is nothing of the kind.
+
+> **`as Mouse` throws on a freed object, so three guards were written the right way round and
+> evaluated the wrong way round.** `is_instance_valid(mouse)` cannot save a cast that already
+> happened on the line above it. Nothing had ever exercised it: through M6 a mouse was scruffed and
+> respawned but never *freed*, and M7 frees one every time somebody joins and a bot gives up its
+> chair — the first mid-match free in the game's history. It turned up in `spotting.gd`,
+> `vitals.gd` and the director's own seat lookup, which is asked ten times per snapshot.
+
+> **Being online and being through the door are different, and sending into the gap costs one ENet
+> error per physics tick.** `join()` returns the instant the socket exists; the handshake finishes
+> later, and on a cold start "later" is several seconds of arena loading. Hence `is_established()`
+> alongside `is_connected_up()` — the default is honest about not knowing, and `ENetTransport`
+> overrides it because it can tell.
+
+> **`tools/replication_audit.gd` is the seat audit's question one step on**: two real processes, in
+> a *real arena*, one of them driven by `--autopilot` — the multiplayer equivalent of
+> `bot_soak.gd`, and there for the same reason. A headless client has no keyboard, so without it
+> every automated test watches a mouse stand still and cannot tell a working input path from a
+> broken one. Both ends log **positions**, not just counts, and the tool compares the two logs:
+> that the client's mouse went somewhere, that it is not the host's mouse, that nobody drove the
+> host's mouse, and that the two ends agree which mouse is whose. Compared as averages rather than
+> instant-for-instant, because the logs are written on unsynchronised five-second timers in
+> different processes — a limit worth stating, since it is the reason the tolerance is metres.
+
+> **And it found one on its first honest run: a client that connects before it enters a match is
+> never told its seat.** The seating was sent when the roster changed, which is a moment on the
+> *server's* clock — a client sitting on the title screen, or one that quit to the menu and came
+> back, has no arena and nothing listening, so the one message telling it who it is went into a
+> process that could not use it. **Snapshots then arrived at a healthy rate and zero of them were
+> applied**, while the host walked a mouse around a yard its owner could not see. There is a
+> `HELLO` now, sent until answered.
+
+> **The first version of the audit passed, and it passed by luck.** A client launched straight into
+> a match blocks its own main loop long enough loading the arena that the seating always arrives
+> afterwards. `--play [seconds]` exists so the gap between connecting and entering can be made to
+> happen on purpose — the delay is not a convenience, it is the only reason the suite tests a
+> design rather than a coincidence. This is the fourth time this project has caught a test that
+> could not fail, and the first time the cause was **timing that happened to be favourable**.
+
 #### Sequencing — five checkpoints, each playable
 
 Ordered so that something is testable at every stage and the risky part is not last.
 
 1. **Two windows on one machine, one seat each, no bots.** Movement and melee only. This is where
-   the input-frame refactor lands and where it either holds or does not.
+   the input-frame refactor lands and where it either holds or does not. **Met** — and it held:
+   the frame refactor needed no revision, and every bug found at this checkpoint was about seating
+   or about who owns a mouse, not about the intent type.
 2. **Bots fill the empty seats.** Proves seat ownership and that the server is the only thing
-   thinking.
+   thinking. **Met** — ten mice, one simulation, and a client whose bots are pictures of bots.
+   Except that they still do not Scurry, which the risk below says is now blocking and is right.
 3. **The objective loop over the wire** — banner, capture, scruff, respawn, cheese. All of it is
    already in one node; this is mostly proving that.
 4. **Tunnels and the visibility filter.** The riskiest checkpoint, and deliberately not last:
@@ -1843,11 +1996,30 @@ identical path. Five suites pass — 15 tunnel scenarios, 19 match groups, 37 ch
 wire checks, 18 intent checks — and a 30-second soak still builds 73 cells across 2 mouths with
 nothing wedged.
 
-**Next: steps 3 and 4 — seats, then state at 30Hz.** A seat is a team, an index, and an occupant
-that is either a peer id or a bot; `MatchDirector.SEATS` already carries the role and class, and
-`crew_size` becomes seats-minus-humans. Then mice as transform plus a state byte, with clients
-interpolating. That is checkpoint 1 — two windows, one seat each, no bots — which is where the work
-so far either holds or does not. Mac only — the web build is a rendering decision, not an export target, and stays at M9.
+**Step 3 is done: seats.** Ten chairs, each holding a peer id or a bot, owned by a `NetSession`
+autoload that is the only thing in the game with a socket. Joining takes a chair on the emptier
+crew; leaving hands it back to a bot without the chair disappearing. Offline is the same table with
+one human in it, so there is no second code path. `--host` and `--join` exist before any button, so
+`tools/seat_audit.gd` can launch **two real processes** and assert the seating rather than a human
+having to watch it. Six suites pass.
+
+**Step 4's first half is done: mice on a wire.** Poses at 30Hz, seat-indexed so the protocol needs
+no spawn messages at all; clients interpolate, puppets simulate nothing, and a remote human's chair
+holds a `Player` rather than a `Bot` — which is a distinction that cost a real bug to learn. That
+is **checkpoints 1 and 2 met**: two windows, one seat each, bots in the other eight, movement and
+melee crossing the wire both ways. `tools/replication_audit.gd` puts two real processes in a real
+arena and compares what each says about where the same mouse is; it found that a client which
+connects *before* it enters a match was never told its seat, and that the first version of itself
+had been passing on favourable timing. Seven suites pass.
+
+**Next: the other half of step 4 — the things that change rather than move.** Score, cheese,
+health, the banner and the clock, sent on change instead of thirty times a second. That is
+checkpoint 3, the objective loop over the wire, and it is mostly proving that `MatchDirector`
+really is the one place every rule resolves.
+
+> **What a client still cannot see:** its own health bar, the score, the cheese pool, whether
+> anybody is carrying a banner, and every tunnel in the arena. Two people can meet in a yard and
+> hit each other; they cannot yet play a match. Mac only — the web build is a rendering decision, not an export target, and stays at M9.
 
 **Then M7 — real multiplayer.** *Does it survive contact with a second human?* The
 survey above is the important part: `Mouse._control` is already the driver seam, `MatchDirector`

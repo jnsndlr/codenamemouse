@@ -69,8 +69,15 @@ func _draw() -> void:
 	var ui := HudSkin.scale_for(get_viewport_rect().size)
 
 	for key: Variant in _shown.keys():
+		# Validity BEFORE the cast -- `as Mouse` throws on a freed object, so this guard was
+		# unreachable for the case it was written for. Same shape as `spotting.gd`'s, and the same
+		# reason nobody noticed: nothing freed a mouse mid-match until M7 started swapping a bot
+		# out of a chair every time somebody joined.
+		if key == null or not is_instance_valid(key):
+			_shown.erase(key)
+			continue
 		var mouse := key as Mouse
-		if mouse == null or not is_instance_valid(mouse):
+		if mouse == null:
 			_shown.erase(key)
 			continue
 
