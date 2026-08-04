@@ -665,6 +665,12 @@ func apply_pose(at: Vector3, facing: float, flags: int, health: int) -> void:
 		_swing_arc.play(attack_windup)
 	_shown_swing = swinging
 
+	# Set directly, not through `set_plane`: that is the door the dig controller and the transit
+	# use, and on a client neither of them runs. This is the layer this mouse is *on*, decided
+	# elsewhere -- and everything that reads it (the cutaway, the grass, the minimap, a defender's
+	# "they are three planes down") gets the right answer without knowing where it came from.
+	_plane = (flags & Snapshot.PLANE_MASK) >> Snapshot.PLANE_SHIFT
+
 	var down := (flags & Snapshot.Flag.SCRUFFED) != 0
 	if down != _scruffed:
 		# Set directly rather than through `scruff()`: that is the RULE, and rules resolve on the

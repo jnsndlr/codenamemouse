@@ -252,6 +252,18 @@ var _lids: Array[MeshInstance3D] = []
 var _lamp_roots: Array[Node3D] = []
 var _focus: int = 0
 var _graph: TunnelGraph
+## A network this machine does not decide anything about (M7 step 5).
+##
+## THE GUARD IS HERE, ON THE THING THAT OWNS THE STATE, and that placement is the whole argument.
+## Five separate nodes cut earth -- the dig controller, the cave-in, the barricade, a bot's digger,
+## and a shaft taken by anybody -- and guarding each of them is five chances to miss one and a
+## sixth the day somebody adds a rule. Refusing at the state instead makes it structurally
+## impossible for a client to change the world: there is no caller that can sneak past, because
+## every one of them ends up here.
+##
+## The `adopt_*` methods deliberately DO NOT check it. They are not callers, they are the wire, and
+## everything they write already happened somewhere that was allowed to decide it.
+var _puppet: bool = false
 
 
 ## The cell books, before anything is drawn.
@@ -546,6 +558,8 @@ func remove_rock(plane: int, cell: Vector2i) -> bool:
 ## same trick for tunnels and for sightings, and doing it once on something static is how the shape
 ## gets found before it matters.
 func reveal_vein(plane: int, cell: Vector2i, team: int) -> int:
+	if _puppet:
+		return 0
 	if plane <= 0 or plane >= PLANE_COUNT or not _rock[plane].has(cell):
 		return 0
 	var bit := 1 << clampi(team, 0, 1)
@@ -641,6 +655,8 @@ func is_sealed(cell: Vector2i) -> bool:
 ## barricade collapse the cell instead would have rebuilt a plane's geometry every time one went
 ## up, and would have made putting one down indistinguishable from digging a fresh corridor.
 func block_cell(plane: int, cell: Vector2i) -> bool:
+	if _puppet:
+		return false
 	if not is_dug(plane, cell) or _obstructed[plane].has(cell):
 		return false
 	_obstructed[plane][cell] = true
@@ -649,6 +665,8 @@ func block_cell(plane: int, cell: Vector2i) -> bool:
 
 
 func unblock_cell(plane: int, cell: Vector2i) -> bool:
+	if _puppet:
+		return false
 	if plane < 0 or plane >= PLANE_COUNT or not _obstructed[plane].has(cell):
 		return false
 	_obstructed[plane].erase(cell)
@@ -749,6 +767,30 @@ func known_tunnel_cells(plane: int, team: int) -> Array[Vector2i]:
 	return found
 
 
+## The raw mask for one cell, for the one caller that must copy it rather than ask about it.
+##
+## `is_tunnel_known` answers a question about one crew and is what the game asks. Replication is
+## not asking a question -- it is transcribing this end's answer so the other end has the same one
+## -- so it wants the bits themselves. Deliberately three narrow accessors rather than one that
+## hands out the dictionaries: a caller with the dictionary can write to it.
+func tunnel_known_bits(plane: int, cell: Vector2i) -> int:
+	if plane < 0 or plane >= PLANE_COUNT:
+		return 0
+	return int(_tunnel_known[plane].get(cell, 0))
+
+
+func shaft_known_bits(plane: int, cell: Vector2i) -> int:
+	if plane < 0 or plane >= PLANE_COUNT:
+		return 0
+	return int(_shaft_known[plane].get(cell, 0))
+
+
+func rock_known_bits(plane: int, cell: Vector2i) -> int:
+	if plane < 0 or plane >= PLANE_COUNT:
+		return 0
+	return int(_known[plane].get(cell, 0))
+
+
 func is_tunnel_known(plane: int, cell: Vector2i, team: int) -> bool:
 	if plane <= 0 or plane >= PLANE_COUNT:
 		return false
@@ -801,6 +843,8 @@ func can_stand(plane: int, cell: Vector2i) -> bool:
 ## Cut a floor cell. Returns false if it was already dug -- so callers can tell a fresh
 ## segment from a no-op without re-querying -- and also if it was refused outright.
 func dig(plane: int, cell: Vector2i, team: int = -1) -> bool:
+	if _puppet:
+		return false
 	if plane <= 0 or plane >= PLANE_COUNT or _cells[plane].has(cell):
 		return false
 	if not in_bounds(cell):
@@ -845,6 +889,8 @@ func dig(plane: int, cell: Vector2i, team: int = -1) -> bool:
 ## (GDD section 3); anyone caught BEYOND it can dig their way out, slowly, or take the six
 ## seconds. Both are consequences worth having.
 func collapse(plane: int, cell: Vector2i) -> bool:
+	if _puppet:
+		return false
 	if plane <= 0 or plane >= PLANE_COUNT or not _cells[plane].has(cell):
 		return false
 	if _shafts[plane].has(cell) or has_shaft_up(plane, cell):
@@ -859,6 +905,97 @@ func collapse(plane: int, cell: Vector2i) -> bool:
 	_relight(plane)
 	cell_collapsed.emit(plane, cell)
 	tunnel_revealed.emit(plane, TEAM_BITS)
+	return true
+
+
+# ------------------------------------------------------------------- what the wire is allowed to say
+
+
+## Stop deciding. Called on a client, where every cell of earth is cut somewhere else.
+##
+## THE PLAYABLE CONSEQUENCE, said plainly: a client's network contains only the cells its own crew
+## has cut or can currently see. That is not a reduced copy of the host's world, it *is* M5's
+## pillar expressed as geometry -- and it works visually for a reason that is not luck.
+## `tunnel_sight.gd` defines line of sight as "every cell between here and there is open", so the
+## set of cells a crew can see is very nearly the set it could have drawn anyway. What is missing
+## was behind a bend or behind earth.
+func set_puppet(on: bool) -> void:
+	_puppet = on
+
+
+## A cell that exists somewhere else, with the knowledge bits it was sent with.
+##
+## The bits are taken rather than derived. `_learn_tunnel_cell` has junction rules -- breaking into
+## an enemy corridor makes the new cell shared -- and re-running them here against a partial copy
+## of the world would reach a different answer from the server's for the same cell. There is one
+## place that decides who knows what, and it is not this end.
+func adopt_cell(plane: int, cell: Vector2i, bits: int) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT or not in_bounds(cell):
+		return false
+	var fresh := not _cells[plane].has(cell)
+	if fresh:
+		_cells[plane][cell] = true
+		_mark_mask(plane, cell, true)
+		_refresh_cell(plane, cell)
+		_rebuild_walls(plane)
+		_relight(plane)
+	if int(_tunnel_known[plane].get(cell, 0)) != bits:
+		_tunnel_known[plane][cell] = bits
+		tunnel_revealed.emit(plane, bits)
+	if fresh:
+		cell_opened.emit(plane, cell)
+	return fresh
+
+
+func adopt_shaft(plane: int, cell: Vector2i, bits: int) -> bool:
+	if plane < 0 or plane + 1 >= PLANE_COUNT:
+		return false
+	var fresh := not _shafts[plane].has(cell)
+	_shafts[plane][cell] = true
+	_shaft_known[plane][cell] = bits
+	if fresh:
+		_refresh_cell(plane, cell)
+		_refresh_cell(plane + 1, cell)
+		_relight(plane)
+		_relight(plane + 1)
+		shaft_opened.emit(plane, cell)
+	return fresh
+
+
+## Which crews have found a seam. The rock ITSELF is not sent and never needs to be: it is laid
+## from `rock_seed` at startup, so both ends generate the identical stone without a byte crossing
+## the wire. Only who has run into it is knowledge, and only knowledge is per-crew.
+func adopt_rock(plane: int, cell: Vector2i, bits: int) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT or not _rock[plane].has(cell):
+		return false
+	if int(_known[plane].get(cell, 0)) == bits:
+		return false
+	_known[plane][cell] = bits
+	_announce_rock(plane, bits)
+	return true
+
+
+## A cell this crew is no longer allowed to know: a glimpse that has aged out of the fog.
+##
+## THE SAME MACHINERY AS A COLLAPSE AND DELIBERATELY THE SAME SIGNAL, because on a client "gone
+## from my map" and "gone from the world" are the same event -- a client's map *is* its world, and
+## every cache over `_cells` has to hear about it either way.
+##
+## It is a rule on a host and a fact on a client, which is why it is here rather than in
+## `collapse`: collapsing refuses on a shaft cell, and forgetting a shaft you glimpsed has to
+## work.
+func forget_cell(plane: int, cell: Vector2i) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT or not _cells[plane].has(cell):
+		return false
+	_cells[plane].erase(cell)
+	_tunnel_known[plane].erase(cell)
+	_shafts[plane].erase(cell)
+	_shaft_known[plane].erase(cell)
+	_grids[plane].set_cell_item(Vector3i(cell.x, 0, cell.y), GridMap.INVALID_CELL_ITEM)
+	_mark_mask(plane, cell, false)
+	_rebuild_walls(plane)
+	_relight(plane)
+	cell_collapsed.emit(plane, cell)
 	return true
 
 
@@ -903,6 +1040,8 @@ func can_shaft_up(plane: int, cell: Vector2i) -> bool:
 
 ## Sink a shaft from `plane` down to `plane + 1`, at the cell the player is standing on.
 func dig_shaft_down(plane: int, cell: Vector2i, team: int = -1) -> bool:
+	if _puppet:
+		return false
 	var refusal := _shaft_refusal(plane, cell)
 	if refusal != "":
 		dig_refused.emit(refusal)
@@ -936,6 +1075,8 @@ func dig_shaft_down(plane: int, cell: Vector2i, team: int = -1) -> bool:
 ## Sink a shaft from `plane - 1` down to `plane`, authored from below -- the same object as
 ## dig_shaft_down, just dug by someone standing underneath it.
 func dig_shaft_up(plane: int, cell: Vector2i, team: int = -1) -> bool:
+	if _puppet:
+		return false
 	if plane <= 0:
 		dig_refused.emit("nothing above to break into")
 		return false

@@ -43,8 +43,15 @@ var _start: Array = []
 ## about its own seating. `OS.create_process` hands back no pipe, and both processes share one
 ## `user://logs/` that they would clobber, so each is given a file of its own. Appended and closed
 ## per line, because the interesting case is reading it from another process while it still runs.
+## STAMPED WITH WALL-CLOCK TIME, because the reader is another process. Two games started fourteen
+## seconds apart both report every five seconds, so "the last line of each log" describes two
+## moments that can be five seconds apart -- and five seconds is long enough for the fog to close
+## over a corridor. Comparing them as though they were simultaneous produced a leak that was not
+## one, which is a worse outcome than a missed bug: an invariant that cries wolf gets relaxed.
+## Unix milliseconds rather than seconds-since-start, since only an absolute clock is shared.
 func log_line(line: String) -> void:
-	print("net: %s" % line)
+	var stamped := "[%d] %s" % [Time.get_unix_time_from_system() * 1000.0, line]
+	print("net: %s" % stamped)
 	if _log_path.is_empty():
 		return
 	var file := FileAccess.open(_log_path, FileAccess.READ_WRITE) if FileAccess.file_exists(_log_path) \
@@ -52,7 +59,7 @@ func log_line(line: String) -> void:
 	if file == null:
 		return
 	file.seek_end()
-	file.store_line("net: %s" % line)
+	file.store_line("net: %s" % stamped)
 	file.close()
 
 

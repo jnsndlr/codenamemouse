@@ -16,6 +16,7 @@ extends RefCounted
 ## | `HELLO` | client → server | yes | "I am in a match now" — see below |
 ## | `MATCH` | server → clients | **no** | the whole scoreboard, resent four times a second |
 ## | `EVENT` | server → clients | yes | a line of commentary that never comes round again |
+## | `TUNNELS` | server → **one** client | yes | the earth, filtered per crew — see below |
 ##
 ## **`SNAPSHOT` is unreliable on purpose and that is the important one.** A snapshot resent after a
 ## drop arrives describing a world that has already moved on, and it holds the queue up behind it
@@ -52,6 +53,15 @@ extends RefCounted
 ## That is also why it is unreliable. Losing one costs a quarter-second of a stale scoreboard and
 ## the next one fixes it, which is exactly the `SNAPSHOT` argument applied to a different payload.
 
+## **`TUNNELS` is the only message in this game addressed to one client on purpose**, and the
+## reason is the whole of M5. Two clients on opposite crews are owed different worlds; there is no
+## packet that is correct for both of them, and a broadcast here hands each of them the other's
+## floor plan while the game carries on looking perfect. It is also the only payload that is a diff
+## rather than a full state — the earth only ever grows, a client that joins late is owed hundreds
+## of cells at once, and resending all of them four times a second would be the one thing in this
+## protocol that genuinely could not afford to be idempotent. See `tunnel_view.gd` for the filter
+## itself, which lives in exactly one place so that there is exactly one place to audit.
+
 enum Kind {
 	INPUT,
 	SNAPSHOT,
@@ -59,6 +69,7 @@ enum Kind {
 	HELLO,
 	MATCH,
 	EVENT,
+	TUNNELS,
 }
 
 

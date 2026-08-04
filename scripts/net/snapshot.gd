@@ -57,6 +57,15 @@ enum Flag {
 	SWINGING = 2,
 }
 
+## Which of the four layers a mouse is on, packed into the spare bits of the same byte.
+##
+## STATE, NOT A READING TAKEN OFF ITS HEIGHT, which `mouse.gd` has a scar about and which is doubly
+## true here: a client could infer the plane from the y it was sent, and would be wrong for the
+## whole of a fall and for every frame of a shaft. It is two bits and it decides which layer the
+## camera cuts away, so a client whose own mouse has no plane stands underground looking at a lawn.
+const PLANE_SHIFT: int = 2
+const PLANE_MASK: int = 0b1100
+
 ## Bytes per pose: key, three floats, facing, flags, health.
 const POSE_SIZE: int = 1 + 4 * 4 + 1 + 1
 const HEADER_SIZE: int = 1 + 4 + 1

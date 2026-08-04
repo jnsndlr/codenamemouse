@@ -35,6 +35,14 @@ const SNAPSHOT_HZ: float = 30.0
 ## why this is periodic rather than sent on change.
 const MATCH_HZ: float = 4.0
 
+## How often each client is offered the earth it is allowed to know about.
+##
+## Slower than the scoreboard because a cell takes half a second of held effort to open, so nothing
+## underground can change faster than this notices -- and because the work is per-client and walks
+## every dug cell, which is the one thing in this file that is not free. Sent reliably and only
+## when something has actually changed, so the ordinary tick is no packet at all.
+const EARTH_HZ: float = 2.0
+
 @export var director_path: NodePath
 
 var _net: NetSession
@@ -42,7 +50,12 @@ var _director: MatchDirector
 var _transport: NetTransport
 var _since_snapshot: float = 0.0
 var _since_state: float = 0.0
+var _since_earth: float = 0.0
 var _tick: int = 0
+var _tunnels: TunnelNetwork
+## The per-crew filter, on the server. See `tunnel_view.gd` -- it is the one place that decides
+## what a client is allowed to know about the earth, and it is one place on purpose.
+var _view: TunnelView
 ## Mice this client built for seats it does not simulate, keyed the way `Snapshot` keys them.
 var _puppets: Dictionary = {}
 ## The last seating the server sent us, on a client. The server uses `Net.seats()` directly.
@@ -54,6 +67,13 @@ var _hello_left: float = 0.0
 ## four snapshots arrived in the last five seconds.
 var _received: int = 0
 var _applied: int = 0
+## Cells of earth put on the wire, and taken off it.
+var _earth_sent: int = 0
+var _earth_taken: int = 0
+## Cells taken BACK off a client: the fog closing. Counted separately because "we never send what
+## they may not know" and "we take it away again when they stop being allowed" are different
+## promises, and the second one is the one that is easy to leave out and impossible to see.
+var _earth_forgotten: int = 0
 ## Scoreboards taken off the wire. Separate from the pose counters because they arrive on their own
 ## clock, and "the mice move but the score never changes" is a specific failure worth naming.
 var _states: int = 0
@@ -102,6 +122,14 @@ func _ready() -> void:
 	_transport.packet_received.connect(_on_packet)
 	_net.seating_changed.connect(_on_seating_changed)
 
+	# Found by group rather than wired, like everything else that has to be reachable from a node
+	# spawned at runtime. Both are optional: an arena without tunnels is a valid arena, and the
+	# audits build several.
+	_tunnels = get_tree().get_first_node_in_group(TunnelNetwork.NETWORK_GROUP) as TunnelNetwork
+	var sight := get_tree().get_first_node_in_group(TunnelSight.SIGHT_GROUP) as TunnelSight
+	if _tunnels != null and sight != null:
+		_view = TunnelView.new(_tunnels, sight)
+
 	_autopilot = OS.get_cmdline_user_args().has("--autopilot")
 	if _net.is_server():
 		_director.event.connect(_on_event)
@@ -142,6 +170,10 @@ func _physics_process(delta: float) -> void:
 		if _since_state >= 1.0 / MATCH_HZ:
 			_since_state = 0.0
 			_broadcast_state()
+		_since_earth += delta
+		if _since_earth >= 1.0 / EARTH_HZ:
+			_since_earth = 0.0
+			_send_earth()
 		return
 	if _client_seats == null:
 		_say_hello(delta)
@@ -175,11 +207,51 @@ func _report(delta: float) -> void:
 	# would make the comparison a comparison of two formatters; one means the audit is reading the
 	# same question answered twice, which is the only version of this that proves anything.
 	_net.log_line(_scoreboard())
+	_report_earth()
+	_earth_sent = 0
+	_earth_taken = 0
+	_earth_forgotten = 0
 	_received = 0
 	_applied = 0
 	_inputs = 0
 	_swings = 0
 	_states = 0
+
+
+## The earth, as cells, from whichever end this is.
+##
+## THE CELLS THEMSELVES, NOT A COUNT, and that is the difference between an audit that can see the
+## leak and one that cannot. Counts would say a client holds forty cells; only the coordinates say
+## *which* forty, and the whole question of this milestone is whether any of them are the enemy's.
+## A run produces a few dozen, which is a few kilobytes of log and worth every byte.
+##
+## The host prints two sets: everything a crew is ALLOWED to know -- the filter's own predicate,
+## `TunnelSight.knows`, asked directly so the audit is checking the rule rather than the sender's
+## opinion of it -- and everything dug anywhere. The client prints what it actually holds. The
+## invariant is that the third is inside the first.
+func _report_earth() -> void:
+	if _tunnels == null:
+		return
+	if not _net.is_server():
+		_net.log_line("earth: took %d, hold %s" % [_earth_taken, _cells_of(-1)])
+		return
+	_net.log_line("earth: sent %d, took back %d, all %s" % [
+		_earth_sent, _earth_forgotten, _cells_of(-1),
+	])
+	for side: int in [Team.BLUE, Team.RED]:
+		_net.log_line("earth %s may know %s" % [Team.name_of(side), _cells_of(side)])
+
+
+## `plane.x,y` for every cell, space separated. `side` of -1 is every dug cell there is.
+func _cells_of(side: int) -> String:
+	var sight := get_tree().get_first_node_in_group(TunnelSight.SIGHT_GROUP) as TunnelSight
+	var parts := PackedStringArray()
+	for plane: int in range(1, TunnelNetwork.PLANE_COUNT):
+		for cell: Vector2i in _tunnels.dug_cells(plane):
+			if side >= 0 and (sight == null or not sight.knows(side, plane, cell)):
+				continue
+			parts.append("%d.%d,%d" % [plane, cell.x, cell.y])
+	return "[%s]" % " ".join(parts)
 
 
 ## What this machine believes the match is. Asked of the director, which on a host is the sim and
@@ -255,6 +327,7 @@ func _broadcast_snapshot() -> void:
 				flags |= Snapshot.Flag.SCRUFFED
 			if mouse.is_swinging():
 				flags |= Snapshot.Flag.SWINGING
+			flags |= (mouse.get_plane() << Snapshot.PLANE_SHIFT) & Snapshot.PLANE_MASK
 			shot.add(
 				Snapshot.key_for(side, seat, roster.crew_size()),
 				mouse.global_position,
@@ -332,6 +405,67 @@ func _apply_event(bytes: PackedByteArray) -> void:
 		_director.adopt_event(text)
 
 
+## The earth, one client at a time.
+##
+## ADDRESSED, NEVER BROADCAST, and that is the entire security property of this milestone. Two
+## clients on opposite crews are owed different worlds; a broadcast here would be correct for
+## neither and would hand each of them the other's floor plan, which is a failure that **looks
+## exactly like a working game**. The decision about what may go in each packet is not made here --
+## it is made in `tunnel_view.gd`, in one place, so there is one place to audit.
+func _send_earth() -> void:
+	if _view == null:
+		return
+	var roster := _net.seats()
+	for peer: int in roster.peers():
+		if peer == _net.local_peer():
+			continue
+		var seated := roster.seat_of(peer)
+		if seated.is_empty():
+			continue
+		var batch := _view.batch(peer, seated[0])
+		if batch.is_empty():
+			continue
+		for entry: Array in batch:
+			if entry[0] == TunnelView.Kind.FORGET:
+				_earth_forgotten += 1
+		var out := NetMessage.head(NetMessage.Kind.TUNNELS)
+		out.put_u8(batch.size())
+		for entry: Array in batch:
+			out.put_u8(entry[0])
+			out.put_u8(entry[1])
+			out.put_16(entry[2].x)
+			out.put_16(entry[2].y)
+			out.put_u8(entry[3])
+		_transport.send(peer, out.data_array, true)
+		_earth_sent += batch.size()
+
+
+## The earth, applied. Nothing here decides anything: every entry already happened on a machine
+## that was allowed to decide it, and this end is transcribing.
+func _apply_earth(bytes: PackedByteArray) -> void:
+	var into := NetMessage.body(bytes, 2)
+	if into == null:
+		return
+	var count := into.get_u8()
+	if bytes.size() != 2 + count * TunnelView.ENTRY_SIZE:
+		return
+	for i: int in range(count):
+		var kind := into.get_u8()
+		var plane := into.get_u8()
+		var cell := Vector2i(into.get_16(), into.get_16())
+		var bits := into.get_u8()
+		match kind:
+			TunnelView.Kind.CELL:
+				_tunnels.adopt_cell(plane, cell, bits)
+			TunnelView.Kind.SHAFT:
+				_tunnels.adopt_shaft(plane, cell, bits)
+			TunnelView.Kind.ROCK:
+				_tunnels.adopt_rock(plane, cell, bits)
+			TunnelView.Kind.FORGET:
+				_tunnels.forget_cell(plane, cell)
+		_earth_taken += 1
+
+
 ## Which chair a mouse is sitting in, as a snapshot key, or `NOBODY`.
 ##
 ## Searched rather than stored, because ten comparisons four times a second is nothing and the
@@ -377,6 +511,12 @@ func _become_client() -> void:
 		var mouse := node as Mouse
 		if mouse != null:
 			mouse.set_puppet(true)
+	# THE EARTH STOPS BEING OURS TO CUT, and the refusal lives on the network rather than on the
+	# five things that cut it -- the dig controller, the cave-in, the barricade, a bot's digger and
+	# anybody taking a shaft. Guarding each caller is five chances to miss one; guarding the state
+	# is none.
+	if _tunnels != null:
+		_tunnels.set_puppet(true)
 
 
 ## "I am in a match now, and I do not know who I am." Sent until answered.
@@ -526,3 +666,6 @@ func _on_packet(from: int, bytes: PackedByteArray) -> void:
 		NetMessage.Kind.EVENT:
 			if not _net.is_server() and from == NetTransport.SERVER_ID:
 				_apply_event(bytes)
+		NetMessage.Kind.TUNNELS:
+			if not _net.is_server() and from == NetTransport.SERVER_ID and _tunnels != null:
+				_apply_earth(bytes)

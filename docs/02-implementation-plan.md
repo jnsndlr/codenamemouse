@@ -1862,6 +1862,69 @@ right numbers therefore has a correct HUD, and the wire writes them through one 
 > sensible clock — and the comment says which failure each one is for. A check that cannot fail is
 > only a lie when nobody has written down what it is doing there.
 
+#### In progress — the earth, one crew at a time (landed)
+
+Step 5, and checkpoint 4 — the one the risk register said could silently fail.
+[`tunnel_view.gd`](scripts/net/tunnel_view.gd) is the filter, and it is the only place in the game
+that decides what a client may know about the earth. `TUNNELS` is the one message addressed to a
+single client on purpose: **two clients on opposite crews are owed different worlds**, so there is
+no packet that is correct for both of them.
+
+- **The predicate already existed, and using it was the whole design.**
+  `TunnelSight.knows(side, plane, cell)` was written at M5 for the minimap — "does this crew have
+  this cell on its map at all, by either route", with the ownership rule folded in *so that neither
+  the minimap nor an audit could forget it*. Writing a second, network-flavoured version of that
+  question would have been building a way for the two to disagree, and on the day they disagreed
+  the wire would have been the one that was wrong.
+- **A client's network contains only what its crew has cut or can currently see, and that is not a
+  reduced copy of the world — it is M5's pillar expressed as geometry.** It works visually for a
+  reason that is not luck: `tunnel_sight.gd` defines line of sight as *every cell between here and
+  there is open*, so the set a crew can see is very nearly the set it could have drawn anyway.
+  What is missing was behind a bend, or behind earth.
+- **The guard against a client cutting earth is on the network, not on the five things that cut
+  it.** The dig controller, the cave-in, the barricade, a bot's digger and anybody taking a shaft
+  all end up in the same three mutators, so refusing there is structural; guarding each caller is
+  five chances to miss one and a sixth the day somebody adds a rule.
+- **The fog closes, and that half is the one that is easy to leave out.** A client that keeps every
+  cell it ever glimpsed ends up with a map more complete than the rules allow — a slow leak rather
+  than a loud one, and nothing looks wrong while it happens. Cells are taken back when a crew stops
+  being allowed to know them, through `forget_cell` rather than `collapse`, because forgetting a
+  shaft you glimpsed has to work and collapsing one must not.
+- **The plane moved into the pose**, packed into the spare bits of the flag byte. Without it a
+  client's own mouse has no layer, and the cutaway shows a lawn to somebody standing three planes
+  under it. Inferring it from the y it was sent would be wrong for the whole of a fall and for
+  every frame of a shaft — the same distinction `mouse.gd` already carries a scar about.
+- **Rock is never sent.** It is laid from `rock_seed` at startup, so both ends generate identical
+  stone without a byte crossing the wire; only *who has run into it* is knowledge, and only
+  knowledge is per-crew.
+
+> **The leak check failed on its first run, and it was the check that was wrong.** Six cells the
+> client held were not in the host's permitted set — and all six had been permitted earlier: red
+> had glimpsed a corridor and the fog had closed over it in the five seconds between the client's
+> last report and the host's. **The two processes were being compared as though their logs were
+> simultaneous.** They report on their own timers and one started fourteen seconds before the
+> other. `log_line` stamps wall-clock milliseconds now, and the audit compares the client's
+> snapshot against what the host permitted *around that moment*. A false alarm on an invariant is
+> worse than a missing one: it is the thing that gets the invariant relaxed.
+
+> **Then it was verified by deleting the filter**, which is the only way to trust a check whose
+> subject is invisible. One line — send every dug cell instead of every permitted one — and the
+> audit named twelve of the leaked cells by coordinate and failed twice: once for the leak, once
+> because a filter that sends everything never takes anything back.
+
+> **`--autopilot` walks in a circle and cannot dig, so the earth in this test is bots' work.** Both
+> crews field an Engineer, both cut corridors, and the suite refuses to pass if blue never cut
+> anything red is forbidden — reporting *"the leak check had nothing to catch"* rather than a green
+> tick. That is the same discipline as the two scoreboard checks that cannot fail: say what the run
+> actually exercised.
+
+> **What a client still cannot do is dig.** The dig controller, the cave-in, the barricade, the
+> sonar and the class swap are arena-level singletons wired to `../Player` — *the* player, from
+> when there was one — so a remote human's DIG bits arrive at a server with nothing to consume
+> them. The intent has crossed the wire since step 2; what is missing is that these five are still
+> the local player's controls rather than any mouse's. That is the next piece, and it is a
+> refactor rather than a netcode problem.
+
 #### Sequencing — five checkpoints, each playable
 
 Ordered so that something is testable at every stage and the risky part is not last.
@@ -1880,7 +1943,11 @@ Ordered so that something is testable at every stage and the risky part is not l
    one, which is the spawn replication this protocol has so far been able to do without.
 4. **Tunnels and the visibility filter.** The riskiest checkpoint, and deliberately not last:
    add an assertion that a client's received tunnel set is a subset of its own crew's mask, and
-   run it in the audits.
+   run it in the audits. **Met** — the assertion exists, it is in `replication_audit.gd`, it is
+   checked against `TunnelSight.knows` rather than against the sender's own record, and it has
+   been verified by deleting the filter and watching it name the leaked cells. Digging *from* a
+   client is the piece still outstanding, and it is a refactor of five singletons rather than
+   anything to do with the wire.
 5. **Over the internet, with a friend, for a full match.** The milestone's actual question.
 
 #### Risks
@@ -2092,15 +2159,24 @@ rules would have. Bots Scurry, which the risk list called blocking. `net_audit` 
 that every scene and script in the game loads, after a parse error in the entire multiplayer match
 failed no suite at all. Seven suites pass, nineteen checks in the replication audit alone.
 
-**Next: step 5 — the visibility filter, and the tunnels behind it.** The riskiest checkpoint and
-deliberately not last. The rule is that the per-crew filter lives where the packet is built and
-nowhere else, so there is exactly one place to audit for *did we just send them the enemy's floor
-plan* — and the audit is an invariant, not a playtest, because a leak looks like nothing at all
-from inside a match.
+**Step 5 is done: the earth is filtered per crew.** `tunnel_view.gd` is the only place that decides
+what a client may know about the ground, `TUNNELS` is addressed to one client because two crews are
+owed different worlds, and a client's network holds only what its crew cut or can see — M5's pillar
+expressed as geometry rather than as a minimap rule. The fog closes: cells are taken *back* when a
+crew stops being allowed to know them. **Verified by deleting the filter**, which is the only way
+to trust a check whose subject is invisible from inside a match. Seven suites pass; twenty-three
+checks in the replication audit.
 
-> **What a client still cannot see:** every tunnel in the arena, the cheese lying in the yard, and
-> anything an ability does. Two people can play the banner game against each other with a full HUD;
-> they cannot dig. Mac only — the web build is a rendering decision, not an export target, and stays at M9.
+**Next: the five singletons become per-mouse controls.** The dig controller, the cave-in, the
+barricade, the sonar and the class swap are still wired to `../Player` — *the* player, from when
+there was one — so a remote human's dig arrives at a server with nothing to consume it. The intent
+has crossed the wire since step 2; what has not happened is these five ceasing to be *the local
+player's* controls. It is a refactor rather than a netcode problem, and it is the last thing
+between here and checkpoint 5.
+
+> **What a client still cannot do:** dig, cave in, barricade, sonar, or swap class — and the cheese
+> lying in the yard is not replicated either, because a dropped wedge is the first object in this
+> game that is spawned at runtime rather than seated or authored. Mac only — the web build is a rendering decision, not an export target, and stays at M9.
 
 **Then M7 — real multiplayer.** *Does it survive contact with a second human?* The
 survey above is the important part: `Mouse._control` is already the driver seam, `MatchDirector`

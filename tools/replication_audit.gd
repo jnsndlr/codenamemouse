@@ -66,6 +66,10 @@ const CHEESE_DRIFT: int = 4
 const STARTING_CHEESE: int = 20
 ## Health is 0..255 and regenerates, so two readings five seconds apart are legitimately unequal.
 const HEALTH_DRIFT: int = 40
+## How far either side of the client's own report to look for what its crew was allowed to know.
+## Wide enough to cover both processes' report phase and the second it takes the fog to be sent;
+## narrow enough that it is nowhere near the length of a match.
+const FOG_GRACE_MS: int = 8000
 
 var _failures: int = 0
 
@@ -128,6 +132,7 @@ func _play_a_match() -> void:
 	_check_the_pipe(host_said, client_said)
 	_check_the_mouse(host_said, client_said)
 	_check_the_scoreboard(host_said, client_said)
+	_check_the_earth(host_said, client_said)
 
 
 # ------------------------------------------------------------------------------ bytes are moving
@@ -279,6 +284,75 @@ func _check_the_scoreboard(host_said: String, client_said: String) -> void:
 		apart <= HEALTH_DRIFT)
 
 
+# --------------------------------------------------------------------- and no floor plan it didn't earn
+
+
+## **The assertion this milestone's risk register asked for**, and the only one here that guards a
+## pillar rather than a feature.
+##
+## A VISIBILITY LEAK LOOKS LIKE NOTHING AT ALL FROM INSIDE A MATCH. The mice move, the score keeps,
+## the minimap draws only your own corridors -- and a client that was sent the enemy's floor plan
+## has it in memory whether or not anything on screen admits it. There is no playtest for that, no
+## screenshot of it, and no way to notice it going wrong later. So the check is a set comparison
+## between two processes: every cell the client holds must be one the rules say its crew may know.
+##
+## The host prints the permitted set using `TunnelSight.knows` **directly**, not the sender's
+## record of what it sent. That is the difference between checking the rule and checking that the
+## code agrees with itself.
+func _check_the_earth(host_said: String, client_said: String) -> void:
+	print("\n-- and no floor plan it did not earn")
+
+	var mine := _last_report(client_said, "earth: took \\d+, hold \\[([^\\]]*)\\]")
+	var dug := _last_report(host_said, "earth: sent \\d+, took back \\d+, all \\[([^\\]]*)\\]")
+	if dug["cells"].is_empty():
+		_broken("nobody dug anything -- there is no floor plan to leak, so nothing was tested")
+		return
+	if mine["at"] == 0:
+		_broken("the client never reported what earth it holds")
+		return
+
+	# COMPARED AGAINST THE HOST'S VIEW AT THE CLIENT'S OWN MOMENT, widened by a grace window. The
+	# two processes report on their own five-second timers, so the naive comparison -- last line
+	# against last line -- judges a client's snapshot against a host's picture taken seconds later,
+	# and a corridor whose fog closed in between reads as a leak. It did, on the first run of this
+	# check, and a false alarm on an invariant is worse than no invariant: it is the thing that
+	# gets the invariant relaxed.
+	var permitted := _permitted_around(host_said, "RED", int(mine["at"]))
+	var blue := _permitted_around(host_said, "BLUE", int(mine["at"]))
+	var blue_only := _minus(blue, permitted)
+	if blue_only.is_empty():
+		_broken("blue cut nothing red may not know -- the leak check had nothing to catch")
+		return
+
+	var held: Dictionary = mine["cells"]
+	_check("the client was sent earth at all (%d cells)" % held.size(), not held.is_empty())
+
+	# THE ONE THAT MATTERS. Not "roughly right", not "most of them" -- a single cell of a network
+	# this crew never cut and never saw is the pillar gone, and the game would play perfectly.
+	var stolen := _minus(held, permitted)
+	_check("and not one cell its crew may not know (%d of %d dug)" % [held.size(), dug["cells"].size()],
+		stolen.is_empty())
+	if not stolen.is_empty():
+		print("        leaked: %s" % " ".join(PackedStringArray(stolen.keys()).slice(0, 12)))
+
+	# Stated separately because the check above passes trivially if the client holds nothing, and
+	# "the filter works" and "the filter is not just a wall" are different claims.
+	_check("while blue holds %d cells red is not allowed" % blue_only.size(),
+		held.size() < dug["cells"].size())
+
+	# THE FOG HAS TO CLOSE, and this is the half that is easy to leave out: a client that keeps
+	# every cell it ever glimpsed has a map more complete than the rules allow, and nothing looks
+	# wrong while it happens. Only asserted when the run actually produced the situation -- if red
+	# never lost sight of anything, saying so is worth more than a green tick.
+	var lost := _fog_closed(host_said)
+	var taken_back := _totals(host_said, "took back (\\d+)")
+	if lost <= 0:
+		print("   --    red never lost sight of anything; the fog was not exercised")
+		return
+	_check("and gives cells back as the fog closes (%d taken back, %d lost sight of)"
+		% [taken_back, lost], taken_back > 0)
+
+
 # --------------------------------------------------------------------------------------- plumbing
 
 
@@ -347,6 +421,62 @@ func _boards(text: String) -> Array[Dictionary]:
 			"banner_blue": hit.get_string(6).to_int(),
 			"banner_red": hit.get_string(7).to_int(),
 		})
+	return out
+
+
+## The last report a pattern matched, as `{"at": unix ms, "cells": set}`.
+##
+## Last rather than merged, and stamped rather than bare: the client gives cells back as the fog
+## closes, so a union over a whole run would accuse it of holding what it has already returned, and
+## an unstamped set cannot be lined up against the other process at all.
+func _last_report(text: String, pattern: String) -> Dictionary:
+	var re := RegEx.create_from_string("\\[(\\d+)\\] " + pattern)
+	var hits := re.search_all(text)
+	if hits.is_empty():
+		return {"at": 0, "cells": {}}
+	var out: Dictionary = {}
+	for cell: String in hits[-1].get_string(2).split(" ", false):
+		out[cell] = true
+	return {"at": hits[-1].get_string(1).to_int(), "cells": out}
+
+
+## Everything a crew was allowed to know at any point within `FOG_GRACE` of one moment.
+##
+## A UNION OVER A WINDOW, not a single reading, and the window is the honest way to compare two
+## processes that keep their own clocks. Anything inside it was legitimately sendable within a few
+## seconds of the client's snapshot; a genuine leak is a set of cells that was never permitted at
+## any moment of the match, so widening by seconds costs the check nothing.
+func _permitted_around(text: String, crew: String, at: int) -> Dictionary:
+	var re := RegEx.create_from_string("\\[(\\d+)\\] earth %s may know \\[([^\\]]*)\\]" % crew)
+	var out: Dictionary = {}
+	for hit: RegExMatch in re.search_all(text):
+		if absi(hit.get_string(1).to_int() - at) > FOG_GRACE_MS:
+			continue
+		for cell: String in hit.get_string(2).split(" ", false):
+			out[cell] = true
+	return out
+
+
+## How many cells the RED crew stopped being allowed to know over the run: the fog closing, as
+## observed on the host. Zero means the situation the forget path exists for never arose.
+func _fog_closed(text: String) -> int:
+	var re := RegEx.create_from_string("earth RED may know \\[([^\\]]*)\\]")
+	var lost := 0
+	var last: Dictionary = {}
+	for hit: RegExMatch in re.search_all(text):
+		var now: Dictionary = {}
+		for cell: String in hit.get_string(1).split(" ", false):
+			now[cell] = true
+		lost += _minus(last, now).size()
+		last = now
+	return lost
+
+
+func _minus(from: Dictionary, these: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for cell: String in from:
+		if not these.has(cell):
+			out[cell] = true
 	return out
 
 

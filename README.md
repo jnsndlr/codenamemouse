@@ -128,8 +128,30 @@ the `NetMatch` node failed to load, Godot printed one line and carried on, and e
 tunnels and cheese and mice was still true. `net_audit` now loads every scene and every script and
 asserts none is null — the dullest check here, and the only one that catches that.
 
-**What a client still can't see:** every tunnel in the arena, the cheese lying in the yard, and
-anything an ability does. That's step 5, the visibility filter, and it's the risky one.
+**And the earth arrives one crew at a time.** [`TunnelView`](scripts/net/tunnel_view.gd) is the
+only place in the game that decides what a client may know about the ground, and `TUNNELS` is the
+one message **addressed to a single client on purpose**: two clients on opposite crews are owed
+different worlds, so there's no packet that's correct for both. A client's network holds only what
+its crew cut or can currently see — M5's pillar as geometry rather than as a minimap rule — and it
+works visually because sight underground was already defined as *every cell between here and there
+is open*, so what's missing was behind a bend anyway.
+
+The predicate isn't new: `TunnelSight.knows()` was written for the minimap at M5 with the ownership
+rule folded in *so neither the minimap nor an audit could forget it*. A second network-flavoured
+version would have been a way for the two to disagree.
+
+**The leak check failed first time, and the check was what was wrong.** Six cells the client held
+weren't in the host's permitted set — and all six had been permitted moments earlier: red glimpsed
+a corridor and the fog closed in the five seconds between the two processes' reports. They were
+being compared as though their logs were simultaneous. Logs carry wall-clock stamps now. **A false
+alarm on an invariant is worse than a missing one — it's the thing that gets the invariant
+relaxed.** Then it was verified properly, by deleting the filter and watching the audit name the
+leaked cells by coordinate.
+
+**What a client still can't do:** dig, cave in, barricade, sonar or swap class. Those five are
+arena-level singletons wired to `../Player` — *the* player, from when there was one — so a remote
+human's dig reaches a server with nothing to consume it. The intent has crossed the wire since step
+2; the controls just aren't per-mouse yet. That's the next piece.
 
 ## M6.5 — a build you can hand to somebody (closed)
 
@@ -653,8 +675,8 @@ scripts/ui/     score bug, minimap, roster, feed, title and pause menus, the con
                 sheet, and the two skins they share
 scripts/tunnels/the network, the routing graph, shaft transit, digging
 scripts/        player, camera, maps, input setup
-scripts/net/     transport, input frames, seats, snapshots, match state, and the session
-                that owns them
+scripts/net/     transport, input frames, seats, snapshots, match state, the per-crew earth
+                filter, and the session that owns them
 tools/          headless audits, a behaviour soak, and visual probes needing a real renderer
 ```
 
