@@ -19,7 +19,8 @@ func _initialize() -> void:
 
 	var network := scene.get_node("Tunnels") as TunnelNetwork
 	var player := scene.get_node("Player") as Mouse
-	var sonar := scene.get_node("Sonar") as Sonar
+	# ON THE MOUSE, NOT ON THE ARENA (M7): every driven mouse carries its own controls.
+	var sonar := player.get_node("Sonar") as Sonar
 	player.set_class(MouseClass.SNEAK)
 	player.global_position = network.cell_to_world(0, Vector2i(2, 2)) + Vector3.UP * 0.2
 	player.velocity = Vector3.ZERO

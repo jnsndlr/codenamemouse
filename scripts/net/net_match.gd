@@ -93,6 +93,17 @@ var _inputs: int = 0
 ## every automated two-process test watches a mouse stand perfectly still and cannot tell a working
 ## input path from a broken one -- which is precisely the failure that looks like success.
 var _autopilot: bool = false
+## Seconds of lawn left before the autopilot starts looking for a way down.
+var _autopilot_surface: float = AUTOPILOT_SURFACE_SECONDS
+## Seconds until the next attempt at a shaft. Zero means "try on the next tick".
+var _autopilot_left: float = 0.0
+## Whether the dig button is already down, so the PRESS bit is set on the first tick only -- which
+## is what a real button does and what the rock branch of `dig_controller.gd` distinguishes.
+var _autopilot_digging: bool = false
+## Whether E is owed on the next tick, having just pressed F.
+var _autopilot_burrow: bool = false
+## Latched the first time a pose says this mouse is off the lawn. See `_autopilot_frame`.
+var _autopilot_down: bool = false
 
 ## How often to say what the wire is doing. Rare enough to be ignorable, often enough that a
 ## thirty-second playtest produces several.
@@ -138,18 +149,86 @@ func _ready() -> void:
 	_on_seating_changed()
 
 
-## Walk forward, turning slowly, swinging every couple of seconds. Enough to prove movement,
-## facing and melee all survive the trip; not enough to be mistaken for an AI.
+## How long the autopilot walks the lawn before it starts trying to get under it. Long enough that
+## the position spread `replication_audit.gd` measures is earned on the surface, where a mouse can
+## actually move; a corridor is one cell wide and a mouse in one barely does.
+const AUTOPILOT_SURFACE_SECONDS: float = 14.0
+## Seconds between attempts to sink a shaft. A refusal is ordinary -- nest clearance, another
+## entrance too close, paving -- so this retries rather than giving up, and slowly enough that a
+## refusal message is not printed sixty times a second.
+const AUTOPILOT_SHAFT_SECONDS: float = 3.0
+## How long the autopilot points at one neighbouring cell before trying the next. Comfortably more
+## than the ~1.5 seconds a Generalist takes to open a tile -- see `_autopilot_frame`.
+const AUTOPILOT_SIDE_SECONDS: float = 4.0
+
+## Walk forward, turning slowly, swinging every couple of seconds -- and then go underground and
+## dig. Enough to prove movement, facing, melee and now DIGGING all survive the trip; not enough to
+## be mistaken for an AI.
+##
+## THE DIGGING HALF EXISTS BECAUSE OF WHAT M7 JUST CHANGED. Until the controls became children of a
+## mouse, a remote human's DIG bits arrived at a server with nothing to consume them -- and that
+## failure is completely silent: the packets are counted, the seat is right, the mouse moves, and
+## the earth simply never opens. A headless client has no keyboard, so without this every automated
+## test watches a mouse that would not have dug anyway and cannot tell the two apart.
+##
+## SCRIPTED OFF THE MOUSE'S OWN PLANE, not off a timer, because "am I underground yet" is the only
+## honest cue: the shaft is cut by the *server* and the client finds out about it in a pose. A
+## timer would be this suite testing its own guess at the round trip.
 func _autopilot_frame() -> InputFrame:
 	var frame := InputFrame.new()
 	var t := Time.get_ticks_msec() / 1000.0
-	frame.move = Vector2(0.0, 1.0)
-	# An aim point that orbits, so facing changes and the snapshot's facing field is exercised
-	# rather than staying at whatever the spawn happened to set.
 	var me := _director.local_mouse()
 	var here := me.global_position if me != null else Vector3.ZERO
+	# An aim point that orbits, so facing changes and the snapshot's facing field is exercised
+	# rather than staying at whatever the spawn happened to set.
 	frame.aim_point = here + Vector3(cos(t * 0.7), 0.0, sin(t * 0.7)) * 4.0
-	frame.set_pressed(InputFrame.Action.ATTACK, fmod(t, 2.0) < 0.05)
+
+	if me == null or me.get_plane() == 0:
+		frame.move = Vector2(0.0, 1.0)
+		frame.set_pressed(InputFrame.Action.ATTACK, fmod(t, 2.0) < 0.05)
+		if _autopilot_surface > 0.0:
+			_autopilot_surface -= 1.0 / 60.0
+			return frame
+		# ONE F AND ONE E PER ATTEMPT, AND NEVER AGAIN ONCE IT IS DOWN. E takes whichever shaft the
+		# cell has, up OR down, so pressing it on every tick while waiting for the pose that says
+		# "you are underground now" walks the mouse down the shaft and straight back up it. The
+		# round trip is two poses long and the mouse oscillated for the whole run -- which is not a
+		# bug in the transit, it is exactly what holding the key would do to a person.
+		if _autopilot_down:
+			return frame
+		_autopilot_left -= 1.0 / 60.0
+		if _autopilot_left <= 0.0:
+			# Cut a mouth. The shaft has to exist before there is anything to climb down.
+			_autopilot_left = AUTOPILOT_SHAFT_SECONDS
+			_autopilot_burrow = true
+			frame.set_pressed(InputFrame.Action.SHAFT_DOWN, true)
+		elif _autopilot_burrow:
+			_autopilot_burrow = false
+			frame.set_pressed(InputFrame.Action.BURROW, true)
+		return frame
+
+	_autopilot_down = true
+
+	# Underground: stand still and hold the dig button on a neighbouring cell.
+	#
+	# AIMED AT A CELL CENTRE, NOT A DISTANCE AHEAD. The first version aimed one metre along the
+	# facing, which lands on the boundary of the cell the mouse is already standing in -- and
+	# `_aimed_cell` refuses a cell that is already dug, so the hold never had a target and the run
+	# proved only that the F key worked. `cell_to_world` puts the aim squarely in the next cell.
+	#
+	# STILL, AND SLOWLY. The second version walked and rotated the aim once a second, and opened
+	# nothing at all: progress belongs to the tile you are POINTING AT, so moving the aim -- or
+	# moving the mouse, which moves the cell the aim is measured from -- resets it. A Generalist
+	# needs about a second and a half per tile, so anything faster than this is a mouse that starts
+	# four digs and finishes none. That is a real property of the control and not a quirk of the
+	# harness; a person holding the button learns it in one corridor.
+	if _tunnels != null:
+		var cell := _tunnels.world_to_cell(here)
+		var index := int(t / AUTOPILOT_SIDE_SECONDS) % TunnelNetwork.SIDES.size()
+		frame.aim_point = _tunnels.cell_to_world(me.get_plane(), cell + TunnelNetwork.SIDES[index])
+	frame.set_held(InputFrame.Action.DIG, true)
+	frame.set_pressed(InputFrame.Action.DIG, not _autopilot_digging)
+	_autopilot_digging = true
 	return frame
 
 
@@ -292,10 +371,29 @@ func _report_remotes() -> void:
 func _where(mouse: Mouse) -> String:
 	if mouse == null:
 		return "?"
-	return "%s health %d" % [
+	return "%s health %d plane %d %s" % [
 		str(mouse.global_position.snapped(Vector3.ONE * 0.1)),
 		int(mouse.get_health_ratio() * 255.0),
+		mouse.get_plane(),
+		_earth_moved_by(mouse),
 	]
+
+
+## What this mouse's own controls have opened: corridor cells, and shafts.
+##
+## THE POINT IS THE ASYMMETRY. The controls are children of the mouse now, so these are the host's
+## answer for a *particular chair* -- and a client running the identical controller on the identical
+## intent reports zero, because a puppet never reaches for the earth. Neither figure means anything
+## alone; together they are the only way a suite can tell "a remote human dug" from "somebody dug",
+## since `dig()` records which crew learnt a cell and never whose hand it was.
+##
+## THE TWO ARE PRINTED SEPARATELY because they are different claims: a shaft is one keypress and a
+## corridor cell is half a second of holding, and an audit that adds them can pass on the press.
+func _earth_moved_by(mouse: Mouse) -> String:
+	var digger := mouse.get_node_or_null(^"DigController")
+	if digger == null:
+		return "cut - sank -"
+	return "cut %d sank %d" % [int(digger.call("cells_cut")), int(digger.call("shafts_cut"))]
 
 
 func _seated_count() -> int:
@@ -328,6 +426,7 @@ func _broadcast_snapshot() -> void:
 			if mouse.is_swinging():
 				flags |= Snapshot.Flag.SWINGING
 			flags |= (mouse.get_plane() << Snapshot.PLANE_SHIFT) & Snapshot.PLANE_MASK
+			flags |= (mouse.mouse_class << Snapshot.CLASS_SHIFT) & Snapshot.CLASS_MASK
 			shot.add(
 				Snapshot.key_for(side, seat, roster.crew_size()),
 				mouse.global_position,

@@ -1,6 +1,10 @@
 class_name Barricade
-extends Node
+extends MouseControl
 ## The Engineer's other half: put a boulder in the way (GDD section 4).
+##
+## ONE PER MOUSE SINCE M7, not one per arena. See [MouseControl] -- and this is the ability that
+## most obviously wanted it already: `max_standing` is *this Engineer's* budget, and a single node
+## per arena could only ever hold one Engineer's worth.
 ##
 ## THE PAIR TO THE CAVE-IN, and the two are deliberately different tools rather than one tool with
 ## a flag. A cave-in is permanent, instant, kills the corridor and can scruff whoever is standing
@@ -27,9 +31,6 @@ extends Node
 signal placed(plane: int, cell: Vector2i)
 signal refused(reason: String)
 
-@export var player_path: NodePath
-@export var network_path: NodePath
-
 @export_group("Ability")
 ## Who may do this. An export rather than a hard-coded check, because "which class owns this" is a
 ## design question and this project's answers have moved before.
@@ -44,8 +45,6 @@ signal refused(reason: String)
 ## a rock into a gap, not throwing it.
 @export var reach_cells: float = 1.6
 
-var _player: Mouse
-var _network: TunnelNetwork
 var _cooldown_left: float = 0.0
 ## Barricades this Engineer has standing. Pruned rather than counted from the group, because the
 ## limit is per-Engineer and a shared group would let one crew's boulders eat another's budget.
@@ -53,17 +52,14 @@ var _standing: Array[BarricadeRock] = []
 
 
 func _ready() -> void:
-	_player = get_node_or_null(player_path) as Mouse
-	_network = get_node_or_null(network_path) as TunnelNetwork
+	super()
 	if _player == null or _network == null:
-		push_warning("barricade: needs a player and a network -- the ability is off")
+		push_warning("barricade: needs a mouse and a network -- the ability is off")
 		set_process(false)
-		set_process_unhandled_input(false)
+		set_physics_process(false)
 		return
-	# Refusals ride the network's existing "say why" channel, exactly as the cave-in's do. That
-	# signal is named for digging but it is really the one line on screen that explains a control
-	# which just did nothing, and every refusal below is that.
-	refused.connect(_network.dig_refused.emit)
+	# Refusals go to the local viewer and to nobody else -- see [MouseControl].
+	refused.connect(explain)
 
 
 func _process(delta: float) -> void:
@@ -165,6 +161,16 @@ func _physics_process(_delta: float) -> void:
 	var plane := _player.get_plane()
 	if _occupied(plane, cell):
 		refused.emit("somebody is standing there")
+		return
+
+	# A PUPPET RUNS ITS COOLDOWN AND PUTS NOTHING DOWN (M7). A boulder is a world object spawned at
+	# runtime, and this protocol has no spawn message -- the same gap the cheese wedges lying in
+	# the yard are still in. So a remote Engineer's barricades are real on the server, block the
+	# routing graph on the server, and are invisible to every client until that gap is closed.
+	# Placing one locally instead would be worse than invisible: it would be a wall that only one
+	# machine believes in.
+	if not acts():
+		_cooldown_left = cooldown
 		return
 
 	var rock := BarricadeRock.place(_network, plane, cell, _player)

@@ -54,8 +54,13 @@ extends SceneTree
 ##
 ## The type is half the fix. The other half is in `_fresh_network`: a harness that cannot build
 ## its subject must say so, not fall through to a clean bill of health.
+##
+## `DigController` LEFT THIS LIST AT M7 rather than being forgotten in it. The five controls are
+## children of a mouse now, so stripping `Player` takes its dig controller, both Engineer abilities,
+## the sonar and the swap point with it -- and a strip list naming a node that cannot exist is a
+## line that looks like it is doing work.
 const STRIP: Array[String] = [
-	"Player", "CameraRig", "DigController", "DepthFocus", "FallGuard", "HUD", "Surface/Rocks",
+	"Player", "CameraRig", "DepthFocus", "FallGuard", "HUD", "Surface/Rocks",
 	"MatchDirector", "Navigation", "Nests"
 ]
 
@@ -83,6 +88,22 @@ var _scene: Node
 var _network: TunnelNetwork
 var _space: PhysicsDirectSpaceState3D
 var _total_failures: int = 0
+## Checks that have started and not yet reported. A TRIPWIRE, and it exists because of a specific
+## two-milestone silence.
+##
+## `_check_dig_flow` and `_check_reveal` drove the dig controller by calling `_update_dig(delta)`.
+## M7 step 2 gave that function a second parameter -- the intent has to be a value that can travel
+## -- and nothing told the two callers. A GDScript runtime error ABORTS THE FUNCTION IT HAPPENS IN
+## and lets the caller carry on, so both checks stopped part way through, printed nothing, and this
+## file went on announcing *"ALL INVARIANTS HOLD ... plus dig flow ... and reveal"* for two
+## milestones over two checks that had not run a single assertion.
+##
+## Which is the fifth time this project has caught a test that could not fail, and a new cause each
+## time. Not a weak assertion, not a subject arranged so the rule could not bite, not a favourable
+## accident of timing: **a signature changed under a caller, in a suite whose failure mode is to go
+## quiet.** `_fresh_network` already refuses to fall through to a clean bill of health when its own
+## scaffolding breaks; this is the same idea one level up, for the checks that build their own.
+var _running: Dictionary = {}
 
 
 func _initialize() -> void:
@@ -115,12 +136,18 @@ func _initialize() -> void:
 			await physics_frame
 		_audit(label)
 
+	for label: String in ["dig_flow", "routing", "collapse", "rock", "reveal", "paving"]:
+		_running[label] = true
 	await _check_dig_flow()
 	await _check_routing()
 	await _check_collapse()
 	await _check_rock()
 	await _check_reveal()
 	await _check_seal()
+
+	# Anything still armed never reached its own report line. See `_running`.
+	for label: String in _running.keys():
+		_broken(label, "the check stopped part way -- look for a SCRIPT ERROR above")
 
 	print("")
 	print("=".repeat(78))
@@ -222,8 +249,10 @@ func _check_dig_flow() -> void:
 	await physics_frame
 
 	var network: TunnelNetwork = _scene.get_node("Tunnels")
-	var player: Node3D = _scene.get_node("Player")
-	var controller: Node = _scene.get_node("DigController")
+	var player: Mouse = _scene.get_node("Player")
+	# ON THE MOUSE, NOT ON THE ARENA (M7). The five controls are children of whoever is driving,
+	# so that a remote human's chair carries its own -- see `mouse_controls.gd`.
+	var controller: Node = player.get_node("DigController")
 	network.dig_shaft_down(0, Vector2i(0, 0))
 	await process_frame
 	await physics_frame
@@ -241,10 +270,7 @@ func _check_dig_flow() -> void:
 	# Adjacent, within reach, undug: an ENGINEER should open it after dig_seconds of holding.
 	# Forty frames is two thirds of a second against a dig_seconds of 0.5.
 	player.set_class(MouseClass.ENGINEER)
-	player._aim_point = network.cell_to_world(1, neighbour)
-	Input.action_press("dig")
-	for i in range(40):
-		controller._update_dig(1.0 / 60.0)
+	_hold_dig(player, controller, network.cell_to_world(1, neighbour), 40)
 	if not network.is_dug(1, neighbour):
 		_fail("DIG_FLOW", "an Engineer holding on an adjacent tile did not open it")
 
@@ -254,33 +280,67 @@ func _check_dig_flow() -> void:
 	# the Engineer is decorative -- and must open it eventually, or a crew that loses its Engineer
 	# is locked out of a third of the map.
 	player.set_class(MouseClass.GENERALIST)
-	player._aim_point = network.cell_to_world(1, slow)
-	for i in range(40):
-		controller._update_dig(1.0 / 60.0)
+	_hold_dig(player, controller, network.cell_to_world(1, slow), 40)
 	if network.is_dug(1, slow):
 		_fail("DIG_FLOW", "a Generalist dug as fast as an Engineer")
-	for i in range(100):
-		controller._update_dig(1.0 / 60.0)
+	_hold_dig(player, controller, network.cell_to_world(1, slow), 100)
 	if not network.is_dug(1, slow):
 		_fail("DIG_FLOW", "a Generalist could not open a tile however long it held")
 
 	# Out of reach: must stay shut no matter how long you hold.
-	player._aim_point = network.cell_to_world(1, far)
-	for i in range(60):
-		controller._update_dig(1.0 / 60.0)
+	_hold_dig(player, controller, network.cell_to_world(1, far), 60)
 	if network.is_dug(1, far):
 		_fail("DIG_FLOW", "a tile %s cells away was diggable" % far.length())
-	Input.action_release("dig")
 
 	# Not holding: nothing opens however long you point at it.
 	var another := Vector2i(1, 0)
-	player._aim_point = network.cell_to_world(1, another)
-	for i in range(40):
-		controller._update_dig(1.0 / 60.0)
+	_hold_dig(player, controller, network.cell_to_world(1, another), 40, false)
 	if network.is_dug(1, another):
 		_fail("DIG_FLOW", "a tile opened without the dig button held")
 
+	# A CLIENT CANNOT CUT EARTH, however hard it holds (M7). TWO GUARDS, ASSERTED SEPARATELY, and
+	# that separation is the result of getting it wrong first: the original version made one claim
+	# covering both, was verified by deleting the network's guard and failed correctly, and then
+	# was verified by deleting the CONTROLLER's guard and passed. Of course it did -- with the
+	# network still refusing, a controller that reaches for the earth and a controller that does
+	# not are indistinguishable from the outside. Two guards need two subjects.
+	var mine := Vector2i(-1, 0)
+	player.set_class(MouseClass.ENGINEER)
+	player.set_puppet(true)
+	network.set_puppet(true)
+	_hold_dig(player, controller, network.cell_to_world(1, mine), 60)
+
+	# The invariant itself. LABELLED AS UNABLE TO FAIL ON ITS OWN, because the guard that makes it
+	# true is the network's and the line below tests that directly -- it stays because it is the
+	# sentence the feature is about, and because it would catch a control that found some other
+	# road to the cell books.
+	if network.is_dug(1, mine):
+		_fail("DIG_FLOW", "a client opened a cell of earth for itself")
+	# One: the network refuses anyone who reaches for it. This is the guard that covers all five
+	# things that cut earth and the only one that would stop a caller nobody has written yet, so
+	# it is asked of the network rather than through a control.
+	if network.dig(1, mine, Team.BLUE):
+		_fail("DIG_FLOW", "the network let something cut earth on a client")
+	# Two: the controller does not reach for it, which is visible in the BAR rather than in the
+	# ground. A puppet whose hold completes sits at full and waits for the server's own cut; the
+	# alternative -- calling `dig`, being refused, and zeroing -- fills the bar a second time
+	# during the round trip and reads as a dig that did not take.
+	if controller.get_dig_progress() < 1.0:
+		_fail("DIG_FLOW", "a client's dig bar restarted instead of holding full while it waited")
+
+	network.set_puppet(false)
+	player.set_puppet(false)
+	_hold_dig(player, controller, network.cell_to_world(1, mine), 60)
+	if not network.is_dug(1, mine):
+		_fail("DIG_FLOW", "and could not dig again once it was the authority")
+	if controller.get_dig_progress() > 0.0:
+		_fail("DIG_FLOW", "and an authoritative dig left the bar full instead of moving on")
+
+	player.set_physics_process(true)
+	controller.set_physics_process(true)
+
 	print("")
+	_running.erase("dig_flow")
 	print("-- dig_flow")
 	if _findings.is_empty():
 		print("   ok")
@@ -288,6 +348,27 @@ func _check_dig_flow() -> void:
 	for finding: String in _findings:
 		print("   FAIL %s" % finding)
 	_total_failures += _findings.size()
+
+
+## Hold the dig button at a world point for `frames` ticks of the controller's own update.
+##
+## THROUGH THE INPUT FRAME, WHICH IS THE ONLY WAY LEFT (M7). This used to press `Input.action_press`
+## and poke `player._aim_point`, and it stopped working at step 2 without saying so -- see
+## `_running`. Both halves had to change: intent is a value now, so aim travels IN the frame, and
+## a `Player` that is handed one stops capturing over the top of it for that tick.
+##
+## The press bit is set on the first tick only and held for the rest, which is what a real button
+## does and what the rock branch of `_update_dig` distinguishes.
+func _hold_dig(
+	player: Mouse, controller: Node, at: Vector3, frames: int, holding: bool = true
+) -> void:
+	for i in range(frames):
+		var frame := InputFrame.new()
+		frame.aim_point = at
+		frame.set_held(InputFrame.Action.DIG, holding)
+		frame.set_pressed(InputFrame.Action.DIG, holding and i == 0)
+		player.drive(frame)
+		controller._update_dig(frame, 1.0 / 60.0)
 
 
 ## Can something walk it? (M4)
@@ -530,6 +611,7 @@ func _check_collapse() -> void:
 		_fail("COLLAPSE", "a piece of the lawn came down")
 
 	print("")
+	_running.erase("collapse")
 	print("-- collapse")
 	if _findings.is_empty():
 		print("   ok")
@@ -553,7 +635,7 @@ func _check_rock() -> void:
 		_scene.free()
 	# Nests are KEPT, unlike every other scenario: the clearance around them is a generation rule,
 	# and a check that strips the nests would assert it against a map that has none.
-	_scene = _arena(["Player", "CameraRig", "DigController", "DepthFocus", "FallGuard", "HUD",
+	_scene = _arena(["Player", "CameraRig", "DepthFocus", "FallGuard", "HUD",
 		"Surface/Rocks", "MatchDirector", "Navigation"], true)
 	await process_frame
 	await physics_frame
@@ -633,6 +715,7 @@ func _check_rock() -> void:
 			_fail("ROCK", "and it opened the rock cell it landed on")
 
 	print("")
+	_running.erase("rock")
 	print("-- rock  cells/plane %s" % [counts])
 	if _findings.is_empty():
 		print("   ok")
@@ -747,22 +830,19 @@ func _check_reveal() -> void:
 		_broken("reveal", "no seam with soft ground beside it in the second arena")
 		return
 	_network.dig(1, beside)
-	var player: Node3D = _scene.get_node("Player")
-	var controller: Node = _scene.get_node("DigController")
+	var player: Mouse = _scene.get_node("Player")
+	var controller: Node = player.get_node("DigController")
 	player.set_physics_process(false)
 	controller.set_physics_process(false)
 	player.global_position = _network.cell_to_world(1, beside) + Vector3.UP * 0.05
 	controller._plane = 1
-	player.set("team", Team.RED)
-	player._aim_point = _network.cell_to_world(1, seam2)
-	# A FRAME BETWEEN THE PRESS AND THE READ. `Input.action_press` is buffered and does not become
-	# visible to `is_action_pressed` until the next flush, so pressing and polling in the same
-	# breath reports a button nobody is holding -- and the rock branch, which needs the press to be
-	# NEW, never runs. It cost this check a wrong red before it cost anyone a wrong green.
-	Input.action_press("dig")
-	await process_frame
-	controller._update_dig(1.0 / 60.0)
-	Input.action_release("dig")
+	player.set_team(Team.RED)
+	# NO FRAME BETWEEN THE PRESS AND THE READ, AND NO `Input` AT ALL (M7). This used to press a real
+	# action and wait a frame for the buffer to flush, with a note about how that had cost the check
+	# a wrong red. Intent is a value now: `_hold_dig` builds a frame whose press bit is simply true,
+	# so the rock branch -- which needs the press to be NEW -- sees exactly what it is given, on the
+	# tick it is given it.
+	_hold_dig(player, controller, _network.cell_to_world(1, seam2), 1)
 	if not _network.is_rock_known(1, seam2, Team.RED):
 		_fail("REVEAL", "digging into a seam with the actual controls revealed nothing")
 	if _network.is_rock_known(1, seam2, Team.BLUE):
@@ -787,20 +867,15 @@ func _check_reveal() -> void:
 		_broken("reveal", "the cell behind the face is rock too -- nowhere to dig from")
 		return
 	_network.dig(1, back)
-	var digger: Node3D = _scene.get_node("Player")
-	var arm: Node = _scene.get_node("DigController")
+	var digger: Mouse = _scene.get_node("Player")
+	var arm: Node = digger.get_node("DigController")
 	digger.set_physics_process(false)
 	arm.set_physics_process(false)
 	digger.global_position = _network.cell_to_world(1, back) + Vector3.UP * 0.05
 	arm._plane = 1
-	digger.set("team", Team.BLUE)
+	digger.set_team(Team.BLUE)
 	digger.set_class(MouseClass.ENGINEER)
-	digger._aim_point = _network.cell_to_world(1, face)
-	Input.action_press("dig")
-	await process_frame
-	for i in range(40):
-		arm._update_dig(1.0 / 60.0)
-	Input.action_release("dig")
+	_hold_dig(digger, arm, _network.cell_to_world(1, face), 40)
 	if not _network.is_dug(1, face):
 		_broken("reveal", "the tile beside the seam never opened -- nothing was exposed")
 		return
@@ -810,6 +885,7 @@ func _check_reveal() -> void:
 		_fail("REVEAL", "and exposing a face told the other crew too")
 
 	print("")
+	_running.erase("reveal")
 	print("-- reveal")
 	if _findings.is_empty():
 		print("   ok")
@@ -921,6 +997,7 @@ func _check_seal() -> void:
 		_fail("PAVING", "the mouth past the slab was allowed but never recorded")
 
 	print("")
+	_running.erase("paving")
 	print("-- paving")
 	if _findings.is_empty():
 		print("   ok")
@@ -972,6 +1049,7 @@ func _check_steps(route: Array[Dictionary], label: String) -> void:
 
 func _report_routing() -> void:
 	print("")
+	_running.erase("routing")
 	print("-- routing")
 	if _findings.is_empty():
 		print("   ok")

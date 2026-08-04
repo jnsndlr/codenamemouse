@@ -85,6 +85,7 @@ func _initialize() -> void:
 		["tunnel_sight", _check_tunnel_sight],
 		["engineer_bot", _check_engineer_bot],
 		["boulder", _check_boulder],
+		["controls", _check_controls],
 	]
 
 	for check: Array in checks:
@@ -242,8 +243,9 @@ func _check_return_clock() -> void:
 func _check_no_underground() -> void:
 	await _arena(1)
 	var network := _scene.get_node("Tunnels") as TunnelNetwork
-	var controller := _scene.get_node("DigController")
 	var player := _scene.get_node("Player") as Mouse
+	# ON THE MOUSE, NOT ON THE ARENA (M7): the five controls are children of whoever is driving.
+	var controller := player.get_node("DigController")
 	var theirs := _director.banner_of(Team.RED)
 
 	# Gate one: the dig controller refuses to take a carrier down a shaft.
@@ -410,8 +412,11 @@ func _check_bots_move() -> void:
 func _check_cave_in() -> void:
 	await _arena(1)
 	var network := _scene.get_node("Tunnels") as TunnelNetwork
-	var cave := _scene.get_node_or_null("CaveIn") as CaveIn
 	var player := _director.get_player()
+	# ON THE MOUSE, NOT ON THE ARENA (M7): the five controls are children of whoever is driving.
+	var cave: CaveIn = null
+	if player != null:
+		cave = player.get_node_or_null("CaveIn") as CaveIn
 	if cave == null or player == null:
 		_expect(false, "the arena has a cave-in and a player")
 		return
@@ -519,8 +524,10 @@ func _intend(who: Node, action: int) -> void:
 func _check_barricade() -> void:
 	await _arena(1)
 	var network := _scene.get_node("Tunnels") as TunnelNetwork
-	var wall := _scene.get_node_or_null("Barricade") as Barricade
 	var player := _director.get_player()
+	var wall: Barricade = null
+	if player != null:
+		wall = player.get_node_or_null("Barricade") as Barricade
 	if wall == null or player == null:
 		_expect(false, "the arena has a barricade ability and a player")
 		return
@@ -661,8 +668,10 @@ func _check_barricade() -> void:
 func _check_sonar() -> void:
 	await _arena(1)
 	var network := _scene.get_node("Tunnels") as TunnelNetwork
-	var sonar := _scene.get_node_or_null("Sonar") as Sonar
 	var player := _director.get_player()
+	var sonar: Sonar = null
+	if player != null:
+		sonar = player.get_node_or_null("Sonar") as Sonar
 	if sonar == null or player == null:
 		_expect(false, "the arena has sonar and a player")
 		return
@@ -1117,7 +1126,7 @@ func _check_classes() -> void:
 	_expect(sneak_deep > sneak_surface * 0.5, "and a Sneak is not crippled by going down")
 
 	# The swap point: your own nest, and nowhere else.
-	var swap := _scene.get_node_or_null("ClassSwap") as ClassSwap
+	var swap := player.get_node_or_null("ClassSwap") as ClassSwap
 	if swap == null:
 		_expect(false, "the arena has a swap point")
 		return
@@ -1339,6 +1348,65 @@ func _check_spotting() -> void:
 		eyes.contacts_for(Team.BLUE).has(thief),
 		"a carrier is spotted wherever they are"
 	)
+
+
+## Who carries controls, and who gets a cursor drawn for them. (M7)
+##
+## TWO QUESTIONS THAT USED TO BE ONE, and the whole point of `mouse_control.gd` is that they are
+## not the same. *Does this machine decide what happens to this mouse* is a rule; *is this the
+## mouse this machine is looking at* is presentation. While there was one player on one machine
+## every answer was "yes, the player" and nothing could tell them apart.
+##
+## THE CURSOR HALF IS THE ONE WITH NO OTHER WITNESS. A leaked rule shows up as a mouse doing
+## something it should not; a cursor drawn for the wrong mouse shows up as a box of earth lit in a
+## corridor across the map, which is invisible to every headless check in the project and reads, in
+## a real match, as an enemy Engineer's position being given away for free. So it is asserted on
+## the node rather than photographed: the watched mouse builds a cursor and a mouse nobody is
+## behind never does.
+func _check_controls() -> void:
+	await _arena(5)
+	var player := _director.get_player()
+	if player == null:
+		_expect(false, "there is a player to carry controls")
+		return
+
+	for control_name: String in MouseControls.CONTROLS:
+		_expect(player.get_node_or_null(control_name) != null,
+			"the local player carries its own %s" % control_name)
+
+	# BOTS CARRY NONE, and that is a decision rather than an omission -- a bot's input frame is
+	# always empty, so five nodes that can never fire would be five nodes' worth of tick on six of
+	# the ten mice in a match. Bots reach the same rules by their own road: `bot_digger.gd` cuts
+	# earth, and `ClassSwap.allowed` is deliberately static so there is one copy of the rule about
+	# where a swap is legal.
+	var bot := _director.seat_mouse(Team.BLUE, 1)
+	if bot == null:
+		_expect(false, "there is a bot to compare against")
+		return
+	_expect(bot.get_node_or_null("DigController") == null, "and a bot carries none of them")
+
+	# A second human, in a chair a bot was holding. On a host this is what a remote player is: the
+	# same `Player` scene, the same controls, driven by a packet instead of a keyboard.
+	_director.seat_remote(Team.RED, 1, true)
+	await _advance(0.2)
+	var remote := _director.seat_mouse(Team.RED, 1)
+	if remote == null or not (remote is Player):
+		_expect(false, "a remote seat holds a driven mouse")
+		return
+	_expect(remote.get_node_or_null("DigController") != null,
+		"a remote player carries its own controls too")
+
+	var mine := player.get_node("DigController") as MouseControl
+	var theirs := remote.get_node("DigController") as MouseControl
+	_expect(mine.acts() and theirs.acts(), "the host decides for both of them")
+	_expect(mine.watched(), "and is looking at its own mouse")
+	_expect(not theirs.watched(), "and not at the other one")
+
+	# The cursor follows the eyes, not the authority. Both mice are simulated here; only one of
+	# them is being looked at, and only that one should be drawing a box on the ground.
+	await _advance(0.4)
+	_expect(mine.get("_cursor") != null, "so a cursor is built for the mouse on screen")
+	_expect(theirs.get("_cursor") == null, "and never for the one that is not")
 
 
 # ------------------------------------------------------------------------------ the harness

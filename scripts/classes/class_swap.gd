@@ -1,5 +1,5 @@
 class_name ClassSwap
-extends Node
+extends MouseControl
 ## The swap point: change class at your own nest, free, at the cost of the walk there.
 ##
 ## GDD SECTION 4 IS SPECIFIC ABOUT THE PRICE. Adaptation is always possible and never
@@ -27,20 +27,21 @@ extends Node
 ## the player's input handler and a bot has no input, but WHERE a class change is legal is not an
 ## input question -- it is a rule, and the moment it exists twice the two copies start to differ.
 ## A bot that could re-spec mid-corridor would be a bot playing a different game.
+##
+## ONE PER MOUSE SINCE M7, not one per arena. See [MouseControl]. The director is inherited from
+## there and found by group rather than wired, because a mouse spawned into a chair at runtime has
+## no scene to have been wired in.
 
-@export var player_path: NodePath
 @export var director_path: NodePath
-
-var _player: Mouse
-var _director: MatchDirector
 
 
 func _ready() -> void:
-	_player = get_node_or_null(player_path) as Mouse
-	_director = get_node_or_null(director_path) as MatchDirector
-	if _player == null or _director == null:
-		push_warning("class swap: needs a player and a director -- swapping is off")
-		set_process_unhandled_input(false)
+	super()
+	if not director_path.is_empty():
+		_director = get_node_or_null(director_path) as MatchDirector
+	if _player == null:
+		push_warning("class swap: needs a mouse to swap -- swapping is off")
+		set_physics_process(false)
 
 
 ## Whether ANY mouse may change class where it is standing. The rule, in one place.
@@ -58,9 +59,9 @@ static func allowed(mouse: Mouse, director: MatchDirector) -> bool:
 	return nest != null and nest.contains(mouse.global_position)
 
 
-## Whether the mouse this node is watching could swap right now.
+## Whether the mouse this node is fitted to could swap right now.
 func available() -> bool:
-	return allowed(_player, _director)
+	return allowed(_player, director())
 
 
 ## What the contextual hint should say, or "" when there is nothing on offer.
@@ -89,8 +90,13 @@ func prompt() -> String:
 ## Nothing consumes the press any more. `set_input_as_handled` used to stop two ability nodes
 ## reacting to the same key; the class gate below was always what actually did that work, since
 ## only one node's `owner_class` can match the mouse.
+## A CLIENT ASKS AND WAITS, with no local guess (M7). This is the one of the five with nothing to
+## predict: a swap is instantaneous, the new class rides in the very next pose -- two spare bits of
+## the flag byte, see `snapshot.gd` -- and a client that swapped itself would be re-typing the
+## mouse a thirtieth of a second before being told the same thing, or, on the run where the server
+## refused, a thirtieth of a second before being told something else.
 func _physics_process(_delta: float) -> void:
-	if _player == null:
+	if _player == null or not acts():
 		return
 	if not _player.input().is_pressed(InputFrame.Action.SWAP_CLASS) or not available():
 		return

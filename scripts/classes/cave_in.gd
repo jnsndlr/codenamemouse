@@ -1,6 +1,8 @@
 class_name CaveIn
-extends Node
+extends MouseControl
 ## The Engineer's capability: bring a tunnel down on the cell you are looking at.
+##
+## ONE PER MOUSE SINCE M7, not one per arena. See [MouseControl].
 ##
 ## PILLAR 4, RELOCATED. GDD section 4 used to give the Engineer terrain alteration outright --
 ## "nobody else alters terrain" -- and that turned out to be the wrong lever, because it makes
@@ -36,9 +38,6 @@ extends Node
 signal collapsed(plane: int, cell: Vector2i)
 signal refused(reason: String)
 
-@export var player_path: NodePath
-@export var network_path: NodePath
-
 @export_group("Ability")
 ## Which class may do this. An export rather than a hard-coded check, because "who owns this
 ## capability" is a design question and the answer has already moved once.
@@ -49,29 +48,22 @@ signal refused(reason: String)
 ## How far the aimed cell may be, in cells. One -- see the header.
 @export var reach_cells: float = 1.6
 
-var _player: Mouse
-var _network: TunnelNetwork
 var _cooldown_left: float = 0.0
+## Built on the first frame anybody is looking at this mouse, and never on the other nine.
 var _cursor: CollapseCursor
 
 
 func _ready() -> void:
-	_player = get_node_or_null(player_path) as Mouse
-	_network = get_node_or_null(network_path) as TunnelNetwork
+	super()
 	if _player == null or _network == null:
-		push_warning("cave-in: needs a player and a network -- the ability is off")
+		push_warning("cave-in: needs a mouse and a network -- the ability is off")
 		set_process(false)
-		set_process_unhandled_input(false)
+		set_physics_process(false)
 		return
-	# Refusals go out on the network's existing "say why" channel rather than a second one. That
-	# signal is named for digging but it is really the one line on screen that explains a control
-	# that just did nothing, and a refused cave-in is exactly that -- see depth_indicator.gd.
-	refused.connect(_network.dig_refused.emit)
-
-	# Parented to the network, like the dig cursor, so it moves with the tunnels rather than with
-	# this node -- which is a plain Node with no transform of its own.
-	_cursor = CollapseCursor.new()
-	_network.add_child(_cursor)
+	# Refusals go out to the local viewer and to nobody else. `explain` is the base class's one
+	# door for that, and the reason it is a door rather than a direct `dig_refused.emit` is that
+	# a host now runs this ability for every human in the match -- see [MouseControl].
+	refused.connect(explain)
 
 
 func _process(delta: float) -> void:
@@ -84,9 +76,19 @@ func _process(delta: float) -> void:
 ## Only for the class that can do it. A box following every mouse that walks through a corridor
 ## would be noise, and worse, it would promise a capability three of the four do not have -- the
 ## class gate is the whole of Pillar 4 for the Engineer and the world should say so.
+## ...AND ONLY FOR THE MOUSE THIS MACHINE IS LOOKING AT (M7). Every driven mouse carries one of
+## these now, so an unconditional cursor would light a cell for every Engineer in the match on
+## every screen in the match.
 func _show_reach() -> void:
-	if _cursor == null:
+	if not watched():
+		if _cursor != null:
+			_cursor.show_target(_network, 0, Vector2i.MAX, false)
 		return
+	if _cursor == null:
+		# Parented to the network, like the dig cursor, so it moves with the tunnels rather than
+		# with this node -- which is a plain Node with no transform of its own.
+		_cursor = CollapseCursor.new()
+		_network.add_child(_cursor)
 	if _player == null or _player.is_scruffed() or _player.mouse_class != owner_class:
 		_cursor.show_target(_network, 0, Vector2i.MAX, false)
 		return
@@ -166,6 +168,15 @@ func _physics_process(_delta: float) -> void:
 	var cell := target()
 	if cell == Vector2i.MAX:
 		refused.emit("point at the tunnel beside you")
+		return
+
+	# A PUPPET RUNS ITS COOLDOWN AND NEVER ACTS ON IT (M7), which is the same shape checkpoint 3
+	# settled for the banner's return clock. Every check above this line is a rule both machines
+	# can evaluate identically off state both machines have, so the person pressing Q gets a HUD
+	# that greys out and a reason when it refuses; what they do not get is a hole in the ground,
+	# because the roof coming in is the server's to decide and `_bury` is damage.
+	if not acts():
+		_cooldown_left = cooldown
 		return
 
 	var plane := _player.get_plane()

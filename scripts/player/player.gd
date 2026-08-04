@@ -63,6 +63,12 @@ func _ready() -> void:
 	super()
 	_stamina = sprint_seconds
 	scurried.connect(_on_scurried)
+	# THE CONTROLS COME WITH THE MOUSE (M7). Digging, the two Engineer abilities, the Sneak's sonar
+	# and the swap point used to be five nodes in `arena.tscn` pointed at `../Player` -- fine while
+	# there was one, and the reason a remote human could press dig and have nothing happen at all.
+	# A `Player` is a mouse somebody is driving, wherever that somebody is sitting, so it is the
+	# one place that knows a set is wanted. See [MouseControls].
+	MouseControls.fit(self)
 
 
 ## A second wind, not a stat buff (GDD section 2). Refilling stamina is what stops Scurry from

@@ -642,6 +642,15 @@ func is_puppet() -> bool:
 ## packet that arrives late does not restart the blend from wherever the interpolation had got to
 ## -- that turns every hiccup into a visible stutter backwards.
 func apply_pose(at: Vector3, facing: float, flags: int, health: int) -> void:
+	# CLASS FIRST, AND THE ORDER IS THE WHOLE REASON IT IS ON THIS LINE. `set_class` is what sets
+	# `max_health`, and the health below is a fraction of it -- so applying them the other way
+	# round scales a Sneak's ratio by a Brute's maximum for one tick every time somebody swaps.
+	# Guarded on change because `set_class` copies a whole definition and this runs thirty times a
+	# second.
+	var kind := (flags & Snapshot.CLASS_MASK) >> Snapshot.CLASS_SHIFT
+	if kind != mouse_class:
+		set_class(kind)
+
 	# A RATIO OFF THE WIRE, SCALED BY OUR OWN MAXIMUM. The class table is not replicated, so the
 	# packet cannot say "62 points" and be understood -- but every end knows what this mouse's
 	# maximum is, and a fraction of it means the same thing everywhere.

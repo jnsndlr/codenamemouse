@@ -66,6 +66,22 @@ enum Flag {
 const PLANE_SHIFT: int = 2
 const PLANE_MASK: int = 0b1100
 
+## Which of the four classes a mouse currently is, in the next two bits of the same byte.
+##
+## HERE RATHER THAN IN `MatchState`, and rather than nowhere at all. Class was never replicated
+## because it never changed: both ends build their ten mice from the same `SEATS` table, so they
+## agreed by construction. M7's controls refactor is what breaks that -- the swap point is one of
+## the five, so a remote human standing on their own nest and pressing C now genuinely re-types
+## their mouse on the server, and every other machine went on drawing the old class, showing the
+## old row on the roster, and expecting the old dig speed.
+##
+## IT HAS TO ARRIVE WITH THE HEALTH RATHER THAN NEAR IT. Health travels as a fraction of a
+## per-class maximum (see [member Pose.health]), so a pose that carried a Sneak's ratio and a
+## Brute's class read as a mouse that had just lost forty points. Two bits in a byte that was
+## already being sent, applied in the right order, and the whole disagreement goes away.
+const CLASS_SHIFT: int = 4
+const CLASS_MASK: int = 0b110000
+
 ## Bytes per pose: key, three floats, facing, flags, health.
 const POSE_SIZE: int = 1 + 4 * 4 + 1 + 1
 const HEADER_SIZE: int = 1 + 4 + 1

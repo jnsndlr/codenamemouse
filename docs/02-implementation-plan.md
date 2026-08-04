@@ -1925,6 +1925,84 @@ no packet that is correct for both of them.
 > the local player's controls rather than any mouse's. That is the next piece, and it is a
 > refactor rather than a netcode problem.
 
+#### In progress — any mouse's controls (landed)
+
+The piece the note above named, and it was a refactor rather than a netcode problem exactly as
+predicted. [`mouse_control.gd`](scripts/actors/mouse_control.gd) is the half the dig controller and
+the four abilities have in common, [`mouse_controls.gd`](scripts/actors/mouse_controls.gd) is the
+set, and `Player._ready` fits one. **A client can dig now**, and the audit that says so watched a
+headless client sink a shaft, climb down it and open four cells of earth on a machine fifty
+milliseconds away.
+
+- **The two questions were one question, and separating them is the whole file.** `acts()` is
+  *does this machine decide what happens to this mouse*; `watched()` is *is this the mouse this
+  machine is looking at*. They had the same answer for six milestones because there was one player
+  on one machine. A host now runs the rules for four people and draws a cursor for one; a client
+  draws a cursor for a mouse whose rules resolve three hundred miles away. **Rules run where the
+  simulation is, presentation runs where the eyes are** — and a remote player's refusal printed on
+  the host's HUD is the same species of bug as their dig cursor lit in the host's yard.
+- **A puppet runs its cooldowns and never acts on them.** Not prediction — the same shape
+  checkpoint 3 already settled for the banner's return clock. Every check above the mutation is a
+  rule both machines can evaluate off state both machines have, so the person pressing Q gets a
+  HUD that greys out and a reason when it refuses. What they do not get is the hole in the ground.
+- **The sonar's marks did not come with it, and that split is the interesting part.** The ability
+  belongs to a Sneak; a mark is a scratch on the floor of the world. With one sonar per mouse a
+  private `_marks` array would have meant an enemy could only rub out cant its own node happened
+  to have drawn — so marks are read from the group they were already in.
+- **Bots carry none of the five**, because a bot's input frame is always empty and five nodes that
+  can never fire on six of ten mice is six mice of wasted tick. They reach the same rules by their
+  own road, which is why `ClassSwap.allowed` was written static in the first place.
+- **Class moved into the pose**, two bits of a flag byte that was already going out. Class was
+  never replicated because it never changed — both ends build their ten mice from the same `SEATS`
+  table — and the swap point being one of the five is precisely what breaks that. It has to arrive
+  *with* the health rather than near it: health travels as a fraction of a per-class maximum, so a
+  pose carrying a Sneak's ratio and a Brute's class reads as a mouse that just lost forty points.
+
+> **A parse error failed no suite at checkpoint 3; this time a signature change failed no suite for
+> two milestones.** `tunnel_audit.gd` drove the dig controller with `_update_dig(delta)`. Step 2
+> gave that function a second parameter — the intent has to be a value that can travel — and
+> nothing told the two callers. **A GDScript runtime error aborts the function it happens in and
+> lets the caller carry on**, so the dig-flow and reveal checks stopped part way through, printed
+> nothing, and the file went on announcing *"ALL INVARIANTS HOLD … plus dig flow … and reveal"*
+> over two checks that had not run a single assertion. This is the fifth test-that-cannot-fail this
+> project has caught and the cause is new every time: not a weak assertion, not a subject arranged
+> so the rule could not bite, not favourable timing — **a caller left behind by a signature, in a
+> suite whose failure mode is to go quiet.** There is a tripwire now: a check arms itself on entry
+> and disarms at its own report line, and anything still armed is reported BROKEN.
+
+> **The first version of the new "a client cannot cut earth" check was verified twice and passed
+> the second time.** Deleting the network's guard failed it correctly. Deleting the *controller's*
+> guard did not — and of course it did not: with the network still refusing, a controller that
+> reaches for the earth and one that does not are indistinguishable from outside. **Two guards need
+> two subjects.** The controller's is now asserted on the BAR rather than on the ground: a puppet
+> whose hold completes sits at full and waits for the server's cut, where the alternative — call,
+> be refused, zero — fills the bar twice during the round trip and reads as a dig that did not take.
+
+> **`--autopilot` digs now, and getting it to took three wrong versions, each of which was a real
+> property of the control rather than a quirk of the harness.** Aiming a metre along the facing
+> lands on the boundary of the cell you are already standing in, and an already-dug cell is not a
+> target. Rotating the aim once a second finishes nothing, because progress belongs to the tile you
+> are *pointing at* — so does walking, which moves the cell the aim is measured from. And holding E
+> while waiting for the pose that says "you are underground now" walks the mouse down the shaft and
+> straight back up it, because E takes whichever shaft the cell has. A person holding that key
+> learns all three in one corridor.
+
+> **The leak check failed again, and again it was the check.** The grace window added at step 5
+> handles a host picture that is a little *stale*; it does nothing for a host picture that does not
+> exist. Both processes are killed at the same instant and the host starts fourteen seconds
+> earlier, so its report timer is permanently out of phase and its log routinely ends a second or
+> two *before* the client's — which makes everything the client legitimately learnt in that last
+> second a cell nobody ever said it could have. Thirteen of them, named by coordinate, looking
+> exactly like the thing the check exists for. The invariant is only asked where the two logs
+> overlap now. **A false alarm on an invariant is worse than a missing one**, for the second time.
+
+> **What is still missing is spawn replication, and it is now one gap rather than three.** A
+> barricade is a boulder spawned at runtime; a cant mark is a glyph spawned at runtime; a dropped
+> cheese wedge — outstanding since checkpoint 3 — is a wedge spawned at runtime. All three are
+> real on the server, all three are invisible to every client, and all three want the same message.
+> A remote Engineer's barricades block the routing graph and nobody else can see the rock, which is
+> the worst of the three and the reason this is the next piece.
+
 #### Sequencing — five checkpoints, each playable
 
 Ordered so that something is testable at every stage and the risky part is not last.
@@ -1946,8 +2024,10 @@ Ordered so that something is testable at every stage and the risky part is not l
    run it in the audits. **Met** — the assertion exists, it is in `replication_audit.gd`, it is
    checked against `TunnelSight.knows` rather than against the sender's own record, and it has
    been verified by deleting the filter and watching it name the leaked cells. Digging *from* a
-   client is the piece still outstanding, and it is a refactor of five singletons rather than
-   anything to do with the wire.
+   client landed after it, as predicted, as a refactor of five singletons rather than anything to
+   do with the wire — the suite now watches a headless client sink a shaft and open four cells.
+   What is left is spawn replication for the three things spawned at runtime: dropped wedges,
+   barricade boulders and cant marks.
 5. **Over the internet, with a friend, for a full match.** The milestone's actual question.
 
 #### Risks

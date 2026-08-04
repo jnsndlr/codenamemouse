@@ -1,4 +1,4 @@
-[gd_scene load_steps=40 format=3]
+[gd_scene load_steps=35 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="Script" path="res://scripts/game/nest.gd" id="14_nest"]
@@ -10,17 +10,12 @@
 [ext_resource type="Script" path="res://scripts/ui/minimap.gd" id="20_minimap"]
 [ext_resource type="Script" path="res://scripts/ui/roster.gd" id="21_roster"]
 [ext_resource type="Script" path="res://scripts/game/spotting.gd" id="22_spotting"]
-[ext_resource type="Script" path="res://scripts/classes/class_swap.gd" id="23_swap"]
-[ext_resource type="Script" path="res://scripts/classes/cave_in.gd" id="24_cavein"]
 [ext_resource type="Script" path="res://scripts/ui/class_bar.gd" id="25_classbar"]
-[ext_resource type="Script" path="res://scripts/classes/barricade.gd" id="26_barricade"]
 [ext_resource type="Script" path="res://scripts/maps/no_surface_zone.gd" id="27_patio"]
 [ext_resource type="Script" path="res://scripts/maps/boulder_field.gd" id="28_boulders"]
-[ext_resource type="Script" path="res://scripts/classes/sonar.gd" id="29_sonar"]
 [ext_resource type="Script" path="res://scripts/game/tunnel_sight.gd" id="30_sight"]
 [ext_resource type="Script" path="res://scripts/camera/camera_rig.gd" id="2_rig"]
 [ext_resource type="Script" path="res://scripts/tunnels/tunnel_network.gd" id="3_network"]
-[ext_resource type="Script" path="res://scripts/tunnels/dig_controller.gd" id="4_dig"]
 [ext_resource type="Script" path="res://scripts/tunnels/depth_focus.gd" id="5_focus"]
 [ext_resource type="Script" path="res://scripts/ui/depth_indicator.gd" id="6_depth"]
 [ext_resource type="Script" path="res://scripts/ui/contextual_hint.gd" id="7_hint"]
@@ -235,11 +230,6 @@ near = 0.05
 far = 200.0
 compositor = SubResource("Compositor_pixel")
 
-[node name="DigController" type="Node" parent="."]
-script = ExtResource("4_dig")
-network_path = NodePath("../Tunnels")
-player_path = NodePath("../Player")
-
 [node name="DepthFocus" type="Node" parent="."]
 script = ExtResource("5_focus")
 network_path = NodePath("../Tunnels")
@@ -271,26 +261,6 @@ camouflage_path = NodePath("../GrassCamouflage")
 script = ExtResource("30_sight")
 network_path = NodePath("../Tunnels")
 
-[node name="ClassSwap" type="Node" parent="."]
-script = ExtResource("23_swap")
-player_path = NodePath("../Player")
-director_path = NodePath("../MatchDirector")
-
-[node name="CaveIn" type="Node" parent="."]
-script = ExtResource("24_cavein")
-player_path = NodePath("../Player")
-network_path = NodePath("../Tunnels")
-
-[node name="Sonar" type="Node" parent="."]
-script = ExtResource("29_sonar")
-player_path = NodePath("../Player")
-network_path = NodePath("../Tunnels")
-
-[node name="Barricade" type="Node" parent="."]
-script = ExtResource("26_barricade")
-player_path = NodePath("../Player")
-network_path = NodePath("../Tunnels")
-
 [node name="LookPanel" type="CanvasLayer" parent="."]
 script = ExtResource("11_look")
 camera_path = NodePath("../CameraRig/Pitch/Camera3D")
@@ -318,8 +288,6 @@ label_settings = SubResource("Label_prompt")
 script = ExtResource("7_hint")
 network_path = NodePath("../../Tunnels")
 player_path = NodePath("../../Player")
-swap_path = NodePath("../../ClassSwap")
-sonar_path = NodePath("../../Sonar")
 
 [node name="Match" type="Control" parent="HUD"]
 script = ExtResource("17_hud")
@@ -346,7 +314,6 @@ director_path = NodePath("../../MatchDirector")
 [node name="ClassBar" type="Control" parent="HUD"]
 script = ExtResource("25_classbar")
 player_path = NodePath("../../Player")
-swap_path = NodePath("../../ClassSwap")
 
 [node name="PauseMenu" type="CanvasLayer" parent="."]
 script = ExtResource("31_pause")

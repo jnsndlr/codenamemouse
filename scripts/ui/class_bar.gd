@@ -18,7 +18,6 @@ extends Control
 ## now. What you would become is one card to the right, and pressing C moves both.
 
 @export var player_path: NodePath
-@export var swap_path: NodePath
 
 @export_group("Layout")
 @export var card_size: Vector2 = Vector2(126.0, 96.0)
@@ -29,7 +28,6 @@ extends Control
 @export var slide_speed: float = 9.0
 
 var _player: Mouse
-var _swap: ClassSwap
 ## 0 hidden, 1 fully out. Smoothed so it slides rather than blinks.
 var _shown: float = 0.0
 
@@ -38,11 +36,20 @@ func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_player = get_node_or_null(player_path) as Mouse
-	_swap = get_node_or_null(swap_path) as ClassSwap
+
+
+## The swap point belonging to THIS mouse (M7). It was a node path into the map and cannot be one
+## any more: every driven mouse carries its own controls, and the mouse itself is replaced
+## mid-match when somebody takes a bot's chair -- so this is asked per frame rather than cached.
+func _swap_point() -> ClassSwap:
+	if _player == null:
+		return null
+	return _player.get_node_or_null(^"ClassSwap") as ClassSwap
 
 
 func _process(delta: float) -> void:
-	var wanted := 1.0 if (_swap != null and _swap.available()) else 0.0
+	var swap := _swap_point()
+	var wanted := 1.0 if (swap != null and swap.available()) else 0.0
 	_shown = lerpf(_shown, wanted, 1.0 - exp(-slide_speed * delta))
 	if absf(_shown - wanted) < 0.002:
 		_shown = wanted

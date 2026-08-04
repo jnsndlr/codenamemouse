@@ -37,7 +37,13 @@ const CLIENT_TITLE_SECONDS: String = "8"
 ## Long enough for five or six reports at `NetMatch.REPORT_SECONDS` once the client is actually in
 ## the arena, which is what makes the position statistics below mean anything. One sample is a
 ## coincidence.
-const PLAY_SECONDS: float = 42.0
+##
+## LENGTHENED AT M7 for the digging check. The autopilot spends its first fourteen seconds on the
+## lawn -- that is where the position spread is earned, since a corridor is one cell wide -- then
+## sinks a shaft and holds the dig button, and a Generalist takes about a second and a half per
+## tile. A run that ends before it has opened one proves nothing about the half of the milestone
+## this suite was extended for.
+const PLAY_SECONDS: float = 54.0
 ## `--quit-after` counts FRAMES. ~150s at 60Hz: a backstop well past a run that needs about 50,
 ## since both processes are killed explicitly.
 const LIFETIME_FRAMES: String = "9000"
@@ -131,6 +137,7 @@ func _play_a_match() -> void:
 
 	_check_the_pipe(host_said, client_said)
 	_check_the_mouse(host_said, client_said)
+	_check_the_digging(host_said, client_said)
 	_check_the_scoreboard(host_said, client_said)
 	_check_the_earth(host_said, client_said)
 
@@ -215,6 +222,59 @@ func _check_the_mouse(host_said: String, client_said: String) -> void:
 		disagreement < AGREEMENT)
 
 
+# ------------------------------------------------------------------------- and a hole in the ground
+
+
+## Can the second keyboard change the WORLD, or only walk around in it? (M7)
+##
+## THE FAILURE THIS EXISTS FOR IS COMPLETELY SILENT, and it was the state of the game until the
+## controls became children of a mouse. A remote player's DIG bits crossed the wire from step 2
+## onward and arrived at a server where the dig controller was an arena singleton wired to
+## `../Player` -- *the* player, the host's own. Every count was healthy, the seat was right, the
+## mouse moved, the snapshots came back, and the earth simply never opened. Nothing above this
+## function can tell that apart from a client that chose not to dig.
+##
+## THREE CLAIMS, AND THE THIRD IS THE ONE THAT IS EASY TO MISS.
+##
+## 1. The host's copy of the client's mouse went underground -- so a BURROW crossed, was applied to
+##    the right chair, and the server moved that mouse a plane down.
+## 2. The host's copy of the client's mouse *cut cells*, counted on the controller that belongs to
+##    that chair. `dig()` records which crew learnt a cell and never whose hand was on the button,
+##    so a per-seat counter is the only thing that can say "this human dug" rather than "somebody
+##    dug" in a match with four bot Engineers in it.
+## 3. The client's OWN controller cut nothing. A client that also cuts is a client that has a
+##    second opinion about the shape of the world -- the two agree until they don't, and the
+##    disagreement arrives as a corridor that exists on one machine.
+func _check_the_digging(host_said: String, client_said: String) -> void:
+	print("\n-- and a hole it dug from three hundred miles away")
+
+	var their_planes := _totals(host_said, "drives RED seat \\d+ at [^\\n]*plane (\\d+)")
+	var their_shafts := _numbers(host_said, "drives RED seat \\d+ at [^\\n]*sank (\\d+)")
+	var their_cuts := _numbers(host_said, "drives RED seat \\d+ at [^\\n]*cut (\\d+)")
+	var my_cuts := _numbers(client_said, "received.*mine at [^\\n]*cut (\\d+)")
+	# NOT A HARNESS COMPLAINT, MOST LIKELY. `_where` prints a dash where a mouse has no dig
+	# controller, so the commonest way to arrive here is the exact regression this check exists
+	# for: a mouse in a chair that carries no controls. Verified by making `MouseControls.fit`
+	# skip remote players -- which is precisely the state of the game before this step -- and
+	# watching it land on this line.
+	if their_cuts.is_empty() or their_shafts.is_empty() or my_cuts.is_empty():
+		_broken("a mouse in this match has no controls to cut with -- see mouse_controls.gd")
+		return
+
+	# The LAST value, not the sum: the counters are cumulative, so a total across reports would
+	# count the same cells five times over and read as success on one lucky tile.
+	#
+	# THE SHAFT AND THE CORRIDOR ARE SEPARATE CLAIMS. The first version of this check added them
+	# and passed on a run where the client pressed F once and never opened a cell -- the press path
+	# working and the hold path not, reported as digging. F is one keypress; a corridor cell is
+	# half a second of a HELD bit surviving the trip, being read on the server's physics tick, and
+	# accumulating against a per-class dig rate. That is the harder claim and it needs its own line.
+	_check("the client sank a shaft with F (%d)" % their_shafts[-1], their_shafts[-1] > 0)
+	_check("and the host took it underground (%d plane-reports)" % their_planes, their_planes > 0)
+	_check("and holding dig opened real earth (%d cells)" % their_cuts[-1], their_cuts[-1] > 0)
+	_check("while the client itself cut nothing (%d)" % my_cuts[-1], my_cuts[-1] == 0)
+
+
 # --------------------------------------------------------------- and a match, not just a puppet show
 
 
@@ -274,8 +334,8 @@ func _check_the_scoreboard(host_said: String, client_said: String) -> void:
 	# delivery either. It catches the byte being scaled by the wrong maximum or read at the wrong
 	# offset, which are the mistakes it is actually possible to make here. **Whoever adds combat to
 	# this suite should promote it to a real check**, because at that point it can be one.
-	var mine := _healths(client_said, "received.*health (\\d+)")
-	var theirs_health := _healths(host_said, "drives RED seat \\d+ at [^\\n]*health (\\d+)")
+	var mine := _numbers(client_said, "received.*health (\\d+)")
+	var theirs_health := _numbers(host_said, "drives RED seat \\d+ at [^\\n]*health (\\d+)")
 	if mine.is_empty() or theirs_health.is_empty():
 		_broken("neither end reported a health")
 		return
@@ -302,7 +362,7 @@ func _check_the_scoreboard(host_said: String, client_said: String) -> void:
 func _check_the_earth(host_said: String, client_said: String) -> void:
 	print("\n-- and no floor plan it did not earn")
 
-	var mine := _last_report(client_said, "earth: took \\d+, hold \\[([^\\]]*)\\]")
+	var mine := _last_bracketed(client_said, host_said)
 	var dug := _last_report(host_said, "earth: sent \\d+, took back \\d+, all \\[([^\\]]*)\\]")
 	if dug["cells"].is_empty():
 		_broken("nobody dug anything -- there is no floor plan to leak, so nothing was tested")
@@ -446,6 +506,43 @@ func _last_report(text: String, pattern: String) -> Dictionary:
 ## processes that keep their own clocks. Anything inside it was legitimately sendable within a few
 ## seconds of the client's snapshot; a genuine leak is a set of cells that was never permitted at
 ## any moment of the match, so widening by seconds costs the check nothing.
+## The client's most recent earth report that the HOST also has a picture of.
+##
+## THE GRACE WINDOW WAS ONLY HALF THE FIX, and this is the other half. `_permitted_around` widened
+## the comparison so a corridor whose fog closed between the two logs stops reading as a leak --
+## and that handles the case where the host's picture is a little *stale*. It does nothing for the
+## case where the host has no picture at all.
+##
+## Both processes are killed at the same instant and the host was started fourteen seconds earlier,
+## so their five-second report timers are permanently out of phase and the host's log routinely
+## ends a second or two BEFORE the client's. Judged against its last line, everything the client
+## legitimately learnt in that final second or two is a cell nobody ever said it could have. On the
+## run that found this it was thirteen of them, on plane 2, all arriving in the client's very last
+## report -- named by coordinate, looking exactly like the leak this check exists for.
+##
+## So the invariant is only asked where the two logs overlap. A false alarm on an invariant is
+## worse than a missing one: it is the thing that gets the invariant relaxed. That sentence is
+## already in the plan about this check, and this is the second time it applied.
+func _last_bracketed(client_said: String, host_said: String) -> Dictionary:
+	var re := RegEx.create_from_string("\\[(\\d+)\\] earth RED may know")
+	var seen := re.search_all(host_said)
+	if seen.is_empty():
+		return {"at": 0, "cells": {}}
+	var newest := seen[-1].get_string(1).to_int()
+
+	var best: Dictionary = {"at": 0, "cells": {}}
+	var holds := RegEx.create_from_string("\\[(\\d+)\\] earth: took \\d+, hold \\[([^\\]]*)\\]")
+	for hit: RegExMatch in holds.search_all(client_said):
+		var at := hit.get_string(1).to_int()
+		if at > newest:
+			continue
+		var cells: Dictionary = {}
+		for cell: String in hit.get_string(2).split(" ", false):
+			cells[cell] = true
+		best = {"at": at, "cells": cells}
+	return best
+
+
 func _permitted_around(text: String, crew: String, at: int) -> Dictionary:
 	var re := RegEx.create_from_string("\\[(\\d+)\\] earth %s may know \\[([^\\]]*)\\]" % crew)
 	var out: Dictionary = {}
@@ -480,7 +577,12 @@ func _minus(from: Dictionary, these: Dictionary) -> Dictionary:
 	return out
 
 
-func _healths(text: String, pattern: String) -> Array[int]:
+## Every integer a pattern's first capture group matched, in order.
+##
+## Was `_healths`, and generalised rather than copied when M7 wanted the same thing for the
+## per-seat dig counter. Order matters to both callers and for opposite reasons: health wants the
+## LATEST reading, and the dig counter is cumulative, so a sum would count one tile five times.
+func _numbers(text: String, pattern: String) -> Array[int]:
 	var re := RegEx.create_from_string(pattern)
 	var out: Array[int] = []
 	for hit: RegExMatch in re.search_all(text):

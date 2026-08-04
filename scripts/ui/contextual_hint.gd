@@ -24,12 +24,6 @@ const HEAD: float = 0.5
 
 @export var network_path: NodePath
 @export var player_path: NodePath
-## The swap point, if this map has one. Optional: it owns the rule about whether a class change
-## is on offer, and this file only asks. Leaving it unwired costs the prompt, not the feature.
-@export var swap_path: NodePath
-## Optional Sneak sonar. Used only for the nearby enemy-cant prompt; the ability works without
-## the HUD knowing about it.
-@export var sonar_path: NodePath
 ## Clearance between the projected point and the bottom of the text, in pixels. On top of the
 ## world-space lift, because the camera's pitch squashes vertical distance on screen and the
 ## lift alone lands the text on the mouse's back.
@@ -41,18 +35,27 @@ const HEAD: float = 0.5
 
 var _network: TunnelNetwork
 var _player: Node3D
-var _swap: ClassSwap
-var _sonar: Sonar
 var _showing: float = 0.0
 
 
 func _ready() -> void:
 	_network = get_node_or_null(network_path) as TunnelNetwork
 	_player = get_node_or_null(player_path) as Node3D
-	_swap = get_node_or_null(swap_path) as ClassSwap
-	_sonar = get_node_or_null(sonar_path) as Sonar
 	text = ""
 	modulate.a = 0.0
+
+
+## The swap point and the sonar, ASKED OF THE MOUSE RATHER THAN OF THE MAP (M7).
+##
+## They were two node paths into `arena.tscn` and they cannot be any more: every driven mouse
+## carries its own set of controls now, and the pair this HUD wants is the pair belonging to the
+## mouse it is drawing a prompt above. Fetched per call rather than cached because that mouse is
+## replaced mid-match -- a bot gives up its chair when somebody joins -- and a cached child of a
+## freed mouse is the exact hazard step 4 collected three scars over.
+func _control(control_name: StringName) -> MouseControl:
+	if _player == null:
+		return null
+	return _player.get_node_or_null(NodePath(control_name)) as MouseControl
 
 
 func _process(delta: float) -> void:
@@ -111,7 +114,8 @@ func _hint() -> String:
 		return "[E]  climb down"
 	if _network.has_shaft_up(plane, here):
 		return "[E]  climb up"
-	if _sonar != null and _sonar.can_erase_enemy_mark():
+	var sonar := _control(&"Sonar") as Sonar
+	if sonar != null and sonar.can_erase_enemy_mark():
 		return "[Q]  erase enemy cant"
 	# UNDER PAVING (GDD section 3), and the only line here that is a refusal rather than an offer.
 	# It belongs in this slot anyway: a no-surface zone is a rule you meet by pressing R and being
@@ -123,6 +127,7 @@ func _hint() -> String:
 	# be true everywhere and therefore say nothing.
 	if plane == 1 and _network.is_sealed(here):
 		return "paving overhead  --  no way up"
-	if _swap != null:
-		return _swap.prompt()
+	var swap := _control(&"ClassSwap") as ClassSwap
+	if swap != null:
+		return swap.prompt()
 	return ""

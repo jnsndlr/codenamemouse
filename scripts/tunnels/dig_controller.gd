@@ -1,7 +1,12 @@
-extends Node
+class_name DigController
+extends MouseControl
 ## Digging and vertical transit (GDD section 9). Point at a tile, hold the dig button, and it
 ## opens. E takes whichever shaft the tile you're standing on has; F sinks one down, R breaks
 ## one up.
+##
+## ONE PER MOUSE SINCE M7, not one per arena. See [MouseControl]: this used to hang off the arena
+## root pointed at `../Player`, which is why a remote human's dig bits arrived at a server with
+## nothing to consume them.
 ##
 ## POINT AND HOLD, rather than the drive-forward extrusion this replaced. Extruding meant the
 ## tunnel went wherever you were walking, which is fast but gives you no way to say "that one"
@@ -14,9 +19,6 @@ extends Node
 ## frame, which was fine until the player was halfway down a ramp and the answer flipped under
 ## them mid-dig. Nothing walks between planes now -- you are on the layer this controller last
 ## put you on.
-
-@export var network_path: NodePath
-@export var player_path: NodePath
 
 @export_group("Digging")
 ## Seconds of held input to open one tile. Deliberately brisk for testing; the real number is
@@ -31,22 +33,33 @@ extends Node
 ## How far above the destination floor the mouse is placed when it moves between layers.
 @export var arrival_lift: float = 0.05
 
-var _network: TunnelNetwork
-var _player: Node3D
 var _plane: int = 0
 var _target: Vector2i = Vector2i.MAX
 var _progress: float = 0.0
+## Built on the first frame anybody is looking at this mouse, and never on the other nine. Ten
+## shader-material cursors for one pair of eyes is nine wasted meshes in every match.
 var _cursor: DigCursor
+## Cells this controller has actually opened, and shafts it has sunk.
+##
+## COUNTED BECAUSE OF WHERE IT IS COUNTED. On a host these are per SEAT, so they say which human's
+## controls did the cutting -- and on a client the same controller reports zero, because a puppet
+## never reaches for the earth. The pair is what `replication_audit.gd` reads to tell "a remote
+## player dug" from "somebody dug", which is otherwise unanswerable: `dig()` records that a cell
+## opened and which crew learnt it, never whose hand was on the button.
+##
+## TWO NUMBERS RATHER THAN ONE, and that is the audit's doing. The first version added them
+## together and the suite passed on a run where the client sank a shaft and never opened a single
+## cell -- one keypress, credited as if the hold-to-dig path had worked. A shaft is a press and a
+## corridor is half a second of holding; they are different claims and they need different columns.
+var _cut: int = 0
+var _sunk: int = 0
 
 
 func _ready() -> void:
-	_network = get_node_or_null(network_path) as TunnelNetwork
-	_player = get_node_or_null(player_path) as Node3D
-	if _network == null:
+	super()
+	if _network == null or _player == null:
 		return
 	_apply_plane()
-	_cursor = DigCursor.new()
-	_network.add_child(_cursor)
 
 
 func get_plane() -> int:
@@ -58,13 +71,31 @@ func get_dig_progress() -> float:
 	return _progress
 
 
+## Cells opened by holding the dig button. See `_cut`.
+func cells_cut() -> int:
+	return _cut
+
+
+## Shafts sunk or broken open with F and R. See `_cut`.
+func shafts_cut() -> int:
+	return _sunk
+
+
 func _physics_process(delta: float) -> void:
 	if _network == null or _player == null:
 		return
 
-	_resync_plane()
+	# A PUPPET'S LAYER COMES OFF THE WIRE AND IS NOT THIS NODE'S TO DECIDE. The plane rides in the
+	# pose (M7 step 5) and `apply_pose` writes it directly; re-deriving it here and pushing it back
+	# through `set_plane` would be two authorities on one number, and the one that is wrong is the
+	# one on the machine that cannot see the shaft the mouse just took.
+	if acts():
+		_resync_plane()
+	else:
+		_plane = _player.get_plane()
+
 	var standing := _network.world_to_cell(_player.global_position)
-	var side := _team()
+	var side := _player.team
 
 	# THE MOUSE'S INTENT, NOT THE KEYBOARD'S (M7). This used to ask `Input` directly, which is
 	# fine while the only intent in the process is the one at this keyboard and impossible the
@@ -72,12 +103,21 @@ func _physics_process(delta: float) -> void:
 	# whoever built it -- a capture here, or a packet on a server.
 	var frame: InputFrame = _player.input()
 
+	# NOT GUARDED BY `acts()`, on purpose. Both of these end in the network, and the network is
+	# where a client is refused -- one guard on the state rather than five on the callers. Leaving
+	# the call means the refusal, and the reason for it, comes from the same place on both ends.
 	if frame.is_pressed(InputFrame.Action.SHAFT_DOWN):
-		_network.dig_shaft_down(_plane, standing, side)
+		if _network.dig_shaft_down(_plane, standing, side):
+			_sunk += 1
 	if frame.is_pressed(InputFrame.Action.SHAFT_UP):
-		_network.dig_shaft_up(_plane, standing, side)
+		if _network.dig_shaft_up(_plane, standing, side):
+			_sunk += 1
 	if frame.is_pressed(InputFrame.Action.BURROW):
-		_take_shaft(standing)
+		# GUARDED, because this one does not end in the network: it MOVES THE MOUSE. A client that
+		# teleported itself a plane down would spend the next frames being dragged back by the
+		# poses, which reads as the shaft being broken rather than as the client overstepping.
+		if acts():
+			_take_shaft(standing)
 		return
 
 	_update_dig(frame, delta)
@@ -104,9 +144,9 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 		var rock := _blocked_cell()
 		if rock != Vector2i.MAX:
 			if frame.is_pressed(InputFrame.Action.DIG):
-				_network.dig(_plane, rock, _team())
+				_network.dig(_plane, rock, _player.team)
 				_learn_vein(rock)
-			_cursor.show_blocked(_network, _plane, rock)
+			_show_blocked(rock)
 			_progress = 0.0
 			return
 
@@ -114,16 +154,25 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 	if digging:
 		_progress += delta * _dig_rate() / maxf(dig_seconds, 0.01)
 		if _progress >= 1.0:
-			_network.dig(_plane, _target, _team())
-			_learn_exposed(_target)
-			_progress = 0.0
-			# Re-aim immediately: the cell just opened, so it is no longer a valid target and
-			# holding the button should move on to the next one rather than stall.
-			_target = _aimed_cell()
+			if acts():
+				if _network.dig(_plane, _target, _player.team):
+					_cut += 1
+				_learn_exposed(_target)
+				_progress = 0.0
+				# Re-aim immediately: the cell just opened, so it is no longer a valid target and
+				# holding the button should move on to the next one rather than stall.
+				_target = _aimed_cell()
+			else:
+				# A PUPPET HOLDS THE BAR FULL RATHER THAN RESTARTING IT. The cell is the server's
+				# to cut and arrives on the next earth tick, at which point `_aimed_cell` stops
+				# offering an already-dug cell and the target clears itself. Zeroing here instead
+				# would fill the bar a second time in the half-second of the round trip, which
+				# reads as a dig that did not take.
+				_progress = 1.0
 	elif not held:
 		_progress = 0.0
 
-	_cursor.show_at(_network, _plane, _target, _progress, _target != Vector2i.MAX and held)
+	_show(_target, _progress, _target != Vector2i.MAX and held)
 
 
 ## Running into a seam teaches your crew where it goes (GDD section 3).
@@ -156,21 +205,46 @@ func _learn_exposed(cell: Vector2i) -> void:
 func _learn_vein(cell: Vector2i) -> void:
 	if _player == null:
 		return
-	# Asked of the node rather than typed, like `get_dig_speed` above it: this controller is pointed
-	# at a Node3D on purpose, so a map can drive it with something that is not a Mouse.
-	var side: Variant = _player.get("team")
-	if side == null:
+	_network.reveal_vein(_plane, cell, _player.team)
+
+
+## The cursor, and the two rules about it.
+##
+## BUILT ON DEMAND AND ONLY FOR THE MOUSE THIS MACHINE IS LOOKING AT. Every driven mouse in the
+## match carries one of these controllers now, so an unconditional cursor would be a box of earth
+## lit up on the host's screen for every corridor every other player is standing in.
+##
+## A PUPPET STILL GETS ONE, though, and that is the other half. On a client the local mouse is a
+## puppet -- its rules resolve on the host -- but the reach and adjacency rules are exactly what
+## the cursor exists to teach, and they are the same rules on both machines. What a client must
+## not do is *cut*, and it cannot: the network refuses it.
+func _show(cell: Vector2i, progress: float, digging: bool) -> void:
+	var cursor := _cursor_for()
+	if cursor == null:
 		return
-	_network.reveal_vein(_plane, cell, int(side))
+	cursor.show_at(_network, _plane, cell, progress, digging)
 
 
-## The network accepts -1 for authored/test geometry and treats it as shared knowledge. A live
-## controller supplies a real crew so enemy floor plans stay off the minimap.
-func _team() -> int:
-	if _player == null:
-		return -1
-	var side: Variant = _player.get("team")
-	return int(side) if side != null else -1
+func _show_blocked(cell: Vector2i) -> void:
+	var cursor := _cursor_for()
+	if cursor == null:
+		return
+	cursor.show_blocked(_network, _plane, cell)
+
+
+func _cursor_for() -> DigCursor:
+	if not watched():
+		if _cursor != null:
+			# Hidden through its own door rather than by setting `visible`, so there is one place
+			# that decides what an absent target looks like.
+			_cursor.show_at(_network, _plane, Vector2i.MAX, 0.0, false)
+		return null
+	if _cursor == null and _network != null:
+		# Parented to the network rather than to this node, so it sits in tunnel space -- a control
+		# is a plain Node with no transform of its own.
+		_cursor = DigCursor.new()
+		_network.add_child(_cursor)
+	return _cursor
 
 
 ## How fast whoever is driving opens a tile, as a multiplier on `dig_seconds`.
@@ -183,23 +257,22 @@ func _team() -> int:
 ## crew that has lost its Engineer unable to use a third of the map, and turns one seat into a
 ## requirement rather than a choice.
 ##
-## Asked of the mouse rather than looked up here, so the number arrives with whoever the
-## controller is pointed at and a mouse with no class still answers 1.0.
+## Asked of the mouse rather than looked up here, so the number arrives with whoever is driving
+## and a class swap is felt on the very next tile.
 func _dig_rate() -> float:
-	if _player != null and _player.has_method("get_dig_speed"):
-		return maxf(0.01, _player.call("get_dig_speed"))
-	return 1.0
+	return maxf(0.01, _player.get_dig_speed()) if _player != null else 1.0
+
+
 ## The cell under the cursor, if it is one this player could legally open.
 ##
 ## Must touch the tunnel you already have. Without that you could stand in one corridor and
 ## carve an unconnected room across the arena, which is neither snake-like (GDD section 3) nor
 ## something the reachability of the network could survive.
 func _aimed_cell() -> Vector2i:
-	if _plane <= 0 or not _player.has_method("get_aim_point"):
+	if _plane <= 0:
 		return Vector2i.MAX
 
-	var aim: Vector3 = _player.call("get_aim_point")
-	var cell := _network.world_to_cell(aim)
+	var cell := _network.world_to_cell(_player.get_aim_point())
 	if _network.is_dug(_plane, cell) or not _network.in_bounds(cell):
 		return Vector2i.MAX
 
@@ -222,11 +295,10 @@ func _aimed_cell() -> Vector2i:
 ## alternative really was a dig. A grey box lighting up over rock across the arena would say the
 ## seam mattered from there, and it doesn't -- you cannot reach it.
 func _blocked_cell() -> Vector2i:
-	if _plane <= 0 or not _player.has_method("get_aim_point"):
+	if _plane <= 0:
 		return Vector2i.MAX
 
-	var aim: Vector3 = _player.call("get_aim_point")
-	var cell := _network.world_to_cell(aim)
+	var cell := _network.world_to_cell(_player.get_aim_point())
 	if not _network.is_rock(_plane, cell) or not _network.in_bounds(cell):
 		return Vector2i.MAX
 
@@ -256,7 +328,7 @@ func _take_shaft(_cell: Vector2i) -> void:
 	# nothing, or the one channel that explains the controls fills up with AI chatter.
 	var why := TunnelTransit.refusal(_player)
 	if why != "":
-		_network.dig_refused.emit(why)
+		explain(why)
 		return
 
 	var arrived := TunnelTransit.take(_network, _player, _plane, arrival_lift)
@@ -285,13 +357,10 @@ func _resync_plane() -> void:
 
 ## Tell the body which layer it is on.
 ##
-## Asks the MOUSE first, because a mouse's collision mask carries a second thing this controller
-## knows nothing about: the crew layers that make enemies body-block and allies pass through
-## (GDD section 6). Setting the mask straight from the network would wipe them, and the bug that
-## produces -- teammates suddenly solid, enemies suddenly not -- looks nothing like a digging
-## bug and would be hunted for in the wrong file.
+## THROUGH THE MOUSE, not by setting the mask here, because a mouse's collision mask carries a
+## second thing this controller knows nothing about: the crew layers that make enemies body-block
+## and allies pass through (GDD section 6). Setting the mask straight from the network would wipe
+## them, and the bug that produces -- teammates suddenly solid, enemies suddenly not -- looks
+## nothing like a digging bug and would be hunted for in the wrong file.
 func _apply_plane() -> void:
-	if _player.has_method("set_plane"):
-		_player.call("set_plane", _plane)
-	elif _player is CollisionObject3D:
-		_network.apply_plane_collision(_player as CollisionObject3D, _plane)
+	_player.set_plane(_plane)

@@ -1,5 +1,5 @@
 class_name Sonar
-extends Node
+extends MouseControl
 ## The Sneak's class ability: sound out the layer directly below and leave thieves' cant.
 ##
 ## Q has one meaning per class. For an Engineer it is CaveIn; for a Sneak it sends a short-range
@@ -9,6 +9,13 @@ extends Node
 ##
 ## Enemy Sneaks can read the cant. Standing beside one and pressing Q erases it instead of
 ## scanning, making information itself something the two Sneaks contest.
+##
+## ONE PER MOUSE SINCE M7, not one per arena (see [MouseControl]) -- AND THE MARKS DID NOT COME
+## WITH IT. That split is the interesting part of the change. The ability is a thing a Sneak does
+## and belongs to that Sneak; a mark is a scratch on the floor of the world, and the moment there
+## were several sonars a private `_marks` array per Sneak would have meant an enemy could only rub
+## out cant its own node happened to have drawn. They are read from `SonarMark.MARK_GROUP` now --
+## already a group, already parented to the network, and already the world's rather than anyone's.
 
 signal scanned(source_plane: int, target_plane: int, cells: Array[Vector2i])
 signal marked(mark: SonarMark)
@@ -16,9 +23,6 @@ signal cleared(mark: SonarMark, by_team: int)
 signal refused(reason: String)
 
 const SONAR_GROUP: StringName = &"sonar"
-
-@export var player_path: NodePath
-@export var network_path: NodePath
 
 @export_group("Ability")
 @export_enum("Generalist", "Engineer", "Sneak", "Brute") var owner_class: int = MouseClass.SNEAK
@@ -30,10 +34,7 @@ const SONAR_GROUP: StringName = &"sonar"
 ## Arm's reach for rubbing out an enemy mark.
 @export var erase_reach_cells: float = 1.6
 
-var _player: Mouse
-var _network: TunnelNetwork
 var _cooldown_left: float = 0.0
-var _marks: Array[SonarMark] = []
 var _echo: MeshInstance3D
 var _echo_material: StandardMaterial3D
 var _echo_left: float = 0.0
@@ -41,14 +42,13 @@ var _echo_left: float = 0.0
 
 func _ready() -> void:
 	add_to_group(SONAR_GROUP)
-	_player = get_node_or_null(player_path) as Mouse
-	_network = get_node_or_null(network_path) as TunnelNetwork
+	super()
 	if _player == null or _network == null:
-		push_warning("sonar: needs a player and a network -- the ability is off")
+		push_warning("sonar: needs a mouse and a network -- the ability is off")
 		set_process(false)
-		set_process_unhandled_input(false)
+		set_physics_process(false)
 		return
-	refused.connect(_network.dig_refused.emit)
+	refused.connect(explain)
 
 
 func _process(delta: float) -> void:
@@ -63,12 +63,18 @@ func _process(delta: float) -> void:
 
 	# World marks obey the same visibility rule the minimap asks: yours are crew knowledge;
 	# theirs are legible only to a Sneak. Different layers do not bleed through one another.
-	for mark: SonarMark in _marks:
-		if is_instance_valid(mark):
-			mark.visible = (
-				mark.plane == _player.get_plane()
-				and mark.can_be_seen_by(_player.team, _player.mouse_class)
-			)
+	#
+	# DRIVEN BY THE WATCHED MOUSE'S SONAR ALONE (M7), because "is this mark on screen" is a
+	# question about one pair of eyes and every Sneak in the match now owns one of these. Ten
+	# sonars each answering it for their own mouse would be ten writes to one `visible` flag every
+	# frame, and the mark would show whichever of them Godot ticked last.
+	if not watched():
+		return
+	for mark: SonarMark in _all_marks():
+		mark.visible = (
+			mark.plane == _player.get_plane()
+			and mark.can_be_seen_by(_player.team, _player.mouse_class)
+		)
 
 
 func cooldown_left() -> float:
@@ -77,13 +83,25 @@ func cooldown_left() -> float:
 
 func marks_for(viewer_team: int, viewer_class: int, plane: int) -> Array[SonarMark]:
 	var visible_marks: Array[SonarMark] = []
-	for mark: SonarMark in _marks:
-		if (
-			is_instance_valid(mark) and mark.plane == plane
-			and mark.can_be_seen_by(viewer_team, viewer_class)
-		):
+	for mark: SonarMark in _all_marks():
+		if mark.plane == plane and mark.can_be_seen_by(viewer_team, viewer_class):
 			visible_marks.append(mark)
 	return visible_marks
+
+
+## Every piece of cant in the arena, whoever scratched it.
+##
+## WALKED RATHER THAN FILTERED. `Array.filter` hands back an UNTYPED array, and assigning one to a
+## typed variable aborts the call at runtime -- the same GDScript trap `barricade.gd` has a note
+## about and the one that let the tunnel audit spend its whole life passing without testing
+## anything.
+func _all_marks() -> Array[SonarMark]:
+	var found: Array[SonarMark] = []
+	for node: Node in get_tree().get_nodes_in_group(SonarMark.MARK_GROUP):
+		var mark := node as SonarMark
+		if mark != null:
+			found.append(mark)
+	return found
 
 
 func can_erase_enemy_mark() -> bool:
@@ -103,6 +121,15 @@ func scan() -> int:
 		return 0
 	if _cooldown_left > 0.0:
 		refused.emit("listening for the echo -- %ds" % ceili(_cooldown_left))
+		return 0
+
+	# A PUPPET RUNS THE COOLDOWN AND SOUNDS NOTHING (M7), and this is the one ability where a
+	# client MUST NOT evaluate the rule even for its own eyes. A client's tunnel network holds only
+	# what its crew is allowed to know (step 5) -- so a scan resolved here would echo back the
+	# cells it already had and miss every one that was the point of pressing Q. It would look like
+	# a working ability that never finds anything, which is worse than a silent one.
+	if not acts():
+		_cooldown_left = cooldown
 		return 0
 
 	var target_plane := source_plane + 1
@@ -152,16 +179,21 @@ func _physics_process(_delta: float) -> void:
 
 	var enemy := _nearest_enemy_mark()
 	if enemy != null:
-		_clear(enemy, _player.team)
+		# Rubbing out a mark is a change to the world, so it resolves where the world does. A
+		# client cannot see enemy cant at all yet -- marks are runtime-spawned world objects and
+		# this protocol has no spawn message -- so `_nearest_enemy_mark` finds nothing there
+		# anyway; the guard is here for the day it does.
+		if acts():
+			_clear(enemy, _player.team)
 		return
 
 	scan()
 
 
 func _place_mark(source_plane: int, cell: Vector2i) -> SonarMark:
-	for existing: SonarMark in _marks:
+	for existing: SonarMark in _all_marks():
 		if (
-			is_instance_valid(existing) and existing.owner_team == _player.team
+			existing.owner_team == _player.team
 			and existing.plane == source_plane and existing.cell == cell
 		):
 			return existing
@@ -169,7 +201,6 @@ func _place_mark(source_plane: int, cell: Vector2i) -> SonarMark:
 	var mark := SonarMark.new()
 	_network.add_child(mark)
 	mark.configure(_network, _player.team, source_plane, cell)
-	_marks.append(mark)
 	marked.emit(mark)
 	return mark
 
@@ -178,11 +209,8 @@ func _nearest_enemy_mark() -> SonarMark:
 	var nearest: SonarMark
 	var nearest_distance := INF
 	var here := _network.world_to_cell(_player.global_position)
-	for mark: SonarMark in _marks:
-		if (
-			not is_instance_valid(mark) or mark.owner_team == _player.team
-			or mark.plane != _player.get_plane()
-		):
+	for mark: SonarMark in _all_marks():
+		if mark.owner_team == _player.team or mark.plane != _player.get_plane():
 			continue
 		var distance := Vector2(mark.cell - here).length()
 		if distance <= erase_reach_cells and distance < nearest_distance:
@@ -194,13 +222,20 @@ func _nearest_enemy_mark() -> SonarMark:
 func _clear(mark: SonarMark, by_team: int) -> bool:
 	if not is_instance_valid(mark) or mark.owner_team == by_team:
 		return false
-	_marks.erase(mark)
+	# Out of the group before it is out of the tree, so a scan later in the same frame cannot find
+	# a mark that is on its way to being freed.
+	mark.remove_from_group(SonarMark.MARK_GROUP)
 	cleared.emit(mark, by_team)
 	mark.queue_free()
 	return true
 
 
+## The temporary shimmer of the detected floor plan. LOCAL VIEWER ONLY (M7): it is a picture of
+## what one Sneak just heard, and a host running this ability for four people would otherwise draw
+## all four echoes in its own yard.
 func _show_echo(source_plane: int, cells: Array[Vector2i]) -> void:
+	if not watched():
+		return
 	if is_instance_valid(_echo):
 		_echo.queue_free()
 	_echo = MeshInstance3D.new()

@@ -148,10 +148,51 @@ alarm on an invariant is worse than a missing one — it's the thing that gets t
 relaxed.** Then it was verified properly, by deleting the filter and watching the audit name the
 leaked cells by coordinate.
 
-**What a client still can't do:** dig, cave in, barricade, sonar or swap class. Those five are
-arena-level singletons wired to `../Player` — *the* player, from when there was one — so a remote
-human's dig reaches a server with nothing to consume it. The intent has crossed the wire since step
-2; the controls just aren't per-mouse yet. That's the next piece.
+**And it failed a second time, for the other half of the same reason.** A grace window handles a
+host picture that's a little *stale*; it does nothing for one that doesn't exist. Both processes
+die at the same instant and the host starts fourteen seconds earlier, so its report timer is
+permanently out of phase and its log routinely ends a second or two *before* the client's — making
+everything the client legitimately learnt in that last second a cell nobody said it could have.
+Thirteen of them, named by coordinate, looking exactly like a leak. The invariant is only asked
+where the two logs overlap now.
+
+**And a client can dig.** The dig controller, both Engineer abilities, the sonar and the swap point
+were arena-level singletons wired to `../Player` — *the* player, from when there was one — so a
+remote human's dig reached a server with nothing to consume it. They're children of a mouse now
+([`MouseControl`](scripts/actors/mouse_control.gd)), so every seat a person drives carries its own
+set and a received DIG bit runs the same code a local one does. Bots carry none: their input frame
+is always empty, and they reach the same rules through `bot_digger.gd` and `ClassSwap.allowed`.
+
+**Two questions that used to be one.** `acts()` is *does this machine decide what happens to this
+mouse*; `watched()` is *is this the mouse this machine is looking at*. Same answer for six
+milestones, because there was one player on one machine — and now a host runs the rules for four
+people and draws a cursor for one. **Rules run where the simulation is; presentation runs where the
+eyes are.** A remote player's refusal printed on the host's HUD is the same bug as their dig cursor
+lit in the host's yard. A puppet still runs its cooldowns and never acts on them, exactly as a
+puppet banner runs its return clock.
+
+Class rides in two spare bits of the pose now. It was never replicated because it never changed —
+both ends build their ten mice from the same `SEATS` table — and the swap point being one of the
+five is what broke that.
+
+**A signature change failed no suite for two milestones.** `tunnel_audit.gd` drove the dig
+controller with `_update_dig(delta)`; step 2 gave that function a second parameter and nothing told
+the caller. A GDScript runtime error **aborts the function it's in and lets the caller carry on**,
+so the dig-flow and reveal checks stopped part way, printed nothing, and the suite went on
+announcing *"ALL INVARIANTS HOLD … plus dig flow … and reveal"* over two checks that ran no
+assertions. Fifth test-that-cannot-fail here, new cause every time. Checks arm a tripwire on entry
+and disarm at their own report line; anything still armed is reported BROKEN.
+
+**`--autopilot` digs now**, which is what lets `replication_audit.gd` assert the whole path: a
+headless client sinks a shaft, climbs down and opens four cells of earth on the host, while its own
+controller cuts nothing. Getting there cost three wrong versions, each a real property of the
+control — aiming a metre ahead lands in the cell you're already standing in, moving the aim (or the
+mouse) resets progress, and holding E walks you down a shaft and straight back up it.
+
+**What's still missing is spawn replication, and it's one gap rather than three.** Barricade
+boulders, cant marks and dropped cheese wedges are all spawned at runtime, all real on the server,
+and all invisible to every client. A remote Engineer's barricades block the routing graph while
+nobody else can see the rock, which is the worst of the three and why it's next.
 
 ## M6.5 — a build you can hand to somebody (closed)
 
@@ -518,8 +559,8 @@ On **CameraRig**: `pitch_degrees` (48), `zoom_idle` / `zoom_run` / `zoom_sprint`
 
 **Seven** headless invariant suites — the three below plus `net_audit.gd`, `input_audit.gd`,
 `seat_audit.gd` and `replication_audit.gd`, all documented under M7 above. All must pass; each
-exits non-zero if it doesn't. The last two launch **real Godot processes** and take about a minute
-between them, which is why they're listed last and not why they should be skipped.
+exits non-zero if it doesn't. The last two launch **real Godot processes** and take a couple of
+minutes between them, which is why they're listed last and not why they should be skipped.
 
 ```bash
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/tunnel_audit.gd
@@ -548,7 +589,10 @@ every plane, that no nest is walled in, that a seam refuses a dig *out loud* and
 sunk onto it, and that nothing routes through one. It then checks what a crew *knows* about that
 rock: that nobody knows anything until somebody digs into a seam, that doing so reveals the whole
 connected vein and draws it, and — the assertion the feature exists for — that **the other crew
-still knows nothing**, checked through the real dig controls as well as through the rule. Then it
+still knows nothing**, checked through the real dig controls as well as through the rule. Its
+dig-flow check also asserts **a client cannot cut earth**, in two separate lines because there are
+two separate guards: the network refuses anyone who reaches for it, and a puppet's controls do not
+reach — visible in the bar, which holds full waiting for the server rather than restarting. Then it
 lays a patio of its own and asserts the
 other kind of obstruction from both sides at once: no entrance through the paving from above, none
 broken out from below, a corridor that runs the whole way under it regardless, a shaft to the plane
@@ -570,9 +614,11 @@ rather than of the rule that fills it — checks
 **bots swap into their seats and an Engineer bot opens earth on its own**, into its own crew's map
 rather than into both — and that what it opens is a **corridor rather than a scatter of stubs**,
 measured as cells per mouth — checks a **boulder shuts the earth under it on plane 1 and not on plane 2**
-and that five Brute swings free one cell of it and leave the rest of the rock standing, and checks
+and that five Brute swings free one cell of it and leave the rest of the rock standing, checks
 **who may appear on the minimap**: not through a prop, not through a plane, not without being seen,
-and forgotten on time.
+and forgotten on time — and checks that **controls belong to driven mice and cursors to the watched
+one**: the local player and a remote one both carry all five, a bot carries none, the host decides
+for both humans, and a dig cursor is built for the mouse on screen and never for the other.
 
 The third holds 37 invariants over the cheese loop (M6): wedges are **conserved** between cache and
 pile rather than spawned, raiding an enemy store is a transfer, banking happens once, a mouse's paws
