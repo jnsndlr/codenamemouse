@@ -160,8 +160,6 @@ var _restart_left: float = 0.0
 var _spawned: int = 0
 ## mouse -> seconds until it's back on its feet.
 var _down: Dictionary = {}
-## Mice whose signals are already connected, so the roster can be rescanned freely.
-var _known: Dictionary = {}
 ## "side:seat" -> Mouse (M7 step 4). The snapshot is seat-indexed, so replication needs to be able
 ## to ask "who is in chair 7" without searching the tree and hoping the answer is stable.
 var _seated: Dictionary = {}
@@ -411,7 +409,11 @@ func seat_remote(side: int, seat: int, remote: bool) -> void:
 		var already_remote := current is Player
 		if already_remote == remote:
 			return
-		_known.erase(current)
+		# Out of the group before it is out of the tree, the same bargain `SonarMark.discard` makes.
+		# A `queue_free`d node survives in its groups to the end of the frame, and every roster walk
+		# in the game reads that group -- so leaving it there means one more tick of scans, rules and
+		# signal wiring aimed at a mouse that is already gone.
+		current.remove_from_group(Mouse.MOUSE_GROUP)
 		current.queue_free()
 
 	var mouse: Mouse = (player_scene if remote else bot_scene).instantiate()
@@ -838,13 +840,22 @@ func _name_seat(mouse: Mouse, side: int, seat: int) -> void:
 ## changes: bots are spawned here, the player readies on its own schedule, and M7 adds players
 ## joining mid-match. At eight mice the scan is noise, and it means nothing can be forgotten by
 ## being created in the wrong order.
+##
+## ASKS THE SIGNAL, AND SKIPS A MOUSE ON ITS WAY OUT. It used to keep a `_known` table, and that
+## table was wrong in a way that printed an engine error on **every seat handover in every match**:
+## [method seat_remote] erases the outgoing mouse from it and then `queue_free`s that mouse -- but a
+## queued node stays in its groups until the end of the frame, so the very next tick found a mouse in
+## `MOUSE_GROUP` it had no record of, and connected a signal that was already connected. A cache of
+## "have I met this" cannot be right when the thing it caches has a two-stage death; the signal
+## itself always knows. `_on_scruffed` is unbound, so `is_connected` compares it exactly -- unlike a
+## `bind`ed callable, whose arguments Godot ignores for equality (see `net_match.gd`).
 func _scan_roster() -> void:
 	for node in get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
 		var mouse := node as Mouse
-		if mouse == null or _known.has(mouse):
+		if mouse == null or mouse.is_queued_for_deletion():
 			continue
-		_known[mouse] = true
-		mouse.scruffed.connect(_on_scruffed)
+		if not mouse.scruffed.is_connected(_on_scruffed):
+			mouse.scruffed.connect(_on_scruffed)
 
 
 ## The seat roster this match is being played from.

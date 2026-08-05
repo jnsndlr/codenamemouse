@@ -21,6 +21,14 @@ extends RefCounted
 ## | `BARRICADES` | server → **one** client | **no** | complete visible set, filtered per crew |
 ## | `SONAR_MARKS` | server → **one** client | **no** | complete readable cant, filtered by crew/class |
 ## | `SONAR_ECHO` | server → **one** client | yes | one player's private, short-lived scan result |
+## | `START` | server → clients | yes | leave the lobby, the match is beginning |
+##
+## **`START` is the only message in this table that is not about a match already in progress**, and
+## it is the only one `NetSession` handles rather than `NetMatch` — because the whole point of it is
+## that the receiver has no arena yet, and therefore no `NetMatch` to receive anything. It carries no
+## payload today. When the host gains settings to choose — starting cheese, which map — they belong
+## here, in the packet that starts the match, rather than in a second message that could arrive after
+## it.
 ##
 ## **`SNAPSHOT` is unreliable on purpose and that is the important one.** A snapshot resent after a
 ## drop arrives describing a world that has already moved on, and it holds the queue up behind it
@@ -80,6 +88,7 @@ enum Kind {
 	BARRICADES,
 	SONAR_MARKS,
 	SONAR_ECHO,
+	START,
 }
 
 

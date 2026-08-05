@@ -1,6 +1,6 @@
 class_name Routes
 extends RefCounted
-## Where the scenes are, and the two moves between them.
+## Where the scenes are, and the three moves between them.
 ##
 ## Through M6 this file had nothing to say: `arena.tscn` was the main scene and that was the
 ## entire application -- nothing in `scripts/` called `change_scene`, `quit`, or touched `paused`.
@@ -15,11 +15,27 @@ extends RefCounted
 
 const TITLE: String = "res://scenes/ui/title.tscn"
 const ARENA: String = "res://scenes/maps/arena.tscn"
+const LOBBY: String = "res://scenes/ui/lobby.tscn"
 
 
-## Into a match. Takes no arguments today; at M7 this is where a seat or a server address goes.
+## Into a match.
+##
+## IT STILL TAKES NO SERVER ADDRESS, and that turned out to be the right shape rather than an
+## unfinished one. `NetSession` is an autoload, so by the time anybody calls this the socket is
+## already open and the seats are already claimed -- the arena has nothing to be told. What M7
+## actually wanted was somewhere to stand *between* connecting and playing. See [method to_lobby].
 static func to_match(from: Node) -> void:
 	_go(from, ARENA)
+
+
+## The room you wait in with the socket already open.
+##
+## This is the scene that answers a question the title screen could not: connecting and entering a
+## match are separate moments, and somebody who has joined has to be *somewhere* until the host
+## starts. `title_screen.gd` has had a comment about that gap since M6.5, and `--play <seconds>` has
+## been faking it for the audits ever since — a delay standing in for a room.
+static func to_lobby(from: Node) -> void:
+	_go(from, LOBBY)
 
 
 ## Back out to the title screen. Unpauses on the way, because `get_tree().paused` outlives the

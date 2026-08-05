@@ -1,9 +1,17 @@
 extends Control
-## The first thing anybody sees, and the skeleton of M7's lobby.
+## The first thing anybody sees, and now the front door to a match with somebody else in it.
 ##
-## Play sits where Host and Join will sit. That is the actual reason this exists: M7 turns joining
-## a match into "swap the scene under the player", and `Routes` (see that file) is the seam. A
-## title screen is what makes that seam get exercised before netcode is leaning on it.
+## Play used to sit where Host and Join would sit, and this file said so. They sit there now, one
+## page down: **Play** is one human and nine bots with no socket, **Multiplayer** opens a page with
+## Host and Join on it, and either of those lands you in [Routes.to_lobby] rather than straight in an
+## arena — because connecting and entering a match are two moments and the gap between them is where
+## the interesting bugs live.
+##
+## TWO PAGES, ONE `_rebuild`, and no second scene. The page is a variable and the menu is built from
+## it, which keeps the file's original bargain: the `.tscn` is a root node and a script, and adding an
+## entry is adding a line here rather than hand-editing a scene diff. A separate Multiplayer *scene*
+## would have needed its own backdrop, its own logo, its own resize handling and its own copy of the
+## controls sheet, to show three buttons.
 ##
 ## BUILT IN CODE RATHER THAN IN THE .tscn, following `look_panel.gd`: a column of buttons is a
 ## hundred lines of unreadable scene diff, and every one of them would need hand-editing in the
@@ -23,11 +31,22 @@ const GAP: float = 14.0
 ## on a rectangle of a slightly different red.
 const BACKDROP: Color = Color(0.13, 0.06, 0.06)
 
+enum Page {
+	MAIN,
+	MULTIPLAYER,
+}
+
 var _controls: ControlsPanel
 var _menu: VBoxContainer
 var _version: Label
-var _play: Button
+var _focus_first: Button
 var _fullscreen: Button
+var _page: int = Page.MAIN
+var _address: LineEdit
+## Survives `_rebuild`, so a resize mid-typing does not eat what you typed.
+var _typed: String = ""
+## Why the last attempt to open a socket failed, shown under the Multiplayer page. Empty is normal.
+var _trouble: String = ""
 
 
 func _ready() -> void:
@@ -79,10 +98,18 @@ func _ready() -> void:
 ## that gap is said to a process with no arena in it, and the bug that hides there looks like a
 ## working game right up until you check whose mouse is whose. Without a way to make the gap
 ## happen on purpose, the only run this suite could ever produce is the lucky one.
+##
+## `--host` AND `--join` NOW LAND IN THE LOBBY, which is where the buttons land, and that matters
+## more than the convenience. `NetSession` opened the socket during autoload — before this scene
+## existed — so a flagged process is in exactly the state a clicked one is, and the audits therefore
+## exercise the real door rather than a private entrance beside it. `--play` still overrides, because
+## the replication suites want the arena and not a room with a button in it.
 func _apply_command_line() -> void:
 	var args := OS.get_cmdline_user_args()
 	var at := args.find("--play")
 	if at < 0:
+		if Net.is_online():
+			Routes.to_lobby(self)
 		return
 	var next := String(args[at + 1]) if at + 1 < args.size() else ""
 	var delay := next.to_float() if next.is_valid_float() else 0.0
@@ -130,12 +157,10 @@ func _rebuild() -> void:
 	spacer.custom_minimum_size = Vector2(0.0, GAP * 1.5 * s)
 	_menu.add_child(spacer)
 
-	_play = MenuSkin.button("Play", s)
-	_fullscreen = MenuSkin.button(_fullscreen_label(), s)
-	_menu.add_child(_row(_play, _on_play))
-	_menu.add_child(_row(MenuSkin.button("Controls", s), _show_controls))
-	_menu.add_child(_row(_fullscreen, _on_fullscreen))
-	_menu.add_child(_row(MenuSkin.button("Quit", s), _on_quit))
+	if _page == Page.MAIN:
+		_build_main(s)
+	else:
+		_build_multiplayer(s)
 
 	add_child(_menu)
 	# Backdrop, menu, version, controls -- the controls sheet covers everything.
@@ -149,14 +174,58 @@ func _rebuild() -> void:
 	_version.offset_bottom = -10.0 * s
 	_version.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 
-	if not _controls.visible:
-		_play.grab_focus()
+	if not _controls.visible and _focus_first != null:
+		_focus_first.grab_focus()
 
 
-## Buttons in a VBoxContainer stretch to its width, and its width is the screen. One centring row
+func _build_main(s: float) -> void:
+	_focus_first = MenuSkin.button("Play", s)
+	_fullscreen = MenuSkin.button(_fullscreen_label(), s)
+	_menu.add_child(_row(_focus_first, _on_play))
+	_menu.add_child(_row(MenuSkin.button("Multiplayer", s), _show_multiplayer))
+	_menu.add_child(_row(MenuSkin.button("Controls", s), _show_controls))
+	_menu.add_child(_row(_fullscreen, _on_fullscreen))
+	_menu.add_child(_row(MenuSkin.button("Quit", s), _on_quit))
+
+
+## Host, then Join with somewhere to type. One page rather than two, because "host" and "join" are
+## the same decision made two ways and splitting them would put a screen between a player and the
+## only field on it.
+func _build_multiplayer(s: float) -> void:
+	_focus_first = MenuSkin.button("Host a Match", s)
+	_menu.add_child(_row(_focus_first, _on_host))
+
+	_address = MenuSkin.field("address, or address:port", s)
+	_address.text = _typed
+	_address.text_changed.connect(func(now: String) -> void: _typed = now)
+	# Enter in the field joins, because that is what Enter means in a field you just typed an address
+	# into. The button stays for anybody who reached it with a pad.
+	_address.text_submitted.connect(func(_now: String) -> void: _on_join())
+	_menu.add_child(_row(_address, Callable()))
+	_menu.add_child(_row(MenuSkin.button("Join", s), _on_join))
+	_menu.add_child(_row(MenuSkin.button("Back", s), _show_main))
+
+	if not _trouble.is_empty():
+		_menu.add_child(_row(MenuSkin.note(_trouble, s, MenuSkin.WARN), Callable()))
+	_menu.add_child(_row(MenuSkin.note(
+		"Hosting opens port %d. Whoever joins types your address."
+		% NetSession.DEFAULT_PORT, s
+	), Callable()))
+
+
+## Controls in a VBoxContainer stretch to its width, and its width is the screen. One centring row
 ## each keeps them the size MenuSkin asked for.
-func _row(what: Button, pressed: Callable) -> Control:
-	what.pressed.connect(pressed)
+##
+## Takes a `Control` rather than a `Button` since the Join row has a field in it, and an empty
+## `Callable` for the things that are not pressed.
+##
+## THE NOTES GO THROUGH HERE TOO, and they have to: a `Label` with `AUTOWRAP_WORD_SMART` added straight
+## to the column is stretched to the column's width, which is the screen, so it never reaches a wrap
+## point and runs off both edges on a wide window. `custom_minimum_size` cannot fix that -- a minimum
+## is not a maximum. The centring row is what actually constrains it.
+func _row(what: Control, pressed: Callable) -> Control:
+	if what is Button and not pressed.is_null():
+		(what as Button).pressed.connect(pressed)
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -167,8 +236,61 @@ func _row(what: Button, pressed: Callable) -> Control:
 # -------------------------------------------------------------------------------------- actions
 
 
+## Straight into a match with whatever session is already open.
+##
+## **IT MUST NOT TOUCH THE SESSION**, and that is worth a comment because the obvious tidy-up here is
+## a bug. Play is "one human, nine bots, no socket", so calling `go_offline` first reads as belt and
+## braces -- and it closes the socket that `--host` opened during autoload, seconds before `--play`
+## walks into the arena expecting to be a server. Every replication suite failed at once, which is the
+## only reason it was a five-minute mistake instead of a confusing afternoon. Nothing is needed here:
+## a *failed* Host or Join has already gone offline inside `NetSession`, and a successful one goes to
+## the lobby instead of here.
 func _on_play() -> void:
 	Routes.to_match(self)
+
+
+## Open the socket first, THEN move. If the port is taken there is no point being in a lobby, and the
+## `Error` both of these return is the only thing that knows -- it has been returned and dropped on
+## the floor since the flags were written, which is why a typo'd `--join` fails in silence.
+func _on_host() -> void:
+	var err := Net.host()
+	if err != OK:
+		_trouble = "Could not open port %d (%s). Something else may already be hosting." % [
+			NetSession.DEFAULT_PORT, error_string(err),
+		]
+		_rebuild()
+		return
+	_trouble = ""
+	Routes.to_lobby(self)
+
+
+func _on_join() -> void:
+	var where := _typed.strip_edges()
+	if where.is_empty():
+		_trouble = "Type the address your host gave you."
+		_rebuild()
+		return
+	var err := Net.join(where)
+	if err != OK:
+		_trouble = "Could not reach %s (%s)." % [where, error_string(err)]
+		_rebuild()
+		return
+	_trouble = ""
+	# `join` returning OK means the socket was created, NOT that anybody answered -- the handshake
+	# finishes seconds later or never. The lobby is what waits, and what says so if it never does.
+	Routes.to_lobby(self)
+
+
+func _show_multiplayer() -> void:
+	_page = Page.MULTIPLAYER
+	_trouble = ""
+	_rebuild()
+
+
+func _show_main() -> void:
+	_page = Page.MAIN
+	_trouble = ""
+	_rebuild()
 
 
 func _on_quit() -> void:
@@ -192,11 +314,22 @@ func _show_controls() -> void:
 func _hide_controls() -> void:
 	_controls.visible = false
 	_menu.visible = true
-	_play.grab_focus()
+	if _focus_first != null:
+		_focus_first.grab_focus()
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not _controls.visible:
+		# Escape backs out of the Multiplayer page rather than doing nothing. NOT while a field has
+		# focus-and-text, because there Escape is plausibly "clear what I typed" and taking the whole
+		# page away instead is the kind of surprise that loses an address somebody read off a phone.
+		var backing_out := (
+			_page == Page.MULTIPLAYER and event.is_action_pressed("ui_cancel")
+			and not (_address != null and _address.has_focus() and not _typed.is_empty())
+		)
+		if backing_out:
+			_show_main()
+			get_viewport().set_input_as_handled()
 		return
 	# Any way out of the controls sheet: the pause key, the accept key, or a click. Somebody who
 	# opened it by accident should not have to hunt for the one button that closes it.

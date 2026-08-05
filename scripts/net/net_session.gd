@@ -28,9 +28,23 @@ const MAX_PEERS: int = 9
 
 signal seating_changed()
 
+## The host says the match is beginning. Emitted on a CLIENT only, and the reason it lives here
+## rather than in `NetMatch` is that its whole job is reaching somebody who has no arena yet -- a
+## `NetMatch` exists only inside the arena this signal is what makes you load.
+signal match_starting()
+
+## The wire dropped under us. DISTINCT FROM `go_offline`, which is also how a session starts and how
+## a deliberate "leave the lobby" is expressed. This one is the failure, and the difference matters
+## to whoever has to put it on screen: one of them is a thing the player did.
+signal wire_lost()
+
 var _transport: NetTransport
 var _seats: Seats
 var _local: int = NetTransport.SERVER_ID
+## What `host` opened, so the lobby can print it. 0 when not hosting a socket.
+var _port: int = 0
+## Where `join` was pointed, for the one line of screen text that says what you are waiting on.
+var _joined: String = ""
 ## Where `--audit-log` wants a copy of everything this file says. Empty in a normal run.
 var _log_path: String = ""
 ## What the command line asked for, applied once the whole line has been parsed.
@@ -86,6 +100,11 @@ func _ready() -> void:
 	_transport.peer_left.connect(_on_peer_left)
 	_transport.connection_lost.connect(_on_connection_lost)
 	_transport.joined_server.connect(_on_joined_server)
+	# THE SECOND LISTENER ON THIS SIGNAL, and deliberately so: `NetMatch` takes the same packets when
+	# an arena exists, and the two do not overlap. Everything in the protocol except `START` is about
+	# a match in progress and is ignored here; `START` is about one that has not begun, and there is
+	# nothing in the arena to hear it.
+	_transport.packet_received.connect(_on_packet)
 
 	go_offline()
 	_apply_command_line()
@@ -98,6 +117,8 @@ func _ready() -> void:
 func go_offline() -> void:
 	_transport.close()
 	_seats.clear()
+	_port = 0
+	_joined = ""
 	_local = NetTransport.SERVER_ID
 	_seats.seat_host(_local)
 	seating_changed.emit()
@@ -111,6 +132,7 @@ func host(port: int = DEFAULT_PORT) -> Error:
 		go_offline()
 		return err
 	_seats.clear()
+	_port = port
 	_local = _transport.local_id()
 	_seats.seat_host(_local)
 	log_line("hosting on %d as peer %d" % [port, _local])
@@ -135,8 +157,25 @@ func join(where: String) -> Error:
 		go_offline()
 		return err
 	_seats.clear()
-	log_line("joining %s:%d" % [address, port])
+	_joined = "%s:%d" % [address, port]
+	log_line("joining %s" % _joined)
 	return OK
+
+
+## Tell everybody in the lobby to load the arena. Host only; harmless offline.
+##
+## RELIABLE, and it is worth saying why when so much of this protocol is not. Every unreliable
+## message in here is a picture that will be sent again in a quarter of a second, so a lost one costs
+## nothing. This one happens once. A player who missed it sits in a lobby watching a match they were
+## invited to, and no later packet repairs that -- there is no periodic "by the way, we started".
+func start_match() -> void:
+	if not is_server() or not is_online():
+		return
+	_transport.broadcast(NetMessage.head(NetMessage.Kind.START).data_array, true)
+	# The TRANSPORT's roster, which on a server is the clients and nothing else -- it is filled by
+	# `peer_connected` and the host never connects to itself. Not `Seats.peers()`, which counts the
+	# host among the seated and would report one player too many for the whole of the match.
+	log_line("told %d peer(s) the match is beginning" % _transport.peers().size())
 
 
 # ------------------------------------------------------------------------------------ questions
@@ -144,6 +183,35 @@ func join(where: String) -> Error:
 
 func seats() -> Seats:
 	return _seats
+
+
+## The port we are hosting on, or 0. Kept because the lobby has to tell a human a number, and asking
+## the socket is better than the lobby remembering what it passed in.
+func hosting_port() -> int:
+	return _port if is_server() and is_online() else 0
+
+
+## `host:port` this session was pointed at, or empty when not joining anybody.
+func joined_address() -> String:
+	return _joined
+
+
+## The best guess at "what should my friend type", and honest that it is a guess.
+##
+## A LAN address is the one this can actually know. Over the internet the useful number is the
+## router's public address with a forwarded port, and nothing on this machine can be sure of either
+## -- so the lobby says what it knows and says the rest out loud rather than printing a number that
+## works on one network and silently fails on every other.
+func lan_address() -> String:
+	for address: String in IP.get_local_addresses():
+		if address.contains(":") or address.begins_with("127."):
+			continue  # IPv6 and loopback: correct addresses, useless instructions.
+		if (
+			address.begins_with("192.168.") or address.begins_with("10.")
+			or address.begins_with("172.")
+		):
+			return address
+	return ""
 
 
 ## Size the crews to match whatever the map's director is set to.
@@ -233,7 +301,17 @@ func _on_joined_server() -> void:
 
 func _on_connection_lost() -> void:
 	log_line("connection lost -- back to offline")
+	# Said BEFORE the state is torn down, so a listener can still ask what it was losing.
+	wire_lost.emit()
 	go_offline()
+
+
+func _on_packet(from: int, bytes: PackedByteArray) -> void:
+	if is_server() or from != NetTransport.SERVER_ID:
+		return
+	if NetMessage.kind_of(bytes) == NetMessage.Kind.START:
+		log_line("the host says the match is beginning")
+		match_starting.emit()
 
 
 # --------------------------------------------------------------------------------- command line

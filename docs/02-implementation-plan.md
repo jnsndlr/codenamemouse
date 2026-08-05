@@ -2064,6 +2064,25 @@ milliseconds away.
 > looked, from their output, entirely fine.
 >
 > Seven suites pass; fifty checks in the replication audit.
+>
+> **Then the door, which was the real blocker and did not look like one.** Checkpoint 5 reads as a
+> human question — does a match with a friend feel fair — and the survey above kept treating it that
+> way. It was not reachable at all: the title screen had Play, Controls, Fullscreen and Quit, and
+> joining was a command-line flag. A **Multiplayer** page now carries Host and Join, and both land in
+> a lobby rather than an arena, because connecting and entering a match are two moments and
+> `--play <seconds>` had been standing in for the gap between them since M6.5.
+>
+> `START` is the host's button on the wire, and it is the one message here whose receiver has no
+> arena — so `NetSession` owns it, not `NetMatch`. Reliable, unlike almost everything else in this
+> protocol, because it happens once and no later packet repairs a player left sitting in a room. The
+> settings the host will eventually choose belong in that same packet.
+>
+> `--host` and `--join` land in the lobby too, so the flags and the buttons share a path and
+> `lobby_audit.gd` tests the real one. Neither of its processes gets `--play`. Its load-bearing check
+> is that the guest's log records being told to start **before** its first replication report — the
+> cant lesson applied on the first try this time, rather than after two false passes.
+>
+> Eight suites pass.
 
 #### Sequencing — five checkpoints, each playable
 
@@ -2328,13 +2347,15 @@ with private supply; cant is filtered per player by crew-or-same-plane-Sneak lit
 temporary echo addressed only to the scanner. All three recover from loss and late joining without
 replaying spawn events.
 
-**Next: checkpoint 5 — a friend, over the internet, for a full match. And it is blocked on a door,
-not on netcode.** The title screen builds Play, Controls, Fullscreen and Quit; `Routes.to_match`
-still takes no arguments and its own comment has said "at M7 this is where a server address goes"
-since M6.5. `NetSession.host` and `join` both *return* an `Error` and every caller drops it —
-including the command line, which is why a typo'd address fails silently. A friend cannot reach a
-match without a terminal. That is automation's business, not a playtest's, and it was easy to miss
-because the flags the audits use work perfectly.
+**Checkpoint 5 turned out to be blocked on a door rather than on netcode**, which is worth recording
+because the survey above spent five checkpoints treating it as a question about humans. The title
+screen built Play, Controls, Fullscreen and Quit; `Routes.to_match` took no arguments and its own
+comment had said "at M7 this is where a server address goes" since M6.5; `NetSession.host` and `join`
+both returned an `Error` that every caller dropped, including the command line, so a typo'd address
+failed in silence. **A friend could not reach a match without a terminal.** That is automation's
+business, not a playtest's, and it was easy to miss for exactly one reason: the flags the audits use
+work perfectly, so every suite in `tools/` walked past it. **Built now** — Multiplayer page, Host,
+Join, a lobby, the errors surfaced, and `lobby_audit.gd` to keep it honest.
 
 **And losing the wire mid-match freezes the arena in silence.** `_on_connection_lost` calls
 `go_offline`, which closes the transport — so `is_established` goes false and `net_match` returns
@@ -2345,11 +2366,14 @@ local peer is quietly reseated as host of an empty roster, and the only way out 
 once in the audit logs, as the last line, at teardown, where nothing is watching what follows. A
 real link will do this in the first ten minutes.
 
-So checkpoint 5 is three pieces of work and only the third is the human question: the door
-(Host/Join, and surfacing the errors both calls already return), the disconnect (a state that says
-what happened and lands somewhere defined — and the suite's first audit of a *failure*), and only
-then latency, router reachability, and whether a full human match feels fair. Mac only — the web
-build is a rendering decision, not an export target, and stays at M9.
+So checkpoint 5 is three pieces of work and only the third is the human question. **The first is
+done:** a Multiplayer page, Host and Join, a lobby to wait in, the errors surfaced, and
+`lobby_audit.gd` proving the guest does not reach an arena until the host says so. **The second is
+not:** the arena needs to notice `wire_lost` — the lobby does, the match does not — and say what
+happened rather than freezing, and that wants the suite's first audit of a *failure*, since loopback
+will not produce one on its own. **Then** the third: latency, router reachability, and whether a full
+human match feels fair. Mac only — the web build is a rendering decision, not an export target, and
+stays at M9.
 
 **Fix in checkpoint 2:** bots still do not Scurry. Acceptable at M6, where the question was
 whether a human agonizes over a spend. Blocking at M7, where the other side is a human and a crew

@@ -27,10 +27,15 @@ const NOTE_SIZE: int = 14
 const BUTTON_FACE: Color = Color(0.17, 0.14, 0.11, 0.94)
 const BUTTON_HOVER: Color = Color(0.26, 0.20, 0.14, 0.96)
 const BUTTON_DOWN: Color = Color(0.12, 0.10, 0.08, 0.98)
+## Darker than any button state, so a field reads as a hole rather than a disabled control.
+const FIELD_FACE: Color = Color(0.09, 0.07, 0.06, 0.96)
+## For a failed connect. Borrowed from the HUD rather than picked, per this file's whole argument.
+const WARN: Color = Color(0.86, 0.44, 0.32)
 
 
 static func theme(s: float) -> Theme:
 	var built := Theme.new()
+	_dress_field(built, s)
 	built.set_font(&"font", &"Button", HudSkin.font())
 	built.set_font_size(&"font_size", &"Button", int(BUTTON_SIZE * s))
 	built.set_color(&"font_color", &"Button", HudSkin.TEXT)
@@ -46,6 +51,46 @@ static func theme(s: float) -> Theme:
 	# to tell you which button you are on.
 	built.set_stylebox(&"focus", &"Button", _box(Color(0, 0, 0, 0), HudSkin.GOLD, s))
 	return built
+
+
+## A place to type a server address, in the same wood as everything else.
+##
+## Its own `LineEdit` entries in the shared Theme rather than per-node overrides, for the reason this
+## file exists at all: a menu is static and a container lays it out, so the styling belongs in the
+## Theme where the buttons' already is. Sunk rather than lit -- a field you type into should read as
+## a hole in the panel, where a button reads as something sitting on it.
+static func _dress_field(built: Theme, s: float) -> void:
+	built.set_font(&"font", &"LineEdit", HudSkin.font())
+	built.set_font_size(&"font_size", &"LineEdit", int(BUTTON_SIZE * s))
+	built.set_color(&"font_color", &"LineEdit", HudSkin.TEXT)
+	built.set_color(&"font_placeholder_color", &"LineEdit", HudSkin.TEXT_DIM)
+	built.set_color(&"caret_color", &"LineEdit", HudSkin.GOLD)
+	built.set_color(&"selection_color", &"LineEdit", Color(HudSkin.GOLD, 0.28))
+	built.set_stylebox(&"normal", &"LineEdit", _box(FIELD_FACE, HudSkin.FRAME_SHADE, s))
+	built.set_stylebox(&"focus", &"LineEdit", _box(FIELD_FACE, HudSkin.GOLD, s))
+
+
+## A field sized like a button, so a Join row reads as one piece of furniture.
+static func field(placeholder: String, s: float) -> LineEdit:
+	var made := LineEdit.new()
+	made.placeholder_text = placeholder
+	made.custom_minimum_size = Vector2(BUTTON_WIDTH * s, BUTTON_HEIGHT * s)
+	made.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	made.caret_blink = true
+	return made
+
+
+## One line of explanation under a menu. Dim by default; `tone` carries a warning or a success.
+static func note(text: String, s: float, tone: Color = HudSkin.TEXT_DIM) -> Label:
+	var made := Label.new()
+	made.text = text
+	made.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	made.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	made.custom_minimum_size = Vector2(BUTTON_WIDTH * 1.9 * s, 0.0)
+	made.add_theme_font_override(&"font", HudSkin.font())
+	made.add_theme_font_size_override(&"font_size", int(NOTE_SIZE * s))
+	made.add_theme_color_override(&"font_color", tone)
+	return made
 
 
 static func _box(face: Color, edge: Color, s: float) -> StyleBoxFlat:

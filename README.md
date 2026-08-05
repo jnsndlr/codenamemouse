@@ -243,13 +243,38 @@ at that instant, one read as a Sneak and one only ever as a Generalist, each pai
 the client reported in the same breath. **Verified by deleting the class check** — which is what
 condemned both earlier versions, whose output looked entirely fine.
 
-**Runtime-spawned replication is closed: cheese, barricades and cant all cross and recover.** What
-is left of M7 is checkpoint 5, and it is not all a human question. There is **no Host or Join
-button** — `Routes.to_match` still takes no arguments and joining is a command-line flag, so a
-friend cannot reach a match without a terminal. And **losing the wire mid-match freezes the arena in
-silence**: `go_offline` closes the transport, replication stops, the client's director was already
-told to stop simulating, and nothing says so. Loopback never drops, so no suite here could have
-caught that.
+**Runtime-spawned replication is closed: cheese, barricades and cant all cross and recover.**
+
+**And there is a door now.** [`title_screen.gd`](scripts/ui/title_screen.gd) grows a **Multiplayer**
+page with Host and Join on it, and either one lands in [`lobby.gd`](scripts/ui/lobby.gd) rather than
+straight in an arena — because connecting and entering a match are two moments, and until now there
+was nowhere to stand between them. The host's lobby prints the address to read out to your players and
+is honest about what it cannot know: a LAN address is the only one this machine can determine, so it
+says that, and says that the internet needs the router's public address with the port forwarded. The
+guest's lobby says `Connecting…`, then that it is waiting. Both of them surface the `Error` that
+`NetSession.host` and `join` have been returning and having dropped on the floor since the flags were
+written — which is why, until now, a typo'd `--join` failed in silence.
+
+`START` is the message that carries the host's button, and **it is the only one in the protocol whose
+receiver has no arena** — so `NetSession` handles it rather than `NetMatch`, because a client in a
+lobby has no `NetMatch` to hand it to. It is reliable: everything else on this wire is a picture that
+will be resent in a quarter-second, and this happens once. When the host gains settings to choose —
+starting cheese, which map — they belong in that packet rather than in a second one that could arrive
+after it.
+
+`--host` and `--join` now land in the lobby too, which is the point: a flagged process is in the same
+state a clicked one is, so [`lobby_audit.gd`](tools/lobby_audit.gd) tests the real door rather than a
+private entrance beside it. **Neither of its processes is given `--play`.** Its load-bearing check is
+an *ordering* one — the guest's log must say the host started the match **before** its first
+replication report — because "the guest reached an arena" is satisfied by a guest that was already in
+one, and a check that something is absent without ruling out the other reasons it could be absent
+passes for free. That lesson came from the cant audit two commits ago and was worth writing down.
+
+**What is left of M7 is checkpoint 5 — and one known bug in front of it.** Losing the wire mid-match
+freezes the arena in silence: `go_offline` closes the transport, replication stops, the client's
+director was already told to stop simulating, and nothing says so. Loopback never drops, so no suite
+here could have caught it. `NetSession.wire_lost` exists now and the lobby already acts on it; the
+arena does not.
 
 ## M6.5 — a build you can hand to somebody (closed)
 
@@ -614,10 +639,10 @@ On **CameraRig**: `pitch_degrees` (48), `zoom_idle` / `zoom_run` / `zoom_sprint`
 
 ### Audits
 
-**Seven** headless invariant suites — the three below plus `net_audit.gd`, `input_audit.gd`,
-`seat_audit.gd` and `replication_audit.gd`, all documented under M7 above. All must pass; each
-exits non-zero if it doesn't. The last two launch **real Godot processes** and take a couple of
-minutes between them, which is why they're listed last and not why they should be skipped.
+**Eight** headless invariant suites — the three below plus `net_audit.gd`, `input_audit.gd`,
+`seat_audit.gd`, `lobby_audit.gd` and `replication_audit.gd`, all documented under M7 above. All must
+pass; each exits non-zero if it doesn't. The last three launch **real Godot processes** and take a
+few minutes between them, which is why they're listed last and not why they should be skipped.
 
 ```bash
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/tunnel_audit.gd
@@ -631,7 +656,7 @@ minutes between them, which is why they're listed last and not why they should b
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/cheese_audit.gd
 ```
 
-**Run all seven before cutting a build.** An exported release template does not accept `--script`,
+**Run all eight before cutting a build.** An exported release template does not accept `--script`,
 so none of them can ever run against the `.app` — the honest procedure is to run them on the same
 commit the export is built from and then smoke-test the binary by hand. A build that inherits
 confidence the audits didn't actually give it is the failure this whole project keeps warning about.

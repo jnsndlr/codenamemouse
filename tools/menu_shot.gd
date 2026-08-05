@@ -29,9 +29,11 @@ func _initialize() -> void:
 		root.content_scale_size = size
 		await _shoot(size, "title", false)
 		await _shoot(size, "controls", true)
+		await _shoot(size, "multiplayer", false, "_show_multiplayer")
 
 	DisplayServer.window_set_size(SIZES[0])
 	root.content_scale_size = SIZES[0]
+	await _shoot_lobby()
 	await _shoot_pause()
 
 	print("written to %s" % ProjectSettings.globalize_path(OUT))
@@ -63,7 +65,34 @@ func _shoot_pause() -> void:
 		await process_frame
 
 
-func _shoot(size: Vector2i, what: String, open_controls: bool) -> void:
+## The host's lobby, which cannot be photographed without a socket: every line on it is read off a
+## live session, and a version of this that faked one would be a picture of a different screen. So it
+## opens a real one, on a port nothing else in `tools/` uses, and closes it afterwards.
+func _shoot_lobby() -> void:
+	var net := root.get_node_or_null(^"Net")
+	if net == null:
+		print("skipped: menu_lobby.png needs the Net autoload")
+		return
+	if net.call("host", 47899) != OK:
+		print("skipped: menu_lobby.png -- could not open a socket to photograph")
+		return
+
+	var screen: Node = (load("res://scenes/ui/lobby.tscn") as PackedScene).instantiate()
+	root.add_child(screen)
+	for i in range(20):
+		await process_frame
+
+	RenderingServer.force_draw()
+	root.get_texture().get_image().save_png(OUT + "menu_lobby.png")
+	print("shot: menu_lobby.png")
+
+	screen.queue_free()
+	for i in range(5):
+		await process_frame
+	net.call("go_offline")
+
+
+func _shoot(size: Vector2i, what: String, open_controls: bool, page: String = "") -> void:
 	var screen: Node = (load("res://scenes/ui/title.tscn") as PackedScene).instantiate()
 	root.add_child(screen)
 	for i in range(20):
@@ -73,6 +102,10 @@ func _shoot(size: Vector2i, what: String, open_controls: bool) -> void:
 		# The controls sheet has no public opener -- it is a menu button. Reach past that rather
 		# than widening the screen's API for a screenshot tool.
 		screen.call("_show_controls")
+		for i in range(10):
+			await process_frame
+	elif not page.is_empty():
+		screen.call(page)
 		for i in range(10):
 			await process_frame
 
