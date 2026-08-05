@@ -66,13 +66,14 @@ which makes this a genuinely reversible decision.
 ### Rendering the planes
 
 - Each plane is a `Node3D` at a fixed Y offset, containing its GridMap.
-- The surface uses a material whose **alpha is driven by the local player's depth** —
-  descend, and the surface ghosts out.
-- The **active plane renders solid with an emissive edge material**; other planes dim
-  or hide entirely.
 - Two visibility masks: **your network** (fully mapped) and **enemy segments** (only
   what's been revealed by sonar or line of sight). This is a per-team visibility set on
   the client, driven by server state.
+
+> **The first two bullets here were alpha-ghosting the surface and an emissive edge on the active
+> plane, and M2 replaced both.** Each layer is an open **trench cut through solid earth**: a lid
+> punched by a per-cell mask, nothing transparent, only the focused layer drawn. See M2 §*What the
+> spike found* — the reasons are worth reading before anyone reaches for alpha again.
 
 ### Design decisions that are secretly netcode decisions
 
@@ -129,44 +130,32 @@ revealed. Build it this way from the start; retrofitting it is painful.
 
 ### Data-driven from the start
 
-Classes, abilities, world creatures, and tunnel chunk types live in **Godot `Resource`
-files, not code** — inspector-editable and hot-reloadable.
+Tuning numbers live in **Godot `Resource` files, not code** — inspector-editable and
+hot-reloadable. Fifteen years of ideas want trying fast, and that should be an inspector edit
+rather than a recompile.
 
-```
-ClassDefinition (Resource)
-  health, speed, tunnel_speed_mult, carry_capacity
-  can_enter_tunnels: bool
-  abilities: Array[AbilityDefinition]
-
-AbilityDefinition (Resource)
-  cooldown, cast_time, range, damage, knockback, cheese_cost, effect
-```
-
-You have fifteen years of ideas and will want to try them fast. Tuning should be an
-inspector edit, not a recompile.
+`ClassDefinition` (`scripts/classes/class_definition.gd`) is the one that exists, with a `.tres`
+per class in `resources/classes/`: health, speed, sprint seconds, attack damage, carry penalty,
+dig speed. Abilities are still code in `scripts/classes/`; an `AbilityDefinition` resource is
+worth extracting the day a second ability shares a shape with the first.
 
 ### Project structure
 
 ```
 codenamemouse/
 ├── docs/
-├── scenes/
-│   ├── game/               # match, spawn, objective, economy managers
-│   ├── entities/           # mouse, flag, cheese, world creatures
-│   ├── tunnels/            # GridMaps, chunk MeshLibrary, dig controller
-│   ├── maps/               # arena.tscn — one world, not a copy per milestone
-│   └── ui/                 # HUD, minimap, depth indicator
+├── scenes/                 # actors, maps (arena.tscn — one world), player, ui
 ├── scripts/
-│   ├── net/                # NetTransport + implementations
-│   ├── sim/                # authoritative simulation
-│   ├── tunnels/            # graph, pathing, visibility, collapse
+│   ├── game/               # MatchDirector — the authoritative sim
+│   ├── actors/             # mouse.gd and the controls any mouse can carry
+│   ├── net/                # NetTransport, seats, snapshots, per-crew filters
+│   ├── tunnels/            # network, graph, pathing, visibility, collapse
 │   ├── classes/            # class + ability logic
-│   └── ai/                 # bots and world faction
-├── resources/
-│   ├── classes/            # ClassDefinition .tres
-│   ├── abilities/          # AbilityDefinition .tres
-│   └── world/              # PvE creature definitions
-└── assets/                 # placeholder now, real later
+│   ├── ai/                 # bots and (later) the world faction
+│   ├── maps/ camera/ rendering/ player/ ui/
+├── resources/classes/      # ClassDefinition .tres
+├── art/                    # shaders, one .blend
+└── tools/                  # audits and probes — excluded from export
 ```
 
 ---
@@ -208,9 +197,9 @@ movement is unsatisfying, nothing built on it will be fun.
 
 Deliberately **no game around it** — this is a legibility experiment, not a feature.
 
-- 4 planes as GridMaps, one chunk MeshLibrary (straight, corner, ramp, entrance)
-- Dig a segment, pivot off the end, build a ramp, descend a plane
-- Surface ghosting, emissive tunnel edges, depth indicator
+- 4 planes as GridMaps, one chunk MeshLibrary
+- Dig a segment, pivot off the end, descend a plane
+- Depth indicator, and some way of reading which layer you are on
 - Move a capsule through the result
 
 **Done when:** you can dig a three-plane network, look at it, and **immediately
@@ -222,36 +211,20 @@ this question, and it's answerable in under a week.
 
 #### What the spike found
 
-**Verdict: yes, three planes read — but only because of colour, not depth.**
+**Verdict: three depths survive.** The plan's escape hatch — dropping 3 to 2 — was not needed.
+But the question the spike started with was the wrong one.
 
-- **Vertical separation does almost nothing.** Planes are one `SPACING` apart, which at a
-  40° pitch projects to a handful of screen pixels. Rendered in one colour, three stacked
-  networks land nearly on top of each other and are genuinely indistinguishable — you can
-  see there's a network and not what shape it is. Dimming the unfocused planes did **not**
-  fix this on its own.
-- **Per-depth rim hue fixed it outright.** Cyan / amber / magenta for depths 1–3. With hue
-  carrying identity, dimming only has to carry *focus*, and the two jobs stop fighting.
-  This is the single most important finding of the milestone and it's a five-line change.
-- **The bright rim does the work, not the floor.** A thin emissive band capping each wall
-  outlines the network far more legibly than lit floor tiles ever did.
-- **"Underground" needs something behind it.** Ghosting the surface at first revealed the
-  *sky*, and the whole network read as floating in mid-air. An opaque earth backdrop below
-  the deepest plane fixed it. Ghosting alone is not enough — there has to be earth.
-- **Zoom matters more than expected.** Close in, one plane dominates and reads easily.
-  Pulled back to see a whole network, everything above depends on the hue coding.
+**Vertical separation does almost nothing.** Planes are one spacing apart, which at this pitch
+projects to a handful of screen pixels, so stacked networks land nearly on top of each other
+and are genuinely indistinguishable. The first answer was per-depth rim hue — cyan / amber /
+magenta — and it worked, and it is **gone**, because it answered "how do you read four stacked
+networks at once" and nobody needs to. What a player wants to see is *their own tunnel, on the
+layer they are in*.
 
-> Three depths survive. The plan's escape hatch — dropping 3 to 2 — was **not** needed.
-
-#### Superseded: the rim-hue finding answered the wrong question
-
-Per-depth rim hue is **gone**, and with it the emissive rim entirely. It was the right answer
-to "how do you read four stacked networks at once" — and nobody needs to. What a player wants
-to see is *their own tunnel, on the layer they are in*.
-
-So each layer is now drawn as an open **trench cut through solid earth**. A lid sits one plane
+So each layer is drawn as an open **trench cut through solid earth**. A lid sits one plane
 spacing above every floor with that layer's tunnels punched out of it, walls run the full
-height from floor to lid, and only the focused layer — plus its neighbour above, floors only —
-is drawn at all. You cannot see the layers below, so they cannot be confused with yours.
+height from floor to lid, and only the focused layer is drawn at all. You cannot see the layers
+below, so they cannot be confused with yours.
 
 - **The cut is a shader, not geometry.** `art/shaders/earth_cutaway.gdshader` discards against a
   one-texel-per-cell mask. Digging writes a texel; there is no mesh to rebuild, no CSG to
@@ -264,43 +237,30 @@ is drawn at all. You cannot see the layers below, so they cannot be confused wit
   whole network read as a black trench drawn across the lawn from a surface view — giving away
   for free the hidden information the game is built on (§3).
 - **Sky ambient drops underground** so the lamps have something to be brighter than.
-
-> **Walls went from 0.26 to a full plane spacing**, reversing the other M2 look decision. That
-> cap existed because a tall wall standing on a ghosted surface was just an occluder. With a lid
-> overhead the wall is the *side of a trench*, which is what makes it read — and it retires the
-> containment risk noted below, since the mouse can no longer be lifted over a 0.26 lip.
+- **Walls run the full plane spacing**, up from an earlier 0.26 cap. That cap existed because a
+  tall wall standing on a ghosted surface was just an occluder; with a lid overhead the wall is
+  the *side of a trench*, which is what makes it read.
 
 #### Then the mouse vanished, and the fix was `PLANE_SPACING`
 
 Walls at a full spacing made the trench read and made the player invisible. The camera looks
-down at 40°, so a wall of height *D* hides a strip of floor `D / tan(pitch)` wide behind it:
+down, so a wall of height *D* hides a strip of floor `D / tan(pitch)` wide behind it:
 
 | Trench depth | Blind strip | Visible in a 1-cell corridor |
 |---|---|---|
 | 1.5 | 1.79 | **none — geometrically impossible** |
 | 0.65 | 0.77 | most of it |
 
-At 1.5 the floor of a corridor could not be seen at any zoom or angle, and the mouse's head sat
-1.1 below the rim. **`PLANE_SPACING` was 1.5 for exactly one reason** — it's the drop a ramp must
-cover over two cells, set as high as `floor_max_angle` would take. Nothing about looks. Dropping
-it to 0.65 makes ramps *gentler* (16° against 37°) and every trench shallow enough to see into.
-Camera pitch also went 40° → 48°, which shrinks every blind strip by a fifth for free.
+At 1.5 the floor of a corridor could not be seen at any zoom or angle. `PLANE_SPACING` was 1.5
+for exactly one reason — the drop a ramp had to cover over two cells — and nothing about looks.
+It is **0.65** now, and camera pitch went 40° → 48°, which shrinks every blind strip by a fifth
+for free.
 
 - **Its floor is mouse headroom.** Spacing must exceed `0.4 + FLOOR_THICKNESS` or a mouse on
-  plane N+1 can't stand under plane N's slab. 0.65 leaves 0.13 of margin.
-- **The lawn had to get thinner too.** At 0.5 thick it left 0.15 of air above plane 1's floor —
-  the whole layer was unplayable, and nothing about that reads as a hole or a fall.
+  plane N+1 can't stand under plane N's slab. 0.65 leaves 0.13 of margin. The lawn had to get
+  thinner for the same reason — at 0.5 thick it left 0.15 of air above plane 1's floor.
 - **New invariant: `HEADROOM`.** The mouse must fit, standing, in every cell it can dig. This is
   the exact failure lowering the spacing invites and it's invisible to every other check.
-
-> **Invisible barriers don't have anywhere to go.** The plan was to draw low walls and collide
-> tall ones — right in principle, impossible here: the only thing above a wall is the floor of
-> the plane above, one spacing up. Set to 1.4 against a 0.65 spacing, every barrier grew through
-> that floor and became an invisible wall on the layer above; the audit caught plane 1's barriers
-> standing 0.75 proud of the lawn and fencing off the entrance. Collision height is now equal to
-> the wall, which is fine while nothing can lift a mouse. When displacement lands the answer is
-> **per-plane collision layers**, not taller barriers — and burrowing makes that easy, because
-> plane transitions stop being a continuous walk.
 
 > **Arrow keys swivel the view in quarter turns.** A trench running across the view is hidden
 > behind its own near wall for its whole length; the same trench pointed at the camera is open
@@ -317,17 +277,19 @@ and stops a well being drilled straight from the lawn to the bottom.
 The floor stays solid. A shaft is a mark, not a hole — you enter a tunnel because you chose
 to, never by walking over the wrong tile, and nothing can fall down one.
 
-**What this deleted**, all of which existed to serve sloped two-cell geometry: `RAMP_UPPER` /
-`RAMP_LOWER` and the two-cell split, `_ramp_steps`, `_orientation_facing`, `_ramp_edge_height`,
-`_ramp_geometry`, `_open_faces` and its cross-plane wall suppression, `_blocked_by_step`,
-`is_ramp_shadowed`, `dig_ramp`/`_ramp_refusal`, `surface_holes.gd` with its CSG entirely — and
-**the reachability guard with its snapshot and rollback**. A shaft takes no walkable space
-away and occupies nothing on the plane below, so digging can only ever *add* connectivity and
-there is nothing left to strand. Four invariants retired with them: `RAMP_PAIRS`, `RAMP_ENDS`,
-`OPEN_FACES` and `VERTICAL`. They weren't fixed; they became unrepresentable.
+**This deleted most of the tunnel system**, all of it built to serve sloped two-cell geometry:
+the ramp cell types and their two-cell split, orientation and edge-height maths, cross-plane
+wall suppression, `surface_holes.gd` with its CSG entirely — and **the reachability guard with
+its snapshot and rollback**. A shaft takes no walkable space away and occupies nothing on the
+plane below, so digging can only ever *add* connectivity and there is nothing left to strand.
+Four invariants retired with it (`RAMP_PAIRS`, `RAMP_ENDS`, `OPEN_FACES`, `VERTICAL`); they
+weren't fixed, they became unrepresentable. Three replaced them — `SHAFT_ENDS`, `NO_STACK`,
+`PLANE_LAYERS` — teeth-tested by forcing the failures past the guards.
 
-Three replaced them — `SHAFT_ENDS`, `NO_STACK`, `PLANE_LAYERS` — and all three were
-teeth-tested by forcing the failures past the guards.
+> **The general lesson from the ramp era, which is the only part still worth carrying:** a
+> family of "ramps only from a corridor end"-shaped structural rules each missed a case, and
+> each fix invited the next. Asking the question directly — apply the edit, walk the graph,
+> roll back if anything reachable no longer is — beat the growing pile of approximations.
 
 > **Per-plane collision layers.** Each plane's geometry is on its own layer and a mouse
 > collides only with the layer it's standing on. That's what makes an invisible barrier
@@ -343,8 +305,9 @@ teeth-tested by forcing the failures past the guards.
 
 #### Digging became aiming
 
-Point at a tile, hold **LMB**, watch it open — 0.5s for now, and per-plane dig time is already
-a GDD §3 balance dial. The hovered tile is outlined on hover with no button pressed, which is
+Point at a tile, hold the dig button, watch it open — 0.5s for now, and per-plane dig time is
+already a GDD §3 balance dial. (It was LMB here and moved to RMB at M3, when there was finally
+something to fight.) The hovered tile is outlined on hover with no button pressed, which is
 what makes the reach and adjacency rules learnable: you find out a tile is out of range by
 pointing at it, not by holding a button and being told nothing.
 
@@ -373,55 +336,22 @@ was the tile that had already claimed the button. **E is now only the way into a
 
 #### Tunnels need placement rules, and they need to be checked, not reasoned about
 
-A second pass over the spike went hunting for edge cases instead of waiting to fall through
-one. `tools/tunnel_audit.gd` builds eighteen deliberately awkward networks and asserts eight
-invariants over each — matched ramp halves, both ramp ends having somewhere to stand, honest
-cross-plane openings, no ramp descending through the plane below, every dug cell reachable
-from an entrance, cells inside the arena, floors that exist in the physics world, and a
-**containment probe** that walks the player's own capsule eight ways out of every cell and
-every ramp surface, checking that everywhere it can reach has ground under it.
-
-It found four families of bug, three of which the spike had been shipping:
-
-- **A ramp claims more space than it draws.** Its lower half finishes *below* the floor of
-  the plane beneath, so the two cells a ramp occupies are filled, not shared — the physics
-  probe can't find a pose for the mouse in there at all. Digging a corridor under a ramp
-  (or a ramp over a corridor) produced tunnel that looked continuous and could not be
-  entered, and nothing could clear it because the obstruction lived on another plane's grid.
-  Both directions are now refused.
-- **`plane_at_height` flips halfway down a slope**, so holding dig while descending cut floor
-  cells on the lower plane *at the ramp's own coordinates*. Digging is now suppressed while
-  on a ramp: a ramp is transit, not a dig site.
-- **A ramp anchored underfoot puts its arrival floor behind you.** Run to the end of a
-  corridor, turn ninety degrees, ramp down — and the ramp, its landing and every plane below
-  were sealed off from the tunnel that paid for them. Anchoring the slope to the cell *ahead*
-  makes the top of the ramp the cell you're already standing in, which fixes it by
-  construction. The most ordinary action in the game was the worst bug.
-- **Ramps at the arena boundary walked you out of the world.** Wall generation deliberately
-  leaves a ramp's uphill face open — it's the way on — so a ramp whose arrival floor fell
-  outside the arena opened onto neither floor nor wall.
-
-> **The general guard beat the structural rules.** Successive "ramps only from a corridor
-> end"-shaped rules each missed a case, and a chamber-wide dig has no corridor end at all. So
-> `dig_ramp` now applies the edit to the cell data, walks the graph, and rolls back if
-> anything that was reachable no longer is. One question asked directly, instead of a growing
-> pile of approximations — and it permits the chamber case the blunt rules forbade.
+`tools/tunnel_audit.gd` builds deliberately awkward networks and asserts the geometry
+invariants over each — cross-plane openings, every dug cell reachable from an entrance, cells
+inside the arena, floors that exist in the physics world, and a **containment probe** that
+walks the player's own capsule eight ways out of every cell, checking that everywhere it can
+reach has ground under it. Going hunting for edge cases beat waiting to fall through one: it
+found four families of bug, three of which the spike had been shipping.
 
 > **Refusals need a voice.** Placement rules mean keypresses that legitimately do nothing, and
-> a silent refusal is indistinguishable from a broken control — which the entrance key had
-> already taught us once. The network emits `dig_refused(reason)` and the HUD says why.
+> a silent refusal is indistinguishable from a broken control. The network emits
+> `dig_refused(reason)` and the HUD says why.
 
-> **`WALL_HEIGHT` when displacement arrives — since resolved.** At 0.26 against a 0.4 capsule the
-> mouse was contained only because nothing could lift it, with a 1.0-tall void between the
-> surface slab and plane 1. The trench rendering above raised walls to a full plane spacing for
-> unrelated reasons and closed it.
-
-> **Deferred, and honest about it:** `GridMap`'s MeshLibrary collision shapes are set and
-> valid but no body ever appears in the physics world, so the player fell through every
-> floor. `tunnel_network` generates its own collision trimesh from the same cell data. It
-> works and it's verifiable, but it's a workaround for something not yet understood, and
-> it costs the free batching the storage decision was partly chosen for. Worth a proper
-> diagnosis before M4 leans on tunnels for real.
+> **Still open: `GridMap`'s MeshLibrary collision shapes are set and valid but no body ever
+> appears in the physics world**, so the player fell through every floor. `tunnel_network`
+> generates its own collision trimesh from the same cell data. It works and it's verifiable,
+> but it's a workaround for something not yet understood, and it costs the free batching the
+> storage decision was partly chosen for.
 
 ---
 
@@ -594,16 +524,15 @@ behind it.
 
 **Question:** is digging *fun*, not just legible?
 
-- ~~Engineer class: dig, ramp, barricade~~ **done** — dig speed, cave-in, barricade
-- ~~**Bots path through tunnels** via `AStar3D` over dug cells~~ **done** — this was the
+- Engineer class: dig speed, cave-in, barricade — **done**
+- **Bots path through tunnels** via `AStar3D` over dug cells — **done**, and this was the
   milestone's centre of gravity, since M3 already ships digging and the flag map together.
   Until bots can follow, digging isn't a decision, it's an exploit.
+- Per-plane rock obstructions and no-surface zones — **done**. The zones were originally filed
+  under level design; a zone is a footprint and a refusal, the patio is a thing you can see, and
+  only the second is level design. Holding the first hostage to it would have meant the map
+  arriving with an untested rule bolted to it.
 - Dig controls pass (GDD §9 open question) — **deferred with level design**
-- ~~per-plane rock obstructions~~ **done**, and ~~no-surface zones belong with the patio they are
-  a rule about, which makes them part of the Backyard BBQ layout~~ — **reversed, and they are done
-  too.** A zone is a footprint and a refusal; the patio is a thing you can see. Only the second
-  one is level design, and holding the first hostage to it meant the map would have arrived with
-  an untested rule bolted to it.
 
 **Done when:** you'd rather take the tunnel than the surface route — and the choice
 feels like a real decision rather than an obvious one.
@@ -614,7 +543,7 @@ feels like a real decision rather than an obvious one.
 > greybox; the map and dig-controls pass return after them, when routes can be laid out and tuned
 > once around the systems they will actually carry.
 
-#### In progress — the Engineer, and classes that mean something (landed)
+#### The Engineer, and classes that mean something
 
 Four `ClassDefinition` resources in `resources/classes/`, per this plan's own data-driven
 section, copied onto a mouse by `set_class` rather than read through a reference — so grass,
@@ -680,14 +609,13 @@ structure over a hand-rolled adjacency list has paid for itself.
 mouse, and a Sneak without sonar is just a fragile one — class variety for the AI is worth
 having the day the abilities exist and not before.
 
-#### In progress — bots path through tunnels (landed)
+#### Bots path through tunnels
 
 The centre of gravity is done. An `AStar3D` graph mirrors the dug cells (`tunnel_graph.gd`),
 kept current incrementally off two new signals rather than rebuilt; `route_planner.gd` stitches
 it to the surface navmesh; `tunnel_transit.gd` is the one door between the two, shared by the
 player's controller and the AI so the rule that *the banner cannot go down* cannot exist in two
-versions. A defender now meets you three planes down. The Engineer class, the dig-controls pass
-and per-plane obstructions are still to come.
+versions. A defender now meets you three planes down.
 
 - **Four-way, and that isn't a simplification.** Walls are built on the four faces of a cell,
   so two diagonally touching cells have no gap between them. The obvious eight-way graph routes
@@ -718,10 +646,7 @@ and per-plane obstructions are still to come.
 > way, which makes **laying out a real Backyard BBQ (GDD §8) a prerequisite for M4's own
 > question**, not a polish task for later.
 
-#### In progress — obstructions, the barricade, and earth you can see (landed)
-
-Three of M4's four bullets are done. What is left is the **dig-controls pass** — and the
-**Backyard BBQ layout**, which this plan promoted from polish to prerequisite below.
+#### Obstructions, the barricade, and earth you can see
 
 **Per-plane rock obstructions (GDD §3).** Seeded seams, laid as random walks rather than discs so
 the edges are ragged, at 9% of plane 1 rising to 16% of plane 3. A rock cell is *not a new kind of
@@ -801,7 +726,7 @@ in a line of HUD text.
 > harder than the mouse standing in the middle of it. The box answers the question that matters, in
 > the one place you are already looking; the rest was noise dressed up as help.
 
-#### In progress — no-surface zones (landed)
+#### No-surface zones
 
 The second kind of obstruction (GDD §3), and the one the plan had filed under level design.
 `NoSurfaceZone` is an authored rectangle on the lawn; `TunnelNetwork.is_sealed` asks the map
@@ -849,7 +774,7 @@ no-surface zone and a wall.
 > **The dig-controls pass is tabled, not done.** Point-and-hold works well enough to keep playing
 > with, and the map is still what will tell us whether it is the friction or the fun.
 
-#### In progress — veins you can see, and rock you can break (landed)
+#### Veins you can see, and rock you can break
 
 Rock was legible at the moment it stopped you and invisible before and after. Two changes, and
 they are opposite halves of one idea: **a seam you have hit is remembered and drawn, and a boulder
@@ -942,9 +867,7 @@ tells you what is under it before you dig at all.**
 > on a null network, and all fourteen scenarios reported `ok`. Only the dig-flow check, which
 > passes `STRIP_MATCH` directly, was ever real. The geometry turned out to be sound when the
 > scenarios finally ran — luck, not vindication. **Both halves are fixed:** the type, and a
-> harness that reports `BROKEN` and fails the run when it cannot build its own subject. The
-> lesson generalises past this file: a test that cannot fail loudly when its own scaffolding
-> breaks is worse than no test, because it also stops anyone looking.
+> harness that reports `BROKEN` and fails the run when it cannot build its own subject.
 
 ---
 
@@ -971,7 +894,7 @@ tells you what is under it before you dig at all.**
 > made the difference was Engineer bots building a network per crew, so the yard fills with
 > corridors somebody else made — the condition the question could not be asked without.
 
-#### In progress — a map is knowledge, and knowledge leaves marks (landed)
+#### A map is knowledge, and knowledge leaves marks
 
 Every dug cell and shaft now carries a two-bit knowledge mask, parallel to the rock knowledge M4
 proved out. Live digging grants the cell to the digger's crew only. If blue and red corridors meet,
@@ -993,7 +916,7 @@ scan cooldown because it is counterplay, not a second use of the information abi
 leak, sonar ignores the plane two layers down, one scan leaves one mark, the owning crew can read
 it regardless of class, an enemy Generalist cannot, and an enemy Sneak can both read and erase it.
 
-#### The dark, and what you can make out in it (landed)
+#### The dark, and what you can make out in it
 
 **Lamps are crew property.** Lighting every cell of a layer made an enemy corridor a warm,
 inhabited room, and it quietly undid the map rule beside it: the minimap could keep a floor plan
@@ -1026,7 +949,7 @@ believes; the filtered minimap beside it was decorative. This is the more import
 boundary and it was the half with no assertion on it, which is why there is one now, asked of the
 real mask rather than of the rule that fills it.
 
-#### Somebody had to have dug one (landed)
+#### Somebody had to have dug one
 
 M5's question cannot be asked of an empty yard. Through M4 nothing in a match ever cut a tunnel
 except the human, so "is an enemy tunnel frightening" had no enemy tunnel in it.
@@ -1087,13 +1010,12 @@ walk into it" is very nearly true and fails often enough to deadlock a bot perma
 > exists. The general lesson is about what a rule check can see: correctness questions belong in the
 > audit, and *quality of behaviour* questions need a soak that prints numbers you can look at.
 
-> **The sight check was built so it could not fail, and that is the second time.** The corner it
+> **The sight check was built so it could not fail.** The corner it
 > asserts you cannot see round was 8.1 cells away with sight set to 7 — so it tested the *radius*,
 > and passed cheerfully with the line-of-sight test stubbed to `return true`. The far leg is 6.7
 > cells out now: in range, and behind earth. Both halves were then verified by breaking them.
-> The tunnel audit taught this lesson once already (below); the shape of the mistake was different
-> and the moral was identical. **A test whose subject is arranged so the rule can't bite is not a
-> weak test, it is a green light with nothing behind it.**
+> **A test whose subject is arranged so the rule can't bite is not a weak test, it is a green
+> light with nothing behind it.**
 
 ---
 
@@ -1139,7 +1061,7 @@ in the crew's pile, a **zero state that bites without ending you**, and **Scurry
 you choose. `Mouse.is_boosting()` has returned `false` since M2.5 waiting for the last of those,
 and `grass_camouflage.gd` already reads it, so a Scurrying mouse is fully visible the day it lands.
 
-#### In progress — the wedge loop (landed)
+#### The wedge loop
 
 `cheese_cache.gd` is a pile with a count on it and `cache_field.gd` puts six of them out. A mouse
 with free paws walks into one and takes **one wedge**; it banks at its own nest's **store**, and
@@ -1163,7 +1085,7 @@ second thing a defender has to cover. The audit found this, not a playtest.
 > the distances instead of trusting the picture, and there is a `nest_clear` floor behind the
 > angles: geometry authored in angles is easy to get subtly wrong, and a distance is not.
 
-#### In progress — Scurry, and a zero that bites (landed)
+#### Scurry, and a zero that bites
 
 Space, one cheese, ~2s, 15s personal cooldown. It **multiplies** current speed rather than setting
 one (§2, marked *don't relax it*), so a Scurrying carrier is a fast carrier and not a mouse that
@@ -1187,7 +1109,7 @@ is how much is left in any one of them.
 but the one spend that is a *choice* is the player's alone for now — which is fine for asking the
 milestone's question and wrong for M7, where the other side is a human doing it to you.
 
-#### In progress — dropped cheese stays dropped (landed)
+#### Dropped cheese stays dropped
 
 Drops have no clock. A pile waits until somebody takes it, and drops within `drop_merge_radius`
 of an existing pile **join it** rather than starting their own — permanent drops without merging
@@ -1256,29 +1178,16 @@ a volume slider is not. **There is no audio in the project at all** — no `.wav
 `AudioStream` anywhere — so a volume control would be a slider wired to nothing, which is worse
 than its absence because it reads as a promise.
 
-#### Credits are fifteen minutes, because there is nothing to credit
-
-Worth writing down so nobody budgets a day for it. The repo contains **zero third-party assets**:
-no fonts, no textures, no images, no sounds. The look is `art/shaders/` and one `.blend`, and
-`HudSkin.font()` takes Godot's built-in. So the licensing pass is an `ATTRIBUTIONS.md` carrying
-the engine's MIT notice, and it is done.
-
 #### Gatekeeper is the item that eats the evening
 
 The obvious checklist for this milestone is a Windows checklist — a path with spaces, a non-admin
 account, Program Files. None of those are the target. On macOS the equivalent is **quarantine**:
 an unsigned or ad-hoc-signed `.app` that arrives by AirDrop, browser or Messages gets the
 attribute, and recent macOS refuses to open it outright — the old right-click-to-open bypass is
-gone, so the tester has to find Privacy & Security and choose Open Anyway.
-
-For an alpha of one the dodge is to **transfer by a channel that does not set the attribute** —
-`rsync`, `scp`, a USB stick — rather than to buy a certificate. Developer ID signing and
-notarization is $99/yr and it buys nothing until the build goes to somebody you cannot text.
-
-Also Mac-shaped, and each a one-line decision in the export preset: universal versus `arm64`, and
-a minimum macOS version. The one genuinely uncertain item is **the compute pass**:
-`pixel_edges_effect.gd` dispatches through `RenderingDevice`, and a compute shader is exactly the
-thing that behaves differently on another GPU. It gets verified on the target machine, not here.
+gone, so the tester has to find Privacy & Security and choose Open Anyway. **For an alpha of one
+the dodge is a channel that does not set the attribute** — `rsync`, `scp`, a USB stick — rather
+than a $99/yr certificate that buys nothing until the build goes to somebody you cannot text.
+This is live again at M7 checkpoint 5, which is the first time the build goes to a friend.
 
 > **The HUD already survives the resolution question, which was the surprise.** `HudSkin` is
 > written as proportions against a 1280×720 `REFERENCE` and multiplied by `scale_for`, and
@@ -1289,8 +1198,8 @@ thing that behaves differently on another GPU. It gets verified on the target ma
 #### The audits cannot run against the binary, and saying so is the point
 
 The instinct is "run the existing audits against the exact release build". They cannot: exported
-release templates do not take `--script`, so `tunnel_audit.gd`, `match_audit.gd` and
-`cheese_audit.gd` only ever run against the project. The honest procedure is to **run them on the
+release templates do not take `--script`, so the suites in `tools/` only ever run against the
+project. The honest procedure is to **run them on the
 same tagged commit the export is built from**, then smoke-test the `.app` by hand — because a
 build that inherits confidence the audits did not actually give it is the failure mode this whole
 document keeps warning about.
@@ -1305,12 +1214,12 @@ report is "it broke at some point" and the evening bought nothing.
 export-filter line. But `look_panel.gd` is **a live shader-tuning slider panel bound to F1 and
 wired into `arena.tscn`**, and F1 is a key people press. It goes behind `OS.is_debug_build()`.
 
-#### In progress — a game you can enter and leave (landed)
+#### A game you can enter and leave
 
 `title.tscn` is the main scene now; `arena.tscn` is somewhere you go. `routes.gd` owns both moves
 and exists for M7 rather than for the title screen — joining a server, leaving a match and being
 handed back to a lobby are all "swap the scene under the player", and until this milestone that had
-**never once happened in this project**. Play sits where Host and Join will sit.
+**never once happened in this project**. Play sits beside the Host and Join that M7 later added.
 
 `pause_menu.gd` freezes the tree and keeps itself running (`PROCESS_MODE_WHEN_PAUSED`), which is the
 whole trick — the pause has to stop the sim rather than hide it, or a tester who steps away comes
@@ -1327,7 +1236,7 @@ its raw name. A new binding shows up ugly rather than absent, which is the right
 milestone's question is whether somebody can play without you in the room, and a control that
 silently never reaches the controls screen is the one failure that looks like success.
 
-#### In progress — the build keeps its own evidence (landed)
+#### The build keeps its own evidence
 
 The gap named above, closed. File logging is on, **P takes a screenshot**, and the shots land in
 `user://screenshots/` — next to Godot's own `user://logs/`, so what comes back from a playtest is
@@ -1358,7 +1267,7 @@ screen, which is where you find out before pressing the key rather than after.
 > where the *editor* keeps its log. A milestone whose deliverable is a bug report cannot name the
 > wrong folder, so it was checked against the engine rather than remembered.
 
-#### In progress — the export preset (landed; the build itself is not)
+#### The export preset
 
 `export_presets.cfg` exists, validates, and **excludes `tools/*` and `scenes/maps/greybox.tscn`** —
 the export-filter line this plan already promised. **Universal rather than `arm64`**, because the
@@ -1385,7 +1294,7 @@ no third-party assets — **verified rather than asserted**, by searching for fo
 components Godot bundles are *not* copied in: that list goes stale the first time the engine is
 updated, and the engine already answers it at runtime through `Engine.get_copyright_info()`.
 
-#### In progress — the first `.app`, and what building one taught (landed)
+#### The first `.app`, and what building one taught
 
 176 MB, universal (`x86_64 arm64`), ad-hoc signed, `com.jnsndlr.codenamemouse`. It boots: Metal 4.0
 Forward+, 760 rocks, 88,806 grass blades, 14 boulders, 6 caches and a 361-polygon navmesh, into a
@@ -1543,7 +1452,7 @@ architecture notes above made promises in week one; this is the audit of which o
    over hitscan and no crits were all chosen so that naive interpolation is survivable — find out
    whether it is before spending a week on reconciliation.
 
-#### In progress — the wire (landed)
+#### The wire
 
 Step 1 is done. [`net_transport.gd`](scripts/net/net_transport.gd) is the interface the *Tech
 decisions* section has been promising since week one, and
@@ -1586,7 +1495,7 @@ and the price of keeping it open is this file.
 > stated as a result rather than as a worry. In a match that bug reads as one player's inputs
 > driving another player's mouse: a gameplay bug that isn't one.
 
-#### In progress — intent became a value (landed)
+#### Intent became a value
 
 Step 2 is done. [`input_frame.gd`](scripts/net/input_frame.gd) is one tick of what a player meant:
 `move`, `aim_point`, `look`, and two twelve-bit masks for held and pressed. **Six gameplay files
@@ -1626,14 +1535,11 @@ hundred miles away, so there was no version of those four that could have worked
 > `look` would pass all nineteen match invariants and then disable pad aiming for every remote
 > player on the first packet — and that a driven frame actually drives.
 
-> **Its first version could not fail, which is the third time this project has caught that and the
-> first time it was caused by another assertion.** The driving check passed with the whole
-> mechanism deleted, because the "an untouched keyboard produces nothing" line immediately above it
-> called `input()` and *captured the tick* — so the driven frame was returned by the cache
-> regardless. The fix is one `await physics_frame` between them, and the lesson is new: it was not
-> a weak assertion or a subject arranged so the rule could not bite. **It was a good assertion
-> whose side effect disarmed the next one.** Verified by breaking `drive` and watching two lines
-> fail.
+> **Its first version could not fail, and the cause was another assertion.** The driving check
+> passed with the whole mechanism deleted, because the "an untouched keyboard produces nothing"
+> line immediately above it called `input()` and *captured the tick*, so the driven frame came
+> back from the cache regardless. One `await physics_frame` between them fixes it. **A good
+> assertion whose side effect disarms the next one** is the subtlest form of this failure.
 
 > **`Input.action_press` cannot be used to drive a test**, which is worth writing down because it
 > is the obvious approach. Its pressed-frame bookkeeping does not line up with `await
@@ -1643,7 +1549,7 @@ hundred miles away, so there was no version of those four that could have worked
 > earlier in the same tick is still what `input()` returns, so setting the private field alone read
 > back as whatever the previous check had aimed at.
 
-#### In progress — seats (landed)
+#### Seats
 
 Step 3 is done. [`seats.gd`](scripts/net/seats.gd) is ten chairs — five a crew — each holding
 either a peer id or a bot, and [`net_session.gd`](scripts/net/net_session.gd) is the one object
@@ -1708,7 +1614,7 @@ still look right from inside a match.
 > made about the log file, met again from the other direction, and worth remembering as a property
 > of the tooling rather than of either subsystem.
 
-#### In progress — mice on a wire (landed)
+#### Mice on a wire
 
 Step 4's first half is done, and it is the first half of this milestone a person can look at.
 [`snapshot.gd`](scripts/net/snapshot.gd) is where every mouse is thirty times a second,
@@ -1793,7 +1699,7 @@ feature.
 > design rather than a coincidence. This is the fourth time this project has caught a test that
 > could not fail, and the first time the cause was **timing that happened to be favourable**.
 
-#### In progress — a match, not just mice (landed)
+#### A match, not just mice
 
 Step 4's second half, and checkpoint 3. [`match_state.gd`](scripts/net/match_state.gd) carries
 everything on the HUD that is not a mouse — score, both cheese pools, the clock, the verdict, ten
@@ -1862,7 +1768,7 @@ right numbers therefore has a correct HUD, and the wire writes them through one 
 > sensible clock — and the comment says which failure each one is for. A check that cannot fail is
 > only a lie when nobody has written down what it is doing there.
 
-#### In progress — the earth, one crew at a time (landed)
+#### The earth, one crew at a time
 
 Step 5, and checkpoint 4 — the one the risk register said could silently fail.
 [`tunnel_view.gd`](scripts/net/tunnel_view.gd) is the filter, and it is the only place in the game
@@ -1919,18 +1825,14 @@ addressed boundary in a complete-state payload.
 > tick. That is the same discipline as the two scoreboard checks that cannot fail: say what the run
 > actually exercised.
 
-> **What a client still cannot do is dig.** The dig controller, the cave-in, the barricade, the
-> sonar and the class swap are arena-level singletons wired to `../Player` — *the* player, from
-> when there was one — so a remote human's DIG bits arrive at a server with nothing to consume
-> them. The intent has crossed the wire since step 2; what is missing is that these five are still
-> the local player's controls rather than any mouse's. That is the next piece, and it is a
-> refactor rather than a netcode problem.
+#### Any mouse's controls
 
-#### In progress — any mouse's controls (landed)
-
-The piece the note above named, and it was a refactor rather than a netcode problem exactly as
-predicted. [`mouse_control.gd`](scripts/actors/mouse_control.gd) is the half the dig controller and
-the four abilities have in common, [`mouse_controls.gd`](scripts/actors/mouse_controls.gd) is the
+A client could not dig at the end of step 5, and the reason was not the wire: the dig controller,
+the cave-in, the barricade, the sonar and the class swap were arena-level singletons wired to
+`../Player` — *the* player, from when there was one — so a remote human's DIG bits arrived at a
+server with nothing to consume them. A refactor, exactly as predicted.
+[`mouse_control.gd`](scripts/actors/mouse_control.gd) is the half the dig controller and the
+four abilities have in common, [`mouse_controls.gd`](scripts/actors/mouse_controls.gd) is the
 set, and `Player._ready` fits one. **A client can dig now**, and the audit that says so watched a
 headless client sink a shaft, climb down it and open four cells of earth on a machine fifty
 milliseconds away.
@@ -1965,11 +1867,9 @@ milliseconds away.
 > nothing told the two callers. **A GDScript runtime error aborts the function it happens in and
 > lets the caller carry on**, so the dig-flow and reveal checks stopped part way through, printed
 > nothing, and the file went on announcing *"ALL INVARIANTS HOLD … plus dig flow … and reveal"*
-> over two checks that had not run a single assertion. This is the fifth test-that-cannot-fail this
-> project has caught and the cause is new every time: not a weak assertion, not a subject arranged
-> so the rule could not bite, not favourable timing — **a caller left behind by a signature, in a
-> suite whose failure mode is to go quiet.** There is a tripwire now: a check arms itself on entry
-> and disarms at its own report line, and anything still armed is reported BROKEN.
+> over two checks that had not run a single assertion — **a caller left behind by a signature, in
+> a suite whose failure mode is to go quiet.** There is a tripwire now: a check arms itself on
+> entry and disarms at its own report line, and anything still armed is reported BROKEN.
 
 > **The first version of the new "a client cannot cut earth" check was verified twice and passed
 > the second time.** Deleting the network's guard failed it correctly. Deleting the *controller's*
@@ -1997,135 +1897,75 @@ milliseconds away.
 > exactly like the thing the check exists for. The invariant is only asked where the two logs
 > overlap now. **A false alarm on an invariant is worse than a missing one**, for the second time.
 
-> **The cheese share of runtime replication is closed.** Every pile now travels as part of a small
-> complete world picture: position, wedge count and visual spread, twice a second. Reconciliation
-> makes spawning, merging, depletion and removal one idempotent operation, and means a lost packet
-> or a client entering late heals without replaying events. `cheese_audit.gd` checks creation,
-> update and removal; `replication_audit.gd` makes a drop before the client has an arena and proves
-> it appears after the client enters.
->
-> **The barricade share is closed too, behind the tunnel boundary rather than in public.** Each
-> peer receives a complete picture only of barricades in cells `TunnelSight.knows` for its crew:
-> plane, cell, owner seat, remaining hits and total hits. It also privately carries only the
-> receiving player's standing count, preserving their three-rock budget when fog hides an old
-> coordinate without disclosing enemy activity. A client replica carries the collider, seeded rock
-> shape and damage shrink, but is removed from `Breakable.GROUP` and never blocks its puppet route
-> graph. Placement, Brute hits and obstruction remain server decisions; loss, removal, cave-in,
-> fog and late joining converge through the next full picture.
->
-> The late-join audit exposed a terrain cursor bug beside it. `TunnelView` had remembered cells
-> sent while a connected peer was still on the title screen, so its later arena was never offered
-> them again. `HELLO` now means “this peer has an arena now”: it resets that peer's delivery cursor
-> before the permitted earth is replayed. The audit creates a damaged red-owned rock and a
-> blue-only control before the client arena exists, proves owner/hits arrive for the first, follows
-> it through another damage stage and removal, and proves the second never crosses the visibility
-> boundary.
->
-> **The cant share closes the last runtime-spawned replication gap.** Cant cannot reuse
-> `TunnelSight.knows`, because revealing one otherwise-hidden location is its purpose. Each player
-> instead receives a complete picture of marks its authoritative identity can read: its crew's
-> marks in every class, and enemy marks only while it is a Sneak on that mark's plane. Absence
-> reconciles erasure and a class/depth change; repetition heals loss and late joining. The
-> temporary full scan is not world state: it travels once, reliably, only to the player who
-> sounded and expires locally.
->
-> One predicate answers it. `SonarMark.can_be_read_by` is to cant what `tunnel_view.gd` is to the
-> earth, and it had to be made so: the rule shipped in four places — the wire, the renderer, the
-> mark, the audit's report — with the copy on the wire written out longhand. They agreed, which is
-> the least reassuring way for four copies of a visibility rule to be.
->
-> The two-process audit makes opposing marks before the client arena exists, proves a red Generalist
-> gets its own and not blue's, promotes the same server mouse to Sneak and sees the blue mark
-> arrive, receives a private real-scan echo, then erases red's marks while the host proves its
-> hidden blue control still stands.
->
-> **An absent mark cannot prove a class rule, and it took two wrong versions of one check to learn
-> it.** Two rules revoke cant — wrong class, wrong depth — and both end in the same empty hold.
->
-> Version one put the enemy control on plane 0, swapped the mouse's class eleven seconds later, and
-> asserted the mark was gone. It was: `--autopilot` had dug the mouse to plane 1 three seconds
-> earlier and *depth* had taken it. It also read the last hold in the log, by which point erasure had
-> emptied that hold and no blue mark could have been in it either way. **Two accidents agreeing on a
-> pass.** Version two placed the control beside the mouse and had the host announce `isolation lost`
-> when the plane moved under the test — and the mutation run showed that was still not enough: the
-> sibling check went red while the class check itself stayed green, because with the plane moved
-> "absent" was true for the wrong reason again. Reporting a false pass is not preventing one.
->
-> What it needed was **a reading of a mark the depth rule would have allowed.** So there are two
-> controls, each placed beside the mouse on the plane the mouse is standing on at that instant — one
-> read as a Sneak, one placed at the moment of the swap and only ever read as a Generalist — and each
-> reading is paired with the depth the client reported *in the same breath*, counting only when the
-> viewer stood on that mark's own plane. Depth ruled out rather than hoped about; class the one thing
-> left that can explain the absence. Both readings must still contain red's cant, which pins them
-> before erasure.
->
-> **Verified by deleting the class check**, which is the only way to know an invariant about hidden
-> information is watching anything — and here it is what condemned two versions of the check that
-> looked, from their output, entirely fine.
->
-> Seven suites pass; fifty checks in the replication audit.
->
-> **Then the door, which was the real blocker and did not look like one.** Checkpoint 5 reads as a
-> human question — does a match with a friend feel fair — and the survey above kept treating it that
-> way. It was not reachable at all: the title screen had Play, Controls, Fullscreen and Quit, and
-> joining was a command-line flag. A **Multiplayer** page now carries Host and Join, and both land in
-> a lobby rather than an arena, because connecting and entering a match are two moments and
-> `--play <seconds>` had been standing in for the gap between them since M6.5.
->
-> `START` is the host's button on the wire, and it is the one message here whose receiver has no
-> arena — so `NetSession` owns it, not `NetMatch`. Reliable, unlike almost everything else in this
-> protocol, because it happens once and no later packet repairs a player left sitting in a room. The
-> settings the host will eventually choose belong in that same packet.
->
-> `--host` and `--join` land in the lobby too, so the flags and the buttons share a path and
-> `lobby_audit.gd` tests the real one. Neither of its processes gets `--play`. Its load-bearing check
-> is that the guest's log records being told to start **before** its first replication report — the
-> cant lesson applied on the first try this time, rather than after two false passes.
->
-> Eight suites pass.
->
-> **And then the failure path, which had no coverage whatsoever.** A client whose host went away froze
-> in silence: transport closed, `NetMatch` returning at its `is_established` guard forever, a director
-> already told to stop simulating and nothing to turn it back on, every mouse a puppet awaiting poses
-> that were not coming. No message, no exit but the pause menu. Eight suites passed over it, and the
-> reason is one sentence: **loopback never drops.** Every audit in `tools/` gets two processes talking
-> and finishes while they still are, so `connection lost` shows up once per log, as the last line, at
-> teardown, with nothing left to watch.
->
-> The state is deliberately distinct from offline — offline is also how a session starts and how
-> leaving a lobby is expressed, so `wire_lost` is the failure alone, and client-only, because a host
-> that loses somebody gives the chair to a bot and plays on. The arena holds, paused, scrim over it and
-> HUD hidden: the last thing you saw is information, and a menu you were flung to is not. `drop_audit`
-> kills a host mid-match with no goodbye and asserts the notice arrives **after the last replication
-> report** — presence alone is satisfied by a client that never played. Verified by disconnecting the
-> listener.
->
-> Nine suites pass; two hundred and twenty-eight checks.
->
-> **Then the three things loopback was hiding.**
->
-> *Rejoining did not work at all.* `START` comes from the lobby's button and the host leaves that lobby
-> pressing it, so anybody arriving afterwards was seated, simulated, and sent the entire world while
-> sitting on a lobby screen watching none of it — a hang, to look at. The fix is small and the reason it
-> *can* be small is the whole of step 6: a latecomer is owed the world as it stands, and every runtime
-> object in it is already a complete picture on a timer rather than a spawn event that has been and
-> gone. Nothing to replay. `lobby_audit` launches a third process with `--join` and nothing else, so
-> only the host noticing it can put it in a match.
->
-> *The bandwidth arguments finally have numbers.* One client costs a host **6.3 KB/s down, 2.2 KB/s up**
-> — and **snapshots are nine tenths of it.** The four per-peer periodic full pictures this document
-> spent step 6 justifying come to under a tenth between them. Both original claims were correct; the
-> emphasis was wrong. The redundancy was never the expense.
->
-> *And the wire can be made bad on purpose.* `--lag`, `--jitter`, `--loss`, applied on the way out where
-> reliability is still known — loss touches unreliable packets only, because dropping a guaranteed one
-> would be testing a protocol this game does not have. `link_audit` plays a real match at 120/40/12 and
-> asserts the world converges anyway. One of its checks is deliberately weak and documents why: at five
-> seconds between reports, most of any position disagreement is the gap between two reports rather than
-> two machines, so a second check does the real work — **once the mouse stops, latency explains nothing,
-> and whatever gap is left is drift.**
->
-> Ten suites pass; two hundred and fifty checks.
+#### The rest of the world, the door, and the wire that stops
+
+Every runtime-spawned object now replicates as a **small complete picture on a timer** rather than
+as spawn events, which is what makes loss and late joining heal by themselves.
+
+- **Cheese piles are public**: position, wedge count and spread, twice a second. Spawning, merging,
+  depletion and removal become one idempotent reconciliation.
+- **Barricades are filtered by the earth boundary** — a peer sees only rocks in cells
+  `TunnelSight.knows` for its crew, with its own standing count carried privately so fog hiding an
+  old coordinate cannot cost it its three-rock budget. Client replicas carry the collider and the
+  seeded shape but are out of `Breakable.GROUP`; placement, Brute hits and obstruction stay server
+  decisions.
+- **Cant needs its own predicate**, because revealing one otherwise-hidden location is its whole
+  purpose and `TunnelSight.knows` would forbid exactly that. `SonarMark.can_be_read_by` is to cant
+  what `tunnel_view.gd` is to the earth: crew marks in any class, enemy marks only while you are a
+  Sneak on that mark's plane. The rule had shipped in four places — wire, renderer, mark, audit —
+  and they agreed, which is the least reassuring way for four copies of a visibility rule to be.
+  The temporary full scan is not world state: it travels once, reliably, to the scanner alone.
+
+> **`HELLO` now means "this peer has an arena now".** `TunnelView` had remembered cells sent while
+> a connected peer was still on the title screen, so its later arena was never offered them again.
+> The message resets that peer's delivery cursor before the permitted earth is replayed.
+
+> **An absent mark cannot prove a class rule, and it took two wrong versions to learn it.** Two
+> rules revoke cant — wrong class, wrong depth — and both end in the same empty hold, so a check
+> that watches a mark disappear cannot say which rule did it. The fix is to observe **a reading the
+> other rule would have allowed**: controls placed beside the mouse on the plane it is standing on,
+> each reading paired with the depth reported in the same breath. Verified by deleting the class
+> check, which is what condemned both earlier versions — their output looked entirely fine.
+
+**Then the door, which was the real blocker and did not look like one.** Checkpoint 5 reads as a
+human question, so the survey kept treating it as one; it was not reachable at all, because the
+title screen had Play, Controls, Fullscreen and Quit and joining was a command-line flag. A
+**Multiplayer** page carries Host and Join now, and both land in a **lobby** rather than an arena,
+because connecting and entering a match are two moments. `--host` and `--join` land there too, so
+the flags and the buttons share one path and `lobby_audit.gd` tests the real one.
+
+- **`START` is the host's button on the wire, and `NetSession` owns it, not `NetMatch`** — it is
+  the one message whose receiver has no arena. Reliable, unlike almost everything else here,
+  because it happens once and no later packet repairs a player left sitting in a room.
+- **Rejoining did not work at all**: anybody arriving after the host pressed Start was seated,
+  simulated and sent the entire world while watching a lobby screen. The fix is small *because* of
+  the complete-picture design — a latecomer is owed the world as it stands and there is nothing to
+  replay.
+
+**And the failure path, which had no coverage whatsoever.** A client whose host went away froze in
+silence: transport closed, `NetMatch` returning at its `is_established` guard forever, every mouse
+a puppet awaiting poses that were not coming, and no exit but the pause menu. **Loopback never
+drops**, so every suite in `tools/` had walked past it — `connection lost` appeared once per log,
+as the last line, at teardown, with nothing left to watch. `wire_lost` is deliberately distinct
+from offline (which is also how a session starts and how leaving a lobby is expressed) and
+client-only (a host that loses somebody gives the chair to a bot and plays on). The arena is held,
+paused and scrimmed rather than replaced: the last thing you saw is information, and a menu you
+were flung to is not.
+
+> **The bandwidth arguments finally have numbers.** One client costs a host **6.3 KB/s down,
+> 2.2 KB/s up**, and **snapshots are nine tenths of it**. The four per-peer periodic full pictures
+> this document spent so long justifying come to under a tenth between them. Both original claims
+> were right; the emphasis was wrong. The redundancy was never the expense.
+
+> **The wire can be made bad on purpose.** `--lag`, `--jitter`, `--loss`, applied on the way out
+> where reliability is still known — loss touches unreliable packets only, since dropping a
+> guaranteed one would be testing a protocol this game does not have. `link_audit` plays a real
+> match at 120/40/12 and asserts the world converges anyway. One of its checks is deliberately weak
+> and says so: at five seconds between reports most of any position gap is the gap between reports,
+> so a second check does the real work — **once the mouse stops, latency explains nothing, and
+> whatever is left is drift.**
+
+**Ten suites, two hundred and fifty checks.**
 
 #### Sequencing — five checkpoints, each playable
 
@@ -2137,7 +1977,6 @@ Ordered so that something is testable at every stage and the risky part is not l
    or about who owns a mouse, not about the intent type.
 2. **Bots fill the empty seats.** Proves seat ownership and that the server is the only thing
    thinking. **Met** — ten mice, one simulation, and a client whose bots are pictures of bots.
-   Except that they still do not Scurry, which the risk below says is now blocking and is right.
 3. **The objective loop over the wire** — banner, capture, scruff, respawn, cheese. All of it is
    already in one node; this is mostly proving that. **Met, including the world caches**: the
    scoreboard is one message, the HUD needed no changes at all, and the caches are a separate
@@ -2169,10 +2008,6 @@ Ordered so that something is testable at every stage and the risky part is not l
   from inside a match — the game plays fine and the pillar is gone. It needs an invariant in
   `tools/`, not a playtest. This is the same lesson `cheese_audit.gd` and `cache_layout_probe.gd`
   both taught at M6: the failures that matter here are the ones that still look right.
-- ~~**Bots not Scurrying is now blocking.**~~ **Closed in checkpoint 4.** It was acceptable at M6,
-  where the point was whether a human agonizes over a spend; M7 is about a *second human*, and a
-  crew whose AI seats never spend cheese plays a different economy from the one across the yard.
-  Bots Scurry now.
 - **An audit can pass for the wrong reason, and a hidden-information audit is where that hides.**
   The cant class check did exactly this, twice: two rules could revoke the mark it watched,
   `--autopilot` moved the mouse under it, and the assertion read a hold that erasure had already
@@ -2180,9 +2015,9 @@ Ordered so that something is testable at every stage and the risky part is not l
   more checks" — a check on a filter must observe a case the *other* rules would have permitted, or
   absence proves nothing, and it must be run once with the filter deleted to watch it go red. That
   second run is what caught the fix that was itself still wrong.
-- **Failure paths have no coverage at all.** Every suite tests a wire that works. Nothing tests a
-  wire that stops — and a dropped connection currently freezes the arena in silence. Loopback
-  cannot produce the failure, so it has to be caused on purpose.
+- ~~**Failure paths have no coverage at all.**~~ **Closed** by `drop_audit.gd`, which kills a host
+  mid-match on purpose. Left here as the standing lesson: loopback cannot produce the failures that
+  matter, so they have to be caused deliberately.
 - **Listen-server host advantage** is real and unfixable at this scale. Name it, measure it, and
   decide whether it matters before building anything to hide it. **The instrument exists now** —
   `--lag`/`--jitter`/`--loss` on both ends — and `link_audit` has shown the world still converges at
@@ -2201,7 +2036,7 @@ Ordered so that something is testable at every stage and the risky part is not l
 
 **Question:** do the counterplay web and the PvE faction pay off?
 
-Two experiments, added **separately** so you can tell which did what:
+Three experiments, added **separately** so you can tell which did what:
 
 **8a — Brute:** collapse (planes 1–2), corking, Slam. Completes the counterplay web.
 Does the Engineer actually start digging deeper in response? That behavioral change is
@@ -2293,159 +2128,84 @@ entire server.
 
 ---
 
-## Risk register
+## How this project tests
 
-| Risk | Mitigation |
-|---|---|
-| **Tunnels don't read on screen** | M2 answers this in under a week, before anything depends on it |
-| **Digging is legible but boring** | M4 is the second gate. Be willing to hear "no." |
-| Tunnel visibility is cheatable | Server-filtered from the start (§Architecture) — not retrofittable |
-| Bot pathing through tunnels | `AStar3D` over the same graph players use; one source of truth |
-| M3 isn't fun | That's what M3 is for. The answer is worth more than the code. |
-| Netcode rabbit hole | Listen server, no prediction until it hurts, transport behind an interface |
-| Scope creep via classes | Two classes through M5. Brute at M8. Generalist and Juggernaut at M9. |
-| Art paralysis | Capsules through M8. No art decisions until systems are proven. |
-| Motivation over a long solo project | Every milestone is 1–2 weeks and ends in something playable |
+Ten suites in `tools/`, all `--script` runners. Three shapes, and the distinction matters:
+
+- **Audits** assert rules against hand-built scenarios (`tunnel_audit`, `match_audit`,
+  `cheese_audit`, `input_audit`, `net_audit`).
+- **Two-process audits** launch real Godot processes over a real socket and compare what each
+  concluded (`seat_audit`, `replication_audit`, `lobby_audit`, `drop_audit`, `link_audit`).
+  Slower and uglier than anything else here, and the only thing that can see seating, leak and
+  disconnect failures.
+- **Soaks and probes** answer *quality of behaviour* and *did the artefact appear* — questions no
+  rule check can see. `bot_soak` printing cells-per-mouth is what told a corridor from a scatter;
+  `screenshot_probe` asserts a decoded image with more than one colour in it.
+
+**The recurring failure is a check that cannot fail**, caught five times with a different cause
+every time: scaffolding that silently no-opped and left every scenario reporting `ok`; a subject
+arranged so the rule could not bite; timing that happened to be favourable; a caller left behind
+by a signature change, in a suite whose failure mode was to go quiet; and a good assertion whose
+side effect disarmed the next one. Hence the standing rules:
+
+- **Verify every new invariant by breaking it** and watching it go red. On a hidden-information
+  filter this is not optional — its subject is invisible from inside a match.
+- **A check on a filter must observe a case the other rules would have permitted**, or absence
+  proves nothing.
+- **A suite that cannot build its own subject must report `BROKEN` and fail the run**, and checks
+  arm a tripwire on entry that only their own report line disarms.
+- **A false alarm on an invariant is worse than a missing one** — it is what gets the invariant
+  relaxed. Two-process logs are written on unsynchronised timers, so anything comparing them must
+  align on wall-clock stamps and ask only where the logs overlap.
+- **Say what a run actually exercised.** Checks that could not have failed in a given run stay,
+  labelled with the different failure they are there for.
 
 ---
 
-## Immediate next step
+## Risk register
 
-**M0–M3 are done.** There is a match: two crews, two banners, melee, scruffing, respawns, a
-clock, and bots that play the objective. Both audits pass (`tools/tunnel_audit.gd`,
-`tools/match_audit.gd`).
+Still open:
 
-**M4's systems are done; its level-design verdict is deferred.** Classes, the cave-in, tunnel bots,
-per-plane rock, barricades, no-surface zones, per-crew vein knowledge and breakable surface
-boulders are stable. The Backyard BBQ layout and dig-controls pass return after the core rules.
+| Risk | Mitigation |
+|---|---|
+| **Digging is legible but boring** | M4's verdict is still deferred behind the Backyard BBQ layout. Be willing to hear "no." |
+| Netcode rabbit hole | Listen server, no prediction until it hurts, transport behind an interface |
+| Listen-server host advantage | Unfixable at this scale — name it and measure it at M7 checkpoint 5 (see M7 §Risks) |
+| Scope creep via classes | Four classes now; Brute's abilities at M8, Juggernaut at M9 |
+| Art paralysis | Capsules for maps and props through M8. No art decisions until systems are proven. |
+| Motivation over a long solo project | Every milestone is 1–2 weeks and ends in something playable |
 
-**M5's systems are all built.** Per-team tunnel and shaft maps, sonar and its contestable cant,
-crew-owned lamplight, line-of-sight-with-fog into enemy corridors, and a lid cutaway that keeps the
-same secret the minimap does. Crews of five, bots that acquire their class at the nest, and Engineer
-bots that build one network per crew — going under the midfield rock rather than stopping at it —
-mean there are enemy tunnels to be frightened of in the first place. Both audits pass: fifteen
-tunnel scenarios and nineteen match rule groups.
+Answered: tunnels read on screen (M2), M3 is fun (M3), bots path through tunnels via one shared
+`AStar3D` graph (M4), and tunnel visibility is filtered server-side rather than retrofitted (M5,
+wired at M7 step 5).
 
-**M5 is closed, and its answer was yes.** Crawling into an enemy corridor is frightening: unlit,
-not yours, and legible one cell at a time before it goes stale. Nothing needed retuning — every
-dial shipped at its first-pass value. It is the first milestone since M2 whose verdict did *not*
-come back as a map problem.
+---
 
-**M6 is closed.** Six caches on a ring off the nest-to-nest lane; wedges carried one at a time and
-banked at a store saucer that is its own spot inside a nest rather than the banner's feet; enemy
-stores raidable; 20-second respawns while broke; and Scurry on Space at one cheese, multiplying
-your current speed for two seconds. Dropped cheese **never rots** — a pile waits where somebody
-fell until somebody comes for it, and nearby drops merge into one growing pile. That last change
-is the one that mattered: it makes the map grow objectives the designer never placed, which this
-game had exactly one of before. Three audits pass: 15 tunnel scenarios, 19 match rule groups,
-37 cheese invariants.
+## Where this is
 
-**M6.5 is nearly closed, and one item is left.** The title screen, pause menu, the bindings drawn
-from the live `InputMap`, fullscreen, the version label, the icon, file logging, the screenshot key,
-`ATTRIBUTIONS.md`, the F1 tuning panel gated behind `OS.is_debug_build()` and a validated macOS
-export preset are all in. Four suites pass: 15 tunnel scenarios, 19 match rule groups, 37 cheese
-invariants and the screenshot probe.
+**M0–M6.5 are closed.** A full match exists and runs as a distributable build: two crews of five,
+banners, melee, scruffing, respawns, a clock; four classes with the Engineer's cave-in and
+barricade; four planes of tunnels dug by shaft with per-plane rock, no-surface zones and breakable
+boulders; per-crew knowledge of earth, veins and cant with lamplight, line of sight and fog; a
+cheese economy whose dropped piles never rot and so grow objectives nobody placed; a title screen,
+pause menu, controls sheet, screenshot key and a universal ad-hoc-signed `.app` that runs on a
+2020 MacBook Air and a 2026 MacBook Pro.
 
-**M6.5 is closed for the purpose it was inserted for.** The `.app` builds — 176 MB, universal,
-ad-hoc signed — and **runs on a 2020 MacBook Air and a 2026 MacBook Pro**. The compute pass, the
-resolution scaling and the signature all survive hardware that is not the development machine, and
-the five-year-old Air is the data point that could have said no. Still outstanding, and no longer a
-gate: a *friend*, which is the onboarding half rather than the portability half.
+**One verdict is still outstanding behind M4**, and it is a map problem rather than a systems one:
+no route under this arena beats walking over the top of it, because the yard is eighty metres of
+open dirt. The **Backyard BBQ layout** (GDD §8) and the **dig-controls pass** return together, and
+they are what make M4's *"would you rather take the tunnel?"* answerable.
 
-**Immediate next: M7 — real multiplayer.** *Does it survive contact with a second human?*
+**M7 is nearly closed.** All six steps of *The shape of the work* have landed — transport,
+input-as-value, seats, snapshots and match state, the per-crew visibility filter, and runtime
+replication of every world object — plus the per-mouse control refactor that lets a remote human
+dig, and a lobby with Host and Join so a friend does not need a terminal. Checkpoints 1–4 are met.
+**Ten suites, ~250 checks**, including two-process audits that play real matches over real sockets
+and one that plays a match at 120ms/40ms jitter/12% loss.
 
-**Step 1 is done: `NetTransport` + `ENetTransport`, with `tools/net_audit.gd` connecting a real
-server and two real clients over a real socket.** Written before anything consumes it, which is the
-opposite of this project's usual order and correct for a wrapper with no callers yet. It caught a
-transport that opened its socket, accepted connections, reported CONNECTED, and silently never
-polled — in the most natural three-line call sequence there is.
+**Immediate next: M7 checkpoint 5**, which is the only part automation cannot do — a friend, over
+the internet, for a full match. Router reachability, how a stranger gets in, and whether it feels
+fair. Mac only; web stays an M9 rendering decision.
 
-**Step 2 is done: intent is a value.** The survey was re-measured first and was wrong twice — two
-input files became six, four of them event handlers; "the player" in eleven mostly-presentational
-places became 31 references across 11 files of which only three are UI. Neither changes the plan's
-*shape*: `Mouse._control` is still the driver seam and `MatchDirector` is still the sim.
-
-`InputFrame` now carries a tick of intent, `InputCapture` is the only gameplay code that reads a
-keyboard, and `Mouse.drive()` is the door a packet will come through. Single-player runs the
-identical path. Five suites pass — 15 tunnel scenarios, 19 match groups, 37 cheese invariants, 22
-wire checks, 18 intent checks — and a 30-second soak still builds 73 cells across 2 mouths with
-nothing wedged.
-
-**Step 3 is done: seats.** Ten chairs, each holding a peer id or a bot, owned by a `NetSession`
-autoload that is the only thing in the game with a socket. Joining takes a chair on the emptier
-crew; leaving hands it back to a bot without the chair disappearing. Offline is the same table with
-one human in it, so there is no second code path. `--host` and `--join` exist before any button, so
-`tools/seat_audit.gd` can launch **two real processes** and assert the seating rather than a human
-having to watch it. Six suites pass.
-
-**Step 4's first half is done: mice on a wire.** Poses at 30Hz, seat-indexed so the protocol needs
-no spawn messages at all; clients interpolate, puppets simulate nothing, and a remote human's chair
-holds a `Player` rather than a `Bot` — which is a distinction that cost a real bug to learn. That
-is **checkpoints 1 and 2 met**: two windows, one seat each, bots in the other eight, movement and
-melee crossing the wire both ways. `tools/replication_audit.gd` puts two real processes in a real
-arena and compares what each says about where the same mouse is; it found that a client which
-connects *before* it enters a match was never told its seat, and that the first version of itself
-had been passing on favourable timing. Seven suites pass.
-
-**Step 4 is done, and checkpoint 3 with it.** The scoreboard is one message carrying the whole
-state four times a second rather than a stream of changes — the plan said "on change" and the
-numbers said otherwise, and a full state cannot get stuck wrong. Health rides in the pose. **No HUD
-file was touched**, because the HUD already asked `MatchDirector` and the wire writes what the
-rules would have. Bots Scurry, which the risk list called blocking. `net_audit` now also asserts
-that every scene and script in the game loads, after a parse error in the entire multiplayer match
-failed no suite at all. Seven suites pass, nineteen checks in the replication audit alone.
-
-**Step 5 is done: the earth is filtered per crew.** `tunnel_view.gd` is the only place that decides
-what a client may know about the ground, `TUNNELS` is addressed to one client because two crews are
-owed different worlds, and a client's network holds only what its crew cut or can see — M5's pillar
-expressed as geometry rather than as a minimap rule. The fog closes: cells are taken *back* when a
-crew stops being allowed to know them. **Verified by deleting the filter**, which is the only way
-to trust a check whose subject is invisible from inside a match. Seven suites pass; twenty-three
-checks in the replication audit.
-
-**The per-mouse control refactor and runtime world replication are done.** A remote human can dig,
-cave in, barricade, sound and erase sonar cant, and swap class through controls attached to its own
-server mouse. Cheese caches are a public complete picture; barricades are filtered by tunnel sight
-with private supply; cant is filtered per player by crew-or-same-plane-Sneak literacy, with its
-temporary echo addressed only to the scanner. All three recover from loss and late joining without
-replaying spawn events.
-
-**Checkpoint 5 turned out to be blocked on a door rather than on netcode**, which is worth recording
-because the survey above spent five checkpoints treating it as a question about humans. The title
-screen built Play, Controls, Fullscreen and Quit; `Routes.to_match` took no arguments and its own
-comment had said "at M7 this is where a server address goes" since M6.5; `NetSession.host` and `join`
-both returned an `Error` that every caller dropped, including the command line, so a typo'd address
-failed in silence. **A friend could not reach a match without a terminal.** That is automation's
-business, not a playtest's, and it was easy to miss for exactly one reason: the flags the audits use
-work perfectly, so every suite in `tools/` walked past it. **Built now** — Multiplayer page, Host,
-Join, a lobby, the errors surfaced, and `lobby_audit.gd` to keep it honest.
-
-**Losing the wire mid-match used to freeze the arena in silence — fixed.** `_on_connection_lost` calls
-`go_offline`, which closes the transport — so `is_established` goes false and `net_match` returns
-early forever, while the client's director had already been told `set_simulating(false)` and nothing
-turns it back on. Mice stay puppets receiving no poses. The clock stops. No message appears, the
-local peer is quietly reseated as host of an empty roster, and the only way out is the pause menu.
-**Loopback never drops, so no suite here could have caught it**: `connection lost` appeared exactly
-once in the audit logs, as the last line, at teardown, where nothing was watching what follows. A real
-link does this in the first ten minutes. `disconnected.gd` holds the arena and says what happened;
-`drop_audit.gd` kills a host on purpose to prove it.
-
-So checkpoint 5 was three pieces of work and only the third is the human question. **The first two are
-done:** a Multiplayer page, Host and Join, a lobby to wait in, the errors surfaced, and `lobby_audit`
-proving the guest does not reach an arena until the host says so; then a real "the wire died" state,
-distinct from offline, with `drop_audit` breaking a live match to check it. **The third is a playtest,
-not a suite:** latency, router reachability, and whether a full human match feels fair. Mac only — the
-web build is a rendering decision, not an export target, and stays at M9.
-
-**The deferral list needs splitting, too.** It reads "Matchmaking, lobbies, parties — friends use a
-direct connect code," which lumps a day of work in with real infrastructure. Three separate things:
-**LAN room names** are a UDP broadcast and no infrastructure at all; **internet room names** are an
-address book — an HTTP endpoint plus a key-value store, which also fixes a host's IP changing under a
-written-down number — and still leave the host forwarding a port once; **no port forwarding at all** is
-UDP hole punching or a relay, which needs an always-on box (the Hetzner instance already in the cost
-model below) and cannot be done on HTTP-only serverless hosting. Only the third is expensive, and only
-the third removes the thing that actually stops a friend from joining.
-
-**Fix in checkpoint 2:** bots still do not Scurry. Acceptable at M6, where the question was
-whether a human agonizes over a spend. Blocking at M7, where the other side is a human and a crew
-whose AI seats never spend cheese is playing a different economy from the one across the yard.
+Then **M8**, which is three separate experiments (Brute, the PvE faction, binary water) added one
+at a time so each has its own verdict.
