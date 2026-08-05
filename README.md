@@ -222,14 +222,34 @@ back, and a missed packet heals on the next picture. The brief scan outline is s
 reliable response sent only to the player who sounded, because the full echo is a private moment
 rather than persistent world knowledge.
 
+One predicate decides it. [`SonarMark.can_be_read_by`](scripts/classes/sonar_mark.gd) is to cant
+what [`TunnelView`](scripts/net/tunnel_view.gd) is to the earth — and it had to be made so, because
+the rule had shipped in four places with the copy on the wire written out longhand. They agreed,
+which is the least reassuring way for four copies of a visibility rule to be.
+
 The two-process audit creates red and blue cant before the client has an arena, proves a red
 Generalist receives only its own, changes that same authoritative mouse to a Sneak and watches the
-blue control appear, delivers a real scan echo, changes it back and watches the enemy mark vanish,
-then erases the red cant while proving the hidden blue control still exists on the server.
+blue control appear, delivers a real scan echo, then erases the red cant while proving the hidden
+blue control still exists on the server.
 
-**Runtime-spawned replication is closed: cheese, barricades and cant all cross and recover.** The
-remaining M7 checkpoint is the one automation cannot answer — a full match with a friend over the
-internet.
+**And the check on the class rule was wrong twice before it was right**, which is the part worth
+reading. Cant is revoked by two rules — wrong class, wrong depth — and both end in the same empty
+hold, so *absence proves neither*. The first version stood the mouse on plane 0 and swapped its
+class eleven seconds later, by which time `--autopilot` had dug it to plane 1 and depth had already
+taken the mark; it also read a hold that erasure had emptied. The second announced when the plane
+moved, which reported the false pass instead of preventing it. The fix is a reading of a mark the
+depth rule would have *allowed*: two controls placed beside the mouse on the plane it is standing on
+at that instant, one read as a Sneak and one only ever as a Generalist, each paired with the depth
+the client reported in the same breath. **Verified by deleting the class check** — which is what
+condemned both earlier versions, whose output looked entirely fine.
+
+**Runtime-spawned replication is closed: cheese, barricades and cant all cross and recover.** What
+is left of M7 is checkpoint 5, and it is not all a human question. There is **no Host or Join
+button** — `Routes.to_match` still takes no arguments and joining is a command-line flag, so a
+friend cannot reach a match without a terminal. And **losing the wire mid-match freezes the arena in
+silence**: `go_offline` closes the transport, replication stops, the client's director was already
+told to stop simulating, and nothing says so. Loopback never drops, so no suite here could have
+caught that.
 
 ## M6.5 — a build you can hand to somebody (closed)
 

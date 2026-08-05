@@ -71,9 +71,8 @@ func _process(delta: float) -> void:
 	if not watched():
 		return
 	for mark: SonarMark in _all_marks():
-		mark.visible = (
-			mark.plane == _player.get_plane()
-			and mark.can_be_seen_by(_player.team, _player.mouse_class)
+		mark.visible = mark.can_be_seen_by(
+			_player.team, _player.mouse_class, _player.get_plane()
 		)
 
 
@@ -84,7 +83,7 @@ func cooldown_left() -> float:
 func marks_for(viewer_team: int, viewer_class: int, plane: int) -> Array[SonarMark]:
 	var visible_marks: Array[SonarMark] = []
 	for mark: SonarMark in _all_marks():
-		if mark.plane == plane and mark.can_be_seen_by(viewer_team, viewer_class):
+		if mark.can_be_seen_by(viewer_team, viewer_class, plane):
 			visible_marks.append(mark)
 	return visible_marks
 

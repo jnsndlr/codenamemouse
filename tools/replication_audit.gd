@@ -403,10 +403,14 @@ func _check_the_barricade_world(host_said: String, client_said: String) -> void:
 
 
 ## Red's own mark and two blue controls predate the client arena. A Generalist is owed only red's;
-## after the authoritative mouse becomes a surface Sneak it is owed the surface blue mark but not
-## the deep one; after swapping back it must surrender the former even though both still exist on
-## the host. The real scan in the middle also proves the private temporary echo reaches the remote
-## player rather than being drawn only in the listen server's window.
+## a surface Sneak is owed the surface blue mark but never the deep one. The real scan in the middle
+## proves the private temporary echo reaches the remote player rather than being drawn only in the
+## listen server's window.
+##
+## THE CLASS RULE GETS A MARK OF ITS OWN, placed beside the mouse on the mouse's own plane at the
+## moment of the test, because the two rules that revoke a mark are class and depth and a mark on a
+## fixed plane cannot tell them apart while `--autopilot` is free to dig. See the comment on that
+## check: the version of it that used the fixed plane-0 mark passed for the wrong reason entirely.
 func _check_the_cant_world(host_said: String, client_said: String) -> void:
 	print("\n-- and the cant whispered through one layer of earth")
 	var pictures := _totals(client_said, "(\\d+) cant-world pictures")
@@ -437,10 +441,55 @@ func _check_the_cant_world(host_said: String, client_said: String) -> void:
 	_check("that remote scan receives its private temporary echo (%d)" % echoes,
 		echoes > 0 and client_said.contains("sonar echo: plane 0 cells [")
 		and client_said.contains("15,12"))
-	_check("swapping away from Sneak takes the enemy mark back",
-		host_said.contains("audit sonar returned remote to Generalist")
-		and not generalist_holds.is_empty()
-		and not generalist_holds[-1].contains("0.-17,17@BLUE"))
+	# THE CLASS RULE, WITH THE DEPTH RULE RULED OUT RATHER THAN HOPED ABOUT.
+	#
+	# **An absent mark cannot prove a class rule on its own.** Two rules revoke cant -- wrong class,
+	# wrong depth -- and both end in the same empty hold. The first version of this check put the
+	# control on plane 0 and read the last hold in the log: `--autopilot` had dug the mouse to plane
+	# 1 and depth had taken the mark three seconds before the class ever changed, and erasure had
+	# emptied that hold anyway. It passed. Deleting the class rule outright left it still passing.
+	# The second version asked whether the plane had moved and said so when it had -- which reported
+	# the false pass instead of preventing it, and the mutation run proved that too: the sibling
+	# check went red while this one stayed green.
+	#
+	# So each reading is paired with THE DEPTH THE CLIENT ITSELF REPORTED IN THE SAME BREATH, and a
+	# reading only counts when the viewer stood on the mark's own plane -- the one case where depth
+	# would have allowed it and class is the only thing left that can explain absence. Both readings
+	# must also still contain red's cant, pinning them before erasure empties the hold; an empty hold
+	# holds no blue mark either and would answer this by accident.
+	var beside_sneak := _last_capture(
+		host_said, "audit sonar blue control beside the Sneak: (\\S+)"
+	)
+	var beside_gen := _last_capture(
+		host_said, "audit sonar blue control beside the Generalist: (\\S+)"
+	)
+	var read_as_sneak_at_depth := false
+	var gone_as_generalist_at_depth := false
+	for reading: Dictionary in _cant_readings(client_said):
+		var hold: String = reading["hold"]
+		if not hold.contains("@RED"):
+			continue
+		if (
+			reading["class"] == "SNEAK" and not beside_sneak.is_empty()
+			and reading["plane"] == _token_plane(beside_sneak)
+			and hold.contains(beside_sneak)
+		):
+			read_as_sneak_at_depth = true
+		if (
+			reading["class"] == "GENERALIST" and not beside_gen.is_empty()
+			and reading["plane"] == _token_plane(beside_gen)
+			and not hold.contains(beside_gen)
+		):
+			gone_as_generalist_at_depth = true
+	_check("the host put a control beside the Sneak on its own plane (%s)" % beside_sneak,
+		not beside_sneak.is_empty())
+	_check("and another beside the Generalist on its own plane (%s)" % beside_gen,
+		not beside_gen.is_empty())
+	_check("a Sneak standing on that plane reads the enemy cant scratched into it",
+		read_as_sneak_at_depth)
+	_check("a Generalist standing on that same plane does not -- depth ruled out, class alone",
+		host_said.contains("audit sonar returned remote to Generalist on plane")
+		and gone_as_generalist_at_depth)
 	_check("erasing own cant removes it while the hidden blue control remains on the host",
 		host_said.contains("audit red cant erased while blue control remains")
 		and not generalist_holds.is_empty()
@@ -539,6 +588,40 @@ func _totals(text: String, pattern: String) -> int:
 func _last_capture(source: String, pattern: String) -> String:
 	var matches := RegEx.create_from_string(pattern).search_all(source)
 	return "" if matches.is_empty() else matches[-1].get_string(1)
+
+
+## Every cant hold the client printed, each carrying the class AND the depth from the same report.
+##
+## Read line by line rather than by one regex, because the pairing is what the check needs and the
+## pairing is positional: `_report` prints "mine at ... plane N" and then, four lines later in the
+## same five-second block, "cant viewer TEAM CLASS: hold [...]". A hold on its own says which marks
+## crossed; a hold beside the depth its viewer was standing at says WHY.
+func _cant_readings(source: String) -> Array[Dictionary]:
+	var depth := RegEx.create_from_string("mine at \\(.*\\) health \\d+ plane (\\d+)")
+	var viewer := RegEx.create_from_string("cant viewer (\\w+) (\\w+): hold \\[([^\\]]*)\\]")
+	var readings: Array[Dictionary] = []
+	var plane := -1
+	for line: String in source.split("\n"):
+		var at_depth := depth.search(line)
+		if at_depth != null:
+			plane = at_depth.get_string(1).to_int()
+			continue
+		var held := viewer.search(line)
+		if held != null:
+			readings.append({
+				"team": held.get_string(1),
+				"class": held.get_string(2),
+				"hold": held.get_string(3),
+				"plane": plane,
+			})
+	return readings
+
+
+## The plane out of a `plane.x,y@TEAM` hold token, or -1. The host logs its control marks in exactly
+## the form a hold prints them, so the coordinate is never written down twice.
+func _token_plane(token: String) -> int:
+	var cut := token.find(".")
+	return token.substr(0, cut).to_int() if cut > 0 else -1
 
 
 func _cant_holds(source: String, viewer_class: String) -> Array[String]:

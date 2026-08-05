@@ -21,12 +21,39 @@ func configure(network: TunnelNetwork, side: int, source_plane: int, target: Vec
 	name = "SonarMark_%s_%d_%d_%d" % [Team.name_of(owner_team), plane, cell.x, cell.y]
 	position = network.cell_to_world(plane, cell) + Vector3.UP * 0.035
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# HIDDEN UNTIL SOMEBODY'S EYES ASK FOR IT. `MeshInstance3D` arrives visible, and the one thing
+	# that corrects that is the watched mouse's `Sonar._process` -- so a mark drawn its own default
+	# is a mark that assumed a watcher exists. Since M7 a client BUILDS these from a packet, own
+	# crew cant arrives on planes the viewer is not standing on, and `local_mouse()` is briefly null
+	# across a respawn or a seat handover. Visible-by-default plus no watcher is a glyph on a floor
+	# two layers down.
+	visible = false
 	add_to_group(MARK_GROUP)
 	mesh = _glyph()
 
 
-func can_be_seen_by(viewer_team: int, viewer_class: int) -> bool:
-	return viewer_team == owner_team or viewer_class == MouseClass.SNEAK
+## MAY THIS PLAYER KNOW THIS MARK EXISTS -- and the only place that answers it.
+##
+## `tunnel_view.gd` is the one place that decides what a client may know about the ground, and cant
+## needed the same treatment for the same reason: the rule had four implementations, the one on the
+## wire was written out longhand, and a visibility rule with four copies is how M5's whole class of
+## bug gets in. They agreed, which is the least reassuring way for four copies of a rule to be.
+##
+## Own crew cant CARRIES ACROSS DEPTHS, because it is crew knowledge -- a Generalist standing on the
+## surface still knows where its own Sneaks scratched. Enemy cant is class knowledge and is legible
+## only on the plane it was scratched into: a Sneak reads the floor it is standing on, not the one
+## two layers down.
+func can_be_read_by(viewer_team: int, viewer_class: int, viewer_plane: int) -> bool:
+	if viewer_team == owner_team:
+		return true
+	return viewer_class == MouseClass.SNEAK and viewer_plane == plane
+
+
+## Is it on screen right now -- which is [method can_be_read_by] plus "and not through a layer of
+## earth". Reading own cant on another depth is knowledge; DRAWING it there would put a glyph on a
+## floor the viewer is not standing on.
+func can_be_seen_by(viewer_team: int, viewer_class: int, viewer_plane: int) -> bool:
+	return viewer_plane == plane and can_be_read_by(viewer_team, viewer_class, viewer_plane)
 
 
 ## Remove from readers immediately, then leave tree teardown to the end of the frame. Used by

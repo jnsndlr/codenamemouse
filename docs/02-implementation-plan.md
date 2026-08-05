@@ -2029,10 +2029,41 @@ milliseconds away.
 > temporary full scan is not world state: it travels once, reliably, only to the player who
 > sounded and expires locally.
 >
-> The two-process audit makes opposing marks before the client arena exists, proves a red
-> Generalist gets its own and not blue's, promotes the same server mouse to Sneak and sees the blue
-> mark arrive, receives a private real-scan echo, swaps back and gives the blue mark up, then erases
-> red's marks while the host proves its hidden blue control still stands.
+> One predicate answers it. `SonarMark.can_be_read_by` is to cant what `tunnel_view.gd` is to the
+> earth, and it had to be made so: the rule shipped in four places — the wire, the renderer, the
+> mark, the audit's report — with the copy on the wire written out longhand. They agreed, which is
+> the least reassuring way for four copies of a visibility rule to be.
+>
+> The two-process audit makes opposing marks before the client arena exists, proves a red Generalist
+> gets its own and not blue's, promotes the same server mouse to Sneak and sees the blue mark
+> arrive, receives a private real-scan echo, then erases red's marks while the host proves its
+> hidden blue control still stands.
+>
+> **An absent mark cannot prove a class rule, and it took two wrong versions of one check to learn
+> it.** Two rules revoke cant — wrong class, wrong depth — and both end in the same empty hold.
+>
+> Version one put the enemy control on plane 0, swapped the mouse's class eleven seconds later, and
+> asserted the mark was gone. It was: `--autopilot` had dug the mouse to plane 1 three seconds
+> earlier and *depth* had taken it. It also read the last hold in the log, by which point erasure had
+> emptied that hold and no blue mark could have been in it either way. **Two accidents agreeing on a
+> pass.** Version two placed the control beside the mouse and had the host announce `isolation lost`
+> when the plane moved under the test — and the mutation run showed that was still not enough: the
+> sibling check went red while the class check itself stayed green, because with the plane moved
+> "absent" was true for the wrong reason again. Reporting a false pass is not preventing one.
+>
+> What it needed was **a reading of a mark the depth rule would have allowed.** So there are two
+> controls, each placed beside the mouse on the plane the mouse is standing on at that instant — one
+> read as a Sneak, one placed at the moment of the swap and only ever read as a Generalist — and each
+> reading is paired with the depth the client reported *in the same breath*, counting only when the
+> viewer stood on that mark's own plane. Depth ruled out rather than hoped about; class the one thing
+> left that can explain the absence. Both readings must still contain red's cant, which pins them
+> before erasure.
+>
+> **Verified by deleting the class check**, which is the only way to know an invariant about hidden
+> information is watching anything — and here it is what condemned two versions of the check that
+> looked, from their output, entirely fine.
+>
+> Seven suites pass; fifty checks in the replication audit.
 
 #### Sequencing — five checkpoints, each playable
 
@@ -2069,10 +2100,20 @@ Ordered so that something is testable at every stage and the risky part is not l
   from inside a match — the game plays fine and the pillar is gone. It needs an invariant in
   `tools/`, not a playtest. This is the same lesson `cheese_audit.gd` and `cache_layout_probe.gd`
   both taught at M6: the failures that matter here are the ones that still look right.
-- **Bots not Scurrying is now blocking.** It was acceptable at M6, where the point was whether a
-  human agonizes over a spend. M7 is about a *second human*, and a crew whose AI seats never
-  spend cheese is a crew that plays the economy differently from the one across the yard. Fix it
-  in checkpoint 2.
+- ~~**Bots not Scurrying is now blocking.**~~ **Closed in checkpoint 4.** It was acceptable at M6,
+  where the point was whether a human agonizes over a spend; M7 is about a *second human*, and a
+  crew whose AI seats never spend cheese plays a different economy from the one across the yard.
+  Bots Scurry now.
+- **An audit can pass for the wrong reason, and a hidden-information audit is where that hides.**
+  The cant class check did exactly this, twice: two rules could revoke the mark it watched,
+  `--autopilot` moved the mouse under it, and the assertion read a hold that erasure had already
+  emptied. Nothing about the output looked wrong either time. The lesson is narrower than "write
+  more checks" — a check on a filter must observe a case the *other* rules would have permitted, or
+  absence proves nothing, and it must be run once with the filter deleted to watch it go red. That
+  second run is what caught the fix that was itself still wrong.
+- **Failure paths have no coverage at all.** Every suite tests a wire that works. Nothing tests a
+  wire that stops — and a dropped connection currently freezes the arena in silence. Loopback
+  cannot produce the failure, so it has to be caused on purpose.
 - **Listen-server host advantage** is real and unfixable at this scale. Name it, measure it, and
   decide whether it matters before building anything to hide it.
 - **The scope trap is prediction.** Every deferred-prediction plan gets talked into it early by a
@@ -2287,10 +2328,28 @@ with private supply; cant is filtered per player by crew-or-same-plane-Sneak lit
 temporary echo addressed only to the scanner. All three recover from loss and late joining without
 replaying spawn events.
 
-**Next: checkpoint 5 — a friend, over the internet, for a full match.** Automation has covered the
-structural questions on real loopback processes. It cannot answer latency, onboarding, router
-reachability or whether a full human match feels fair. Mac only — the web build is a rendering
-decision, not an export target, and stays at M9.
+**Next: checkpoint 5 — a friend, over the internet, for a full match. And it is blocked on a door,
+not on netcode.** The title screen builds Play, Controls, Fullscreen and Quit; `Routes.to_match`
+still takes no arguments and its own comment has said "at M7 this is where a server address goes"
+since M6.5. `NetSession.host` and `join` both *return* an `Error` and every caller drops it —
+including the command line, which is why a typo'd address fails silently. A friend cannot reach a
+match without a terminal. That is automation's business, not a playtest's, and it was easy to miss
+because the flags the audits use work perfectly.
+
+**And losing the wire mid-match freezes the arena in silence.** `_on_connection_lost` calls
+`go_offline`, which closes the transport — so `is_established` goes false and `net_match` returns
+early forever, while the client's director had already been told `set_simulating(false)` and nothing
+turns it back on. Mice stay puppets receiving no poses. The clock stops. No message appears, the
+local peer is quietly reseated as host of an empty roster, and the only way out is the pause menu.
+**Loopback never drops, so no suite here could have caught it**: `connection lost` appears exactly
+once in the audit logs, as the last line, at teardown, where nothing is watching what follows. A
+real link will do this in the first ten minutes.
+
+So checkpoint 5 is three pieces of work and only the third is the human question: the door
+(Host/Join, and surfacing the errors both calls already return), the disconnect (a state that says
+what happened and lands somewhere defined — and the suite's first audit of a *failure*), and only
+then latency, router reachability, and whether a full human match feels fair. Mac only — the web
+build is a rendering decision, not an export target, and stays at M9.
 
 **Fix in checkpoint 2:** bots still do not Scurry. Acceptable at M6, where the question was
 whether a human agonizes over a spend. Blocking at M7, where the other side is a human and a crew

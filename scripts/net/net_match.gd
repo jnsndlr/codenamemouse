@@ -160,12 +160,16 @@ var _audit_barricades_done: bool = false
 var _audit_barricade_age: float = 0.0
 var _audit_barricade_stage: int = 0
 var _audit_red_rock: BarricadeRock
-## Three moments for the last replication gap: own cant before a late join, enemy cant that only
-## crosses while the remote is a Sneak, and a private scan echo after its arena exists.
+## Four moments for the last replication gap: own cant before a late join, enemy cant on another
+## depth that must stay home, enemy cant on the mouse's OWN plane that turns on its class alone,
+## and a private scan echo after its arena exists.
 const AUDIT_CANT_RED: Vector2i = Vector2i(12, 12)
 const AUDIT_CANT_BLUE: Vector2i = Vector2i(-17, 17)
 const AUDIT_CANT_BLUE_DEEP: Vector2i = Vector2i(-16, 17)
 const AUDIT_SONAR_SCAN: Vector2i = Vector2i(15, 12)
+## Far enough from the mouse that `Sonar.erase_reach_cells` cannot rub the control out from under
+## the test, close enough that it is unambiguously on the same floor.
+const AUDIT_CANT_BESIDE_OFFSET: Vector2i = Vector2i(3, 0)
 var _audit_sonar: bool = false
 var _audit_sonar_done: bool = false
 var _audit_sonar_age: float = 0.0
@@ -174,6 +178,8 @@ var _audit_red_mark: SonarMark
 var _audit_blue_mark: SonarMark
 var _audit_blue_deep_mark: SonarMark
 var _audit_scan_mark: SonarMark
+var _audit_beside_mark: SonarMark
+var _audit_beside_gen_mark: SonarMark
 
 
 func _ready() -> void:
@@ -502,11 +508,10 @@ func _cant_of(viewer_team: int, viewer_class: int, viewer_plane: int) -> String:
 		var mark := node as SonarMark
 		if mark == null or mark.is_queued_for_deletion():
 			continue
-		if viewer_team >= 0 and not mark.can_be_seen_by(viewer_team, viewer_class):
-			continue
+		# `viewer_team` of -1 is "every mark there is", which is what both ends print to be compared.
 		if (
-			viewer_team >= 0 and mark.owner_team != viewer_team
-			and viewer_plane >= 0 and mark.plane != viewer_plane
+			viewer_team >= 0
+			and not mark.can_be_read_by(viewer_team, viewer_class, viewer_plane)
 		):
 			continue
 		parts.append("%d.%d,%d@%s" % [
@@ -783,14 +788,11 @@ func _send_cant() -> void:
 		var state := SonarState.new()
 		state.revision = _cant_tick
 		for mark: SonarMark in marks:
-			var readable: bool = (
-				mark.owner_team == seated[0]
-				or (
-					viewer.mouse_class == MouseClass.SNEAK
-					and mark.plane == viewer.get_plane()
-				)
-			)
-			if readable:
+			# `SonarMark.can_be_read_by` AND NOT THE RULE WRITTEN OUT AGAIN HERE. This is the copy
+			# that matters -- it is the one deciding what leaves the machine -- so it must be the
+			# same call the renderer and the audit's report make, or the check they agree on is a
+			# check of three separately maintained opinions.
+			if mark.can_be_read_by(seated[0], viewer.mouse_class, viewer.get_plane()):
 				state.add(mark.owner_team, mark.plane, mark.cell)
 		_transport.send(peer, state.to_bytes(), false)
 
@@ -798,17 +800,34 @@ func _send_cant() -> void:
 ## Sonar belongs to a runtime-spawned Player, so signal wiring follows the roster rather than an
 ## authored NodePath. Rescanning is cheap (at most four human mice) and closes the small window
 ## between a peer taking a seat and that deferred Player entering the tree.
+##
+## REMEMBERED IN A TABLE RATHER THAN ASKED OF THE SIGNAL, and the reason is a Godot detail worth
+## writing down: **`Callable.bind` arguments do not participate in Callable equality.** Measured on
+## 4.7 -- `bind(a) == bind(b)` is true, and `connect` with a differently bound copy is refused as a
+## duplicate. So `is_connected(Callable(self, "_on_sonar_scanned").bind(mouse))` does not ask "is
+## this mouse's sonar linked", it asks "is anything linked to `_on_sonar_scanned` here". That
+## happens to be the same question while there is one Sonar per mouse and each is bound to its own
+## -- which is a guard resting on a coincidence, and it built a fresh Callable every tick to do it.
+var _echo_linked: Dictionary = {}
+
+
 func _ensure_sonar_echo_links() -> void:
 	for node: Node in get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
 		var mouse := node as Mouse
 		if mouse == null or not (mouse is Player):
 			continue
 		var sonar := mouse.get_node_or_null(^"Sonar") as Sonar
-		if sonar == null:
+		if sonar == null or _echo_linked.has(sonar):
 			continue
-		var callback := Callable(self, "_on_sonar_scanned").bind(mouse)
-		if not sonar.scanned.is_connected(callback):
-			sonar.scanned.connect(callback)
+		_echo_linked[sonar] = true
+		sonar.scanned.connect(_on_sonar_scanned.bind(mouse))
+
+	# A seat handed back to a bot frees its Player and its Sonar with it. Pruned here rather than on
+	# a departure signal because this scan is already the thing that runs every tick, and a table
+	# keyed by freed objects would grow for the length of the match.
+	for sonar: Variant in _echo_linked.keys():
+		if not is_instance_valid(sonar):
+			_echo_linked.erase(sonar)
 
 
 ## A scan's full outline is private to the mouse that paid the cooldown. The persistent mark is
@@ -895,7 +914,7 @@ func _tick_audit_barricades(delta: float) -> void:
 		if is_instance_valid(_audit_red_rock):
 			_audit_brute_hit(_audit_red_rock)
 			_net.log_line("audit barricade cleared")
-			_audit_barricade_stage = 2
+		_audit_barricade_stage = 2
 
 
 ## Build three marks before the joining process has an arena. Red owns one and must receive it as
@@ -943,16 +962,37 @@ func _tick_audit_sonar(delta: float) -> void:
 		_audit_scan_mark = _mark_at(Team.RED, 0, AUDIT_SONAR_SCAN)
 		_net.log_line("audit sonar made remote a Sneak and sounded %d cells" % heard)
 		_audit_sonar_stage = 1
-	elif _audit_sonar_stage == 1 and _audit_sonar_age >= 27.0:
-		remote.set_class(MouseClass.GENERALIST)
-		_net.log_line("audit sonar returned remote to Generalist")
+	# A CONTROL PLACED BESIDE THE MOUSE, ON THE MOUSE'S OWN PLANE, ONCE PER CLASS -- and it took two
+	# tries to get this honest. **Absence cannot prove class**, because two rules revoke a mark and
+	# both end in the same empty hold: the mark was unreadable to this class, or the mouse walked off
+	# its plane. Version one put the control on plane 0 and swapped class eleven seconds later, by
+	# which time `--autopilot` had dug down to plane 1 and DEPTH had taken it -- a pass proving
+	# nothing. Version two placed the control beside the mouse and asked whether the plane had
+	# changed, which turned a false pass into a *reported* one but still let the check itself go
+	# green. What the audit actually needs is a reading of a mark the depth rule would have ALLOWED,
+	# so the two are paired: one control read while a Sneak, a second placed on the mouse's plane at
+	# the instant of the swap, and the client's own reported depth checked against each. See
+	# `_check_the_cant_world`.
+	elif _audit_sonar_stage == 1 and _audit_sonar_age >= 23.0:
+		_audit_beside_mark = _place_beside(remote, AUDIT_CANT_BESIDE_OFFSET, "Sneak")
 		_audit_sonar_stage = 2
-	elif _audit_sonar_stage == 2 and _audit_sonar_age >= 38.0:
+	elif _audit_sonar_stage == 2 and _audit_sonar_age >= 31.0:
+		# Placed BEFORE the swap and reported after it, so no five-second report can ever observe
+		# this mark while the mouse is still a Sneak: every reading of it is a Generalist's.
+		_audit_beside_gen_mark = _place_beside(
+			remote, -AUDIT_CANT_BESIDE_OFFSET, "Generalist"
+		)
+		remote.set_class(MouseClass.GENERALIST)
+		_net.log_line(
+			"audit sonar returned remote to Generalist on plane %d" % remote.get_plane()
+		)
+		_audit_sonar_stage = 3
+	elif _audit_sonar_stage == 3 and _audit_sonar_age >= 39.0:
 		for mark: SonarMark in [_audit_red_mark, _audit_scan_mark]:
 			if is_instance_valid(mark) and not mark.is_queued_for_deletion():
 				mark.discard()
 		_net.log_line("audit red cant erased while blue control remains")
-		_audit_sonar_stage = 3
+		_audit_sonar_stage = 4
 
 
 func _audit_remote_mouse() -> Mouse:
@@ -967,6 +1007,19 @@ func _audit_remote_mouse() -> Mouse:
 		if candidate is Player:
 			return candidate
 	return null
+
+
+## An enemy control on the plane the mouse is standing on this instant, logged as the exact token a
+## hold line prints -- so the audit matches one string instead of reassembling a coordinate it half
+## remembers, and reads the plane back out of the token rather than being told it separately.
+func _place_beside(remote: Mouse, offset: Vector2i, whose: String) -> SonarMark:
+	var plane := remote.get_plane()
+	var cell := _tunnels.world_to_cell(remote.global_position) + offset
+	var mark := _make_audit_mark(Team.BLUE, plane, cell)
+	_net.log_line("audit sonar blue control beside the %s: %d.%d,%d@BLUE" % [
+		whose, plane, cell.x, cell.y,
+	])
+	return mark
 
 
 func _make_audit_mark(side: int, plane: int, cell: Vector2i) -> SonarMark:
