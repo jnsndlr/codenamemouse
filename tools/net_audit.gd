@@ -241,7 +241,11 @@ func _walk(folder: String, suffix: String, broken: Array[String]) -> int:
 			continue
 		var path := "%s/%s" % [folder, name]
 		count += 1
-		if load(path) == null:
+		var resource := load(path)
+		# A GDScript with a parse error can still be returned as a non-null resource. `can_instantiate`
+		# is the missing half: it asks whether the loaded code actually compiled rather than whether
+		# Godot found a file at that path.
+		if resource == null or (resource is Script and not resource.can_instantiate()):
 			broken.append(path)
 	return count
 

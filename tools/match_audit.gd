@@ -730,6 +730,47 @@ func _check_sonar() -> void:
 		_expect(false, "the arena has sonar and a player")
 		return
 
+	# The wire picture is deliberately stricter than the scene nodes: a partial complete-state
+	# packet would turn absence into erasure, and owner team is part of identity because both crews
+	# may scratch the same place.
+	var picture := SonarState.new()
+	picture.revision = 43
+	picture.add(Team.BLUE, 0, Vector2i(-321, 412))
+	picture.add(Team.RED, 0, Vector2i(-321, 412))
+	var bytes := picture.to_bytes()
+	var decoded := SonarState.from_bytes(bytes)
+	_expect(
+		decoded != null and decoded.revision == 43 and decoded.marks.size() == 2,
+		"a complete cant picture survives its bytes"
+	)
+	if decoded != null and decoded.marks.size() == 2:
+		_expect(
+			decoded.marks[0].cell == Vector2i(-321, 412)
+			and decoded.marks[0].owner_team == Team.BLUE,
+			"cant keeps signed cells and its owner crew"
+		)
+		_expect(
+			decoded.marks[1].owner_team == Team.RED,
+			"opposing crews may mark the same place independently"
+		)
+	_expect(SonarState.from_bytes(bytes.slice(0, bytes.size() - 1)) == null,
+		"a truncated cant picture is rejected rather than erasing a mark")
+	var padded := bytes.duplicate()
+	padded.append(0)
+	_expect(SonarState.from_bytes(padded) == null,
+		"and padding cannot disguise a malformed cant picture")
+	var duplicate := SonarState.new()
+	duplicate.add(Team.BLUE, 0, Vector2i(4, -9))
+	duplicate.add(Team.BLUE, 0, Vector2i(4, -9))
+	_expect(SonarState.from_bytes(duplicate.to_bytes()) == null,
+		"one crew cannot send the same cant identity twice")
+	var echo_cells: Array[Vector2i] = [Vector2i(-8, 13), Vector2i(9, -14)]
+	var echo := SonarState.echo_from_bytes(SonarState.echo_to_bytes(1, echo_cells))
+	_expect(
+		not echo.is_empty() and echo["plane"] == 1 and echo["cells"] == echo_cells,
+		"a private sonar shimmer keeps its plane and signed cells"
+	)
+
 	var blue_cell := Vector2i(-16, -16)
 	var red_cell := Vector2i(7, 6)
 	var red_beside := Vector2i(8, 6)

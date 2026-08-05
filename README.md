@@ -126,7 +126,8 @@ yours — by asking the director exactly as a key press does.
 call whose signature had changed under it and all five in-process suites passed: they build arenas,
 the `NetMatch` node failed to load, Godot printed one line and carried on, and every invariant about
 tunnels and cheese and mice was still true. `net_audit` now loads every scene and every script and
-asserts none is null — the dullest check here, and the only one that catches that.
+asserts each one both loads and can instantiate — the dullest check here, and the one that catches
+a non-null GDScript resource whose source still failed to compile.
 
 **And the earth arrives one crew at a time.** [`TunnelView`](scripts/net/tunnel_view.gd) is the
 only place in the game that decides what a client may know about the ground, and `TUNNELS` is
@@ -213,7 +214,22 @@ earth. The two-process audit creates a damaged red-owned barricade and a blue-on
 before the client arena exists, then proves the first arrives with its owner/hits, updates after
 another blow, disappears when cleared, and the second is never leaked.
 
-**What's still missing is runtime replication for cant marks.**
+**Sonar cant crosses according to who can read it, not according to tunnel sight.** Four times a
+second every player gets a complete picture containing their crew's marks plus enemy marks only
+while the server says that player is a Sneak on the mark's plane. That means own cant survives a
+late join, a rival Sneak can see and erase it, changing class or depth takes unreadable enemy marks
+back, and a missed packet heals on the next picture. The brief scan outline is separate: one
+reliable response sent only to the player who sounded, because the full echo is a private moment
+rather than persistent world knowledge.
+
+The two-process audit creates red and blue cant before the client has an arena, proves a red
+Generalist receives only its own, changes that same authoritative mouse to a Sneak and watches the
+blue control appear, delivers a real scan echo, changes it back and watches the enemy mark vanish,
+then erases the red cant while proving the hidden blue control still exists on the server.
+
+**Runtime-spawned replication is closed: cheese, barricades and cant all cross and recover.** The
+remaining M7 checkpoint is the one automation cannot answer — a full match with a friend over the
+internet.
 
 ## M6.5 — a build you can hand to somebody (closed)
 

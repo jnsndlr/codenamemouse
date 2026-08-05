@@ -179,10 +179,9 @@ func _physics_process(_delta: float) -> void:
 
 	var enemy := _nearest_enemy_mark()
 	if enemy != null:
-		# Rubbing out a mark is a change to the world, so it resolves where the world does. A
-		# client cannot see enemy cant at all yet -- marks are runtime-spawned world objects and
-		# this protocol has no spawn message -- so `_nearest_enemy_mark` finds nothing there
-		# anyway; the guard is here for the day it does.
+		# Rubbing out a mark is a change to the world, so it resolves where the world does. A client
+		# can read a replicated enemy mark while this mouse is a Sneak, but only the authoritative
+		# copy removes it; the next complete picture then removes the replica for everybody else.
 		if acts():
 			_clear(enemy, _player.team)
 		return
@@ -224,10 +223,17 @@ func _clear(mark: SonarMark, by_team: int) -> bool:
 		return false
 	# Out of the group before it is out of the tree, so a scan later in the same frame cannot find
 	# a mark that is on its way to being freed.
-	mark.remove_from_group(SonarMark.MARK_GROUP)
+	mark.discard()
 	cleared.emit(mark, by_team)
-	mark.queue_free()
 	return true
+
+
+## A remote player's private scan result, delivered by `NetMatch`. It goes through the same local
+## presentation path as a listen-server player's scan and cannot mutate tunnel knowledge.
+func reproduce_echo(source_plane: int, cells: Array[Vector2i]) -> void:
+	if _player == null or _network == null or not watched():
+		return
+	_show_echo(source_plane, cells)
 
 
 ## The temporary shimmer of the detected floor plan. LOCAL VIEWER ONLY (M7): it is a picture of

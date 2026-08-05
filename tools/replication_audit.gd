@@ -105,6 +105,7 @@ func _play_a_match() -> void:
 	var host_pid := OS.create_process(godot, [
 		"--headless", "--path", project, "--quit-after", LIFETIME_FRAMES,
 		"--", "--host", str(PORT), "--play", "--audit-cheese", "--audit-barricades",
+		"--audit-sonar",
 		"--audit-log", host_log,
 	])
 	if host_pid <= 0:
@@ -142,6 +143,7 @@ func _play_a_match() -> void:
 	_check_the_scoreboard(host_said, client_said)
 	_check_the_cheese_world(host_said, client_said)
 	_check_the_barricade_world(host_said, client_said)
+	_check_the_cant_world(host_said, client_said)
 	_check_the_earth(host_said, client_said)
 
 
@@ -397,6 +399,60 @@ func _check_the_barricade_world(host_said: String, client_said: String) -> void:
 		not client_said.contains("1.-18,18=3/3@"))
 
 
+# ---------------------------------------------------------- and one place whispered through earth
+
+
+## Red's own mark and two blue controls predate the client arena. A Generalist is owed only red's;
+## after the authoritative mouse becomes a surface Sneak it is owed the surface blue mark but not
+## the deep one; after swapping back it must surrender the former even though both still exist on
+## the host. The real scan in the middle also proves the private temporary echo reaches the remote
+## player rather than being drawn only in the listen server's window.
+func _check_the_cant_world(host_said: String, client_said: String) -> void:
+	print("\n-- and the cant whispered through one layer of earth")
+	var pictures := _totals(client_said, "(\\d+) cant-world pictures")
+	_check("the client receives complete cant pictures (%d)" % pictures, pictures > 0)
+	_check("the host made both marks before the client arena existed",
+		host_said.contains("audit cant placed before the client arena exists"))
+
+	var generalist_holds := _cant_holds(client_said, "GENERALIST")
+	var sneak_holds := _cant_holds(client_said, "SNEAK")
+	var own_before_join := false
+	var enemy_leaked_to_generalist := false
+	for hold: String in generalist_holds:
+		own_before_join = own_before_join or hold.contains("0.12,12@RED")
+		enemy_leaked_to_generalist = (
+			enemy_leaked_to_generalist or hold.contains("0.-17,17@BLUE")
+		)
+	var enemy_read_by_sneak := false
+	for hold: String in sneak_holds:
+		enemy_read_by_sneak = enemy_read_by_sneak or hold.contains("0.-17,17@BLUE")
+
+	_check("own cant made before its arena appears to a Generalist", own_before_join)
+	_check("enemy cant never crosses to that Generalist", not enemy_leaked_to_generalist)
+	_check("the same enemy cant crosses while the server says it is a Sneak",
+		host_said.contains("audit sonar made remote a Sneak") and enemy_read_by_sneak)
+	_check("enemy cant on another depth never crosses to that Sneak",
+		not client_said.contains("2.-16,17@BLUE"))
+	var echoes := _totals(client_said, "(\\d+) sonar echoes")
+	_check("that remote scan receives its private temporary echo (%d)" % echoes,
+		echoes > 0 and client_said.contains("sonar echo: plane 0 cells [")
+		and client_said.contains("15,12"))
+	_check("swapping away from Sneak takes the enemy mark back",
+		host_said.contains("audit sonar returned remote to Generalist")
+		and not generalist_holds.is_empty()
+		and not generalist_holds[-1].contains("0.-17,17@BLUE"))
+	_check("erasing own cant removes it while the hidden blue control remains on the host",
+		host_said.contains("audit red cant erased while blue control remains")
+		and not generalist_holds.is_empty()
+		and not generalist_holds[-1].contains("@RED")
+		and _last_capture(host_said, "cant world: all \\[([^\\]]*)\\]").contains(
+			"0.-17,17@BLUE"
+		)
+		and _last_capture(host_said, "cant world: all \\[([^\\]]*)\\]").contains(
+			"2.-16,17@BLUE"
+		))
+
+
 # --------------------------------------------------------------------- and no floor plan it didn't earn
 
 
@@ -483,6 +539,16 @@ func _totals(text: String, pattern: String) -> int:
 func _last_capture(source: String, pattern: String) -> String:
 	var matches := RegEx.create_from_string(pattern).search_all(source)
 	return "" if matches.is_empty() else matches[-1].get_string(1)
+
+
+func _cant_holds(source: String, viewer_class: String) -> Array[String]:
+	var pattern := RegEx.create_from_string(
+		"cant viewer RED %s: hold \\[([^\\]]*)\\]" % viewer_class
+	)
+	var holds: Array[String] = []
+	for reading: RegExMatch in pattern.search_all(source):
+		holds.append(reading.get_string(1))
+	return holds
 
 
 ## Every `(x, y, z)` a pattern's first capture group matched. Written by `Vector3.snapped`, so the

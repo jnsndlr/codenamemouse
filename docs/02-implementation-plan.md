@@ -2021,7 +2021,18 @@ milliseconds away.
 > it through another damage stage and removal, and proves the second never crosses the visibility
 > boundary.
 >
-> **Cant marks remain as the last runtime-spawned replication gap.**
+> **The cant share closes the last runtime-spawned replication gap.** Cant cannot reuse
+> `TunnelSight.knows`, because revealing one otherwise-hidden location is its purpose. Each player
+> instead receives a complete picture of marks its authoritative identity can read: its crew's
+> marks in every class, and enemy marks only while it is a Sneak on that mark's plane. Absence
+> reconciles erasure and a class/depth change; repetition heals loss and late joining. The
+> temporary full scan is not world state: it travels once, reliably, only to the player who
+> sounded and expires locally.
+>
+> The two-process audit makes opposing marks before the client arena exists, proves a red
+> Generalist gets its own and not blue's, promotes the same server mouse to Sneak and sees the blue
+> mark arrive, receives a private real-scan echo, swaps back and gives the blue mark up, then erases
+> red's marks while the host proves its hidden blue control still stands.
 
 #### Sequencing — five checkpoints, each playable
 
@@ -2046,8 +2057,10 @@ Ordered so that something is testable at every stage and the risky part is not l
    client landed after it, as predicted, as a refactor of five singletons rather than anything to
    do with the wire — the suite now watches a headless client sink a shaft and open four cells.
    Barricade boulders now use the same visibility predicate in a complete per-peer picture, and
-   the two-process suite proves a blue-only boulder is not leaked to its red client. What is left
-   is runtime replication for cant marks.
+   the two-process suite proves a blue-only boulder is not leaked to its red client. Cant uses its
+   distinct crew-or-same-plane-Sneak literacy rule, and the same suite proves enemy cant crosses
+   only during the authoritative Sneak class without bleeding between depths. **Met, including
+   every runtime-spawned world object.**
 5. **Over the internet, with a friend, for a full match.** The milestone's actual question.
 
 #### Risks
@@ -2267,23 +2280,17 @@ crew stops being allowed to know them. **Verified by deleting the filter**, whic
 to trust a check whose subject is invisible from inside a match. Seven suites pass; twenty-three
 checks in the replication audit.
 
-**Next: the five singletons become per-mouse controls.** The dig controller, the cave-in, the
-barricade, the sonar and the class swap are still wired to `../Player` — *the* player, from when
-there was one — so a remote human's dig arrives at a server with nothing to consume it. The intent
-has crossed the wire since step 2; what has not happened is these five ceasing to be *the local
-player's* controls. It is a refactor rather than a netcode problem, and it is the last thing
-between here and checkpoint 5.
+**The per-mouse control refactor and runtime world replication are done.** A remote human can dig,
+cave in, barricade, sound and erase sonar cant, and swap class through controls attached to its own
+server mouse. Cheese caches are a public complete picture; barricades are filtered by tunnel sight
+with private supply; cant is filtered per player by crew-or-same-plane-Sneak literacy, with its
+temporary echo addressed only to the scanner. All three recover from loss and late joining without
+replaying spawn events.
 
-> **What a client still cannot do:** dig, cave in, barricade, sonar, or swap class — and the cheese
-> lying in the yard is not replicated either, because a dropped wedge is the first object in this
-> game that is spawned at runtime rather than seated or authored. Mac only — the web build is a rendering decision, not an export target, and stays at M9.
-
-**Then M7 — real multiplayer.** *Does it survive contact with a second human?* The
-survey above is the important part: `Mouse._control` is already the driver seam, `MatchDirector`
-is already the sim, and per-crew tunnel knowledge is already stored per crew. The work is turning
-input into data, turning direct rule calls into requests, making "the player" plural in the eleven
-places that assume otherwise, and filtering what each client is sent. Five checkpoints, each
-playable, with the visibility filter deliberately not last.
+**Next: checkpoint 5 — a friend, over the internet, for a full match.** Automation has covered the
+structural questions on real loopback processes. It cannot answer latency, onboarding, router
+reachability or whether a full human match feels fair. Mac only — the web build is a rendering
+decision, not an export target, and stays at M9.
 
 **Fix in checkpoint 2:** bots still do not Scurry. Acceptable at M6, where the question was
 whether a human agonizes over a spend. Blocking at M7, where the other side is a human and a crew

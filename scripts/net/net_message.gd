@@ -19,6 +19,8 @@ extends RefCounted
 ## | `TUNNELS` | server → **one** client | yes | the earth, filtered per crew — see below |
 ## | `CHEESE` | server → clients | **no** | the complete public set of caches, resent twice a second |
 ## | `BARRICADES` | server → **one** client | **no** | complete visible set, filtered per crew |
+## | `SONAR_MARKS` | server → **one** client | **no** | complete readable cant, filtered by crew/class |
+## | `SONAR_ECHO` | server → **one** client | yes | one player's private, short-lived scan result |
 ##
 ## **`SNAPSHOT` is unreliable on purpose and that is the important one.** A snapshot resent after a
 ## drop arrives describing a world that has already moved on, and it holds the queue up behind it
@@ -55,14 +57,16 @@ extends RefCounted
 ## That is also why it is unreliable. Losing one costs a quarter-second of a stale scoreboard and
 ## the next one fixes it, which is exactly the `SNAPSHOT` argument applied to a different payload.
 
-## **`TUNNELS` and `BARRICADES` are addressed to one client on purpose**, and the reason is the
-## whole of M5. Two clients on opposite crews are owed different worlds; a broadcast of either
-## hands each of them cells from the other's floor plan while the game carries on looking perfect.
+## **Earth, barricades and sonar are addressed to one client on purpose**, and the reason is the
+## whole of M5. Two players are owed different worlds; broadcasting any of them can hand somebody
+## tunnel locations they are not permitted to know while the game carries on looking perfect.
 ## `TUNNELS` is still the only payload that is a diff rather than a full state — the earth only
 ## ever grows, a client that joins late is owed hundreds of cells at once, and resending all of
 ## them four times a second would be the one thing in this protocol that genuinely could not afford
-## to be idempotent. Barricades are few enough to send as a filtered full picture. Both use
-## `TunnelSight.knows`; `tunnel_view.gd` owns the earth's delivery history.
+## to be idempotent. Barricades and cant are few enough to send as filtered full pictures.
+## Barricades use `TunnelSight.knows`; cant uses its own literacy rule — owning crew, or a Sneak on
+## that mark's plane — because revealing one otherwise-hidden place is the point of the ability.
+## An echo is different again: a reliable momentary response sent only to the player who sounded.
 
 enum Kind {
 	INPUT,
@@ -74,6 +78,8 @@ enum Kind {
 	TUNNELS,
 	CHEESE,
 	BARRICADES,
+	SONAR_MARKS,
+	SONAR_ECHO,
 }
 
 

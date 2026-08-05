@@ -29,6 +29,13 @@ func can_be_seen_by(viewer_team: int, viewer_class: int) -> bool:
 	return viewer_team == owner_team or viewer_class == MouseClass.SNEAK
 
 
+## Remove from readers immediately, then leave tree teardown to the end of the frame. Used by
+## both authoritative erasure and complete-picture reconciliation.
+func discard() -> void:
+	remove_from_group(MARK_GROUP)
+	queue_free()
+
+
 func _glyph() -> ArrayMesh:
 	var material := StandardMaterial3D.new()
 	var colour := Team.color_of(owner_team).lerp(Color(0.92, 0.89, 0.72), 0.58)

@@ -20,10 +20,10 @@ extends Node
 ## goes out four times a second because none of it is. Splitting them is what lets the scoreboard be
 ## sent whole every time — see `net_message.gd` — instead of as a set of changes that can be missed.
 ##
-## Runtime cheese and barricades are separate, slow, complete world pictures. They cannot ride in
-## the mouse snapshot because a lost spawn or removal must heal. Cheese is public and broadcasts;
-## barricades reveal tunnel cells, so each peer receives only those its crew may know. Sonar cant
-## marks are now the one runtime object this protocol does not yet reproduce on clients.
+## Runtime cheese, barricades and sonar cant are separate, slow, complete world pictures. They
+## cannot ride in the mouse snapshot because a lost spawn or removal must heal. Cheese is public;
+## barricades are filtered through tunnel sight; cant follows its own literacy rule per player.
+## The sonar's temporary scan shimmer is a private reliable response rather than persistent state.
 
 ## Snapshots per second. The plan's number. Deliberately below the physics rate: the client
 ## interpolates, and sending every tick would double the bandwidth to buy smoothness the
@@ -52,6 +52,10 @@ const CHEESE_HZ: float = 2.0
 ## pile. The complete-state shape still makes every missed spawn, hit, or removal self-healing.
 const BARRICADE_HZ: float = 4.0
 
+## Cant is tiny but contested at arm's reach. Four pictures a second keeps erasure and a class
+## change responsive while preserving the same lost-packet recovery as the other runtime sets.
+const CANT_HZ: float = 4.0
+
 @export var director_path: NodePath
 
 var _net: NetSession
@@ -62,9 +66,11 @@ var _since_state: float = 0.0
 var _since_earth: float = 0.0
 var _since_cheese: float = 0.0
 var _since_barricades: float = 0.0
+var _since_cant: float = 0.0
 var _tick: int = 0
 var _cheese_tick: int = 0
 var _barricade_tick: int = 0
+var _cant_tick: int = 0
 var _tunnels: TunnelNetwork
 var _sight: TunnelSight
 ## The per-crew filter, on the server. See `tunnel_view.gd` -- it is the one place that decides
@@ -96,6 +102,9 @@ var _states: int = 0
 var _cheese_states: int = 0
 ## Complete, crew-filtered barricade pictures received.
 var _barricade_states: int = 0
+## Complete, player-filtered cant pictures and private scan echoes received.
+var _cant_states: int = 0
+var _sonar_echoes: int = 0
 ## Poses that arrived mid-swing. Counted because a swing is the only *action* in this protocol --
 ## everything else a snapshot carries is a position -- and "melee crosses the wire" is half of what
 ## checkpoint 1 claims. Poses rather than swings, deliberately: one swipe spans a dozen packets and
@@ -151,6 +160,20 @@ var _audit_barricades_done: bool = false
 var _audit_barricade_age: float = 0.0
 var _audit_barricade_stage: int = 0
 var _audit_red_rock: BarricadeRock
+## Three moments for the last replication gap: own cant before a late join, enemy cant that only
+## crosses while the remote is a Sneak, and a private scan echo after its arena exists.
+const AUDIT_CANT_RED: Vector2i = Vector2i(12, 12)
+const AUDIT_CANT_BLUE: Vector2i = Vector2i(-17, 17)
+const AUDIT_CANT_BLUE_DEEP: Vector2i = Vector2i(-16, 17)
+const AUDIT_SONAR_SCAN: Vector2i = Vector2i(15, 12)
+var _audit_sonar: bool = false
+var _audit_sonar_done: bool = false
+var _audit_sonar_age: float = 0.0
+var _audit_sonar_stage: int = 0
+var _audit_red_mark: SonarMark
+var _audit_blue_mark: SonarMark
+var _audit_blue_deep_mark: SonarMark
+var _audit_scan_mark: SonarMark
 
 
 func _ready() -> void:
@@ -178,6 +201,7 @@ func _ready() -> void:
 	if _net.is_server():
 		_director.event.connect(_on_event)
 		_audit_barricades = OS.get_cmdline_user_args().has("--audit-barricades")
+		_audit_sonar = OS.get_cmdline_user_args().has("--audit-sonar")
 		if OS.get_cmdline_user_args().has("--audit-cheese"):
 			_director.call("_drop_cheese", AUDIT_CHEESE_AT, 3)
 			_net.log_line("audit cheese placed before the client arena exists")
@@ -277,8 +301,11 @@ func _physics_process(delta: float) -> void:
 		return
 	_report(delta)
 	if _net.is_server():
+		_ensure_sonar_echo_links()
 		if _audit_barricades:
 			_tick_audit_barricades(delta)
+		if _audit_sonar:
+			_tick_audit_sonar(delta)
 		_since_snapshot += delta
 		if _since_snapshot >= 1.0 / SNAPSHOT_HZ:
 			_since_snapshot = 0.0
@@ -300,6 +327,10 @@ func _physics_process(delta: float) -> void:
 		if _since_barricades >= 1.0 / BARRICADE_HZ:
 			_since_barricades = 0.0
 			_send_barricades()
+		_since_cant += delta
+		if _since_cant >= 1.0 / CANT_HZ:
+			_since_cant = 0.0
+			_send_cant()
 		return
 	if _client_seats == null:
 		_say_hello(delta)
@@ -331,12 +362,16 @@ func _report(delta: float) -> void:
 		_net.log_line("and %d scoreboards" % _states)
 		_net.log_line("and %d cheese-world pictures" % _cheese_states)
 		_net.log_line("and %d barricade-world pictures" % _barricade_states)
+		_net.log_line("and %d cant-world pictures, %d sonar echoes" % [
+			_cant_states, _sonar_echoes,
+		])
 	# THE SAME LINE FROM BOTH ENDS, built by the same code out of the same accessors. Two formats
 	# would make the comparison a comparison of two formatters; one means the audit is reading the
 	# same question answered twice, which is the only version of this that proves anything.
 	_net.log_line(_scoreboard())
 	_report_cheese()
 	_report_barricades()
+	_report_cant()
 	_report_earth()
 	_earth_sent = 0
 	_earth_taken = 0
@@ -348,6 +383,8 @@ func _report(delta: float) -> void:
 	_states = 0
 	_cheese_states = 0
 	_barricade_states = 0
+	_cant_states = 0
+	_sonar_echoes = 0
 
 
 ## The earth, as cells, from whichever end this is.
@@ -432,6 +469,48 @@ func _barricades_of(side: int) -> String:
 		parts.append("%d.%d,%d=%d/%d@%d" % [
 			rock.plane, rock.cell.x, rock.cell.y,
 			rock.hits_left(), rock.hits_to_clear, owner,
+		])
+	parts.sort()
+	return "[%s]" % " ".join(parts)
+
+
+## Cant has a different boundary from earth. The owning crew always reads its marks, even when
+## the marked tunnel itself is secret; an enemy reads them only while playing the class that knows
+## the language. The host prints both rule views and the client prints the one it actually holds.
+func _report_cant() -> void:
+	if _tunnels == null:
+		return
+	if not _net.is_server():
+		var viewer := _director.local_mouse()
+		var team_name := Team.name_of(viewer.team) if viewer != null else "?"
+		var viewer_class_name := viewer.get_class_name() if viewer != null else "?"
+		_net.log_line("cant viewer %s %s: hold %s" % [
+			team_name, viewer_class_name, _cant_of(-1, -1, -1),
+		])
+		return
+	_net.log_line("cant world: all %s" % _cant_of(-1, -1, -1))
+	for side: int in [Team.BLUE, Team.RED]:
+		for kind: int in [MouseClass.GENERALIST, MouseClass.SNEAK]:
+			_net.log_line("cant %s %s on plane 0 may read %s" % [
+				Team.name_of(side), MouseClass.name_of(kind), _cant_of(side, kind, 0),
+			])
+
+
+func _cant_of(viewer_team: int, viewer_class: int, viewer_plane: int) -> String:
+	var parts := PackedStringArray()
+	for node: Node in get_tree().get_nodes_in_group(SonarMark.MARK_GROUP):
+		var mark := node as SonarMark
+		if mark == null or mark.is_queued_for_deletion():
+			continue
+		if viewer_team >= 0 and not mark.can_be_seen_by(viewer_team, viewer_class):
+			continue
+		if (
+			viewer_team >= 0 and mark.owner_team != viewer_team
+			and viewer_plane >= 0 and mark.plane != viewer_plane
+		):
+			continue
+		parts.append("%d.%d,%d@%s" % [
+			mark.plane, mark.cell.x, mark.cell.y, Team.name_of(mark.owner_team),
 		])
 	parts.sort()
 	return "[%s]" % " ".join(parts)
@@ -670,6 +749,92 @@ func _send_barricades() -> void:
 		_transport.send(peer, state.to_bytes(), false)
 
 
+## Every mark this PLAYER can read, not every mark their crew can read. Own cant is crew
+## knowledge; enemy cant is class knowledge, so two players on one crew can be owed different
+## pictures at the same moment. Filtering against the authoritative mouse class also means a
+## client cannot ask to keep enemy marks after swapping away from Sneak.
+func _send_cant() -> void:
+	var roster := _net.seats()
+	var marks: Array[SonarMark] = []
+	for node: Node in get_tree().get_nodes_in_group(SonarMark.MARK_GROUP):
+		var mark := node as SonarMark
+		if mark != null and not mark.is_queued_for_deletion():
+			marks.append(mark)
+	marks.sort_custom(func(a: SonarMark, b: SonarMark) -> bool:
+		return a.owner_team < b.owner_team or (
+			a.owner_team == b.owner_team and (
+				a.plane < b.plane or (a.plane == b.plane and (
+					a.cell.x < b.cell.x or (a.cell.x == b.cell.x and a.cell.y < b.cell.y)
+				))
+			)
+		)
+	)
+
+	_cant_tick += 1
+	for peer: int in roster.peers():
+		if peer == _net.local_peer():
+			continue
+		var seated := roster.seat_of(peer)
+		if seated.is_empty():
+			continue
+		var viewer := _director.seat_mouse(seated[0], seated[1])
+		if viewer == null:
+			continue
+		var state := SonarState.new()
+		state.revision = _cant_tick
+		for mark: SonarMark in marks:
+			var readable: bool = (
+				mark.owner_team == seated[0]
+				or (
+					viewer.mouse_class == MouseClass.SNEAK
+					and mark.plane == viewer.get_plane()
+				)
+			)
+			if readable:
+				state.add(mark.owner_team, mark.plane, mark.cell)
+		_transport.send(peer, state.to_bytes(), false)
+
+
+## Sonar belongs to a runtime-spawned Player, so signal wiring follows the roster rather than an
+## authored NodePath. Rescanning is cheap (at most four human mice) and closes the small window
+## between a peer taking a seat and that deferred Player entering the tree.
+func _ensure_sonar_echo_links() -> void:
+	for node: Node in get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
+		var mouse := node as Mouse
+		if mouse == null or not (mouse is Player):
+			continue
+		var sonar := mouse.get_node_or_null(^"Sonar") as Sonar
+		if sonar == null:
+			continue
+		var callback := Callable(self, "_on_sonar_scanned").bind(mouse)
+		if not sonar.scanned.is_connected(callback):
+			sonar.scanned.connect(callback)
+
+
+## A scan's full outline is private to the mouse that paid the cooldown. The persistent mark is
+## handled by `_send_cant`; this one-shot is only the brief presentation that leads into it.
+func _on_sonar_scanned(
+	source_plane: int, _target_plane: int, cells: Array[Vector2i], mouse: Mouse
+) -> void:
+	if cells.is_empty():
+		return  # Matches local presentation: "nothing answers" produces no empty shimmer.
+	var peer := _peer_for_mouse(mouse)
+	if peer <= Seats.BOT or peer == _net.local_peer():
+		return  # The listen-server player's own Sonar already draws this locally.
+	var bytes := SonarState.echo_to_bytes(source_plane, cells)
+	if not bytes.is_empty():
+		_transport.send(peer, bytes, true)
+
+
+func _peer_for_mouse(mouse: Mouse) -> int:
+	var roster := _net.seats()
+	for side: int in [Team.BLUE, Team.RED]:
+		for seat: int in range(roster.crew_size()):
+			if _director.seat_mouse(side, seat) == mouse:
+				return roster.occupant(side, seat)
+	return Seats.BOT
+
+
 ## Build the replication audit's pair only after the remote seat has become a real Player. The
 ## joining process remains on its title screen for eight seconds, so these rocks predate its arena:
 ## a later appearance proves state recovery, not a conveniently timed spawn event.
@@ -730,7 +895,96 @@ func _tick_audit_barricades(delta: float) -> void:
 		if is_instance_valid(_audit_red_rock):
 			_audit_brute_hit(_audit_red_rock)
 			_net.log_line("audit barricade cleared")
-		_audit_barricade_stage = 2
+			_audit_barricade_stage = 2
+
+
+## Build three marks before the joining process has an arena. Red owns one and must receive it as
+## a Generalist; blue owns a same-plane control that crosses only while that authoritative mouse is
+## a Sneak, plus a deep control that must still stay home. Together they expose late joining,
+## literacy and the depth boundary separately.
+func _try_audit_sonar() -> void:
+	if _tunnels == null:
+		return
+	var remote := _audit_remote_mouse()
+	if remote == null:
+		return
+	remote.set_class(MouseClass.GENERALIST)
+	_audit_red_mark = _make_audit_mark(Team.RED, 0, AUDIT_CANT_RED)
+	_audit_blue_mark = _make_audit_mark(Team.BLUE, 0, AUDIT_CANT_BLUE)
+	_audit_blue_deep_mark = _make_audit_mark(Team.BLUE, 2, AUDIT_CANT_BLUE_DEEP)
+	_audit_sonar_done = (
+		_audit_red_mark != null and _audit_blue_mark != null
+		and _audit_blue_deep_mark != null
+	)
+	if _audit_sonar_done:
+		_net.log_line("audit cant placed before the client arena exists")
+
+
+func _tick_audit_sonar(delta: float) -> void:
+	if not _audit_sonar_done:
+		_try_audit_sonar()
+		return
+	_audit_sonar_age += delta
+	var remote := _audit_remote_mouse()
+	if remote == null:
+		return
+
+	# Once the client arena has been alive for several seconds, let the same player read the enemy
+	# control mark and perform a real scan. The signal path sends only that player the brief echo;
+	# the mark it leaves returns through the periodic state path.
+	if _audit_sonar_stage == 0 and _audit_sonar_age >= 16.0:
+		remote.set_class(MouseClass.SNEAK)
+		remote.set_plane(0)
+		remote.global_position = _tunnels.cell_to_world(0, AUDIT_SONAR_SCAN) + Vector3.UP * 0.2
+		_tunnels.remove_rock(1, AUDIT_SONAR_SCAN)
+		_tunnels.dig(1, AUDIT_SONAR_SCAN, Team.BLUE)
+		var sonar := remote.get_node_or_null(^"Sonar") as Sonar
+		var heard := sonar.scan() if sonar != null else 0
+		_audit_scan_mark = _mark_at(Team.RED, 0, AUDIT_SONAR_SCAN)
+		_net.log_line("audit sonar made remote a Sneak and sounded %d cells" % heard)
+		_audit_sonar_stage = 1
+	elif _audit_sonar_stage == 1 and _audit_sonar_age >= 27.0:
+		remote.set_class(MouseClass.GENERALIST)
+		_net.log_line("audit sonar returned remote to Generalist")
+		_audit_sonar_stage = 2
+	elif _audit_sonar_stage == 2 and _audit_sonar_age >= 38.0:
+		for mark: SonarMark in [_audit_red_mark, _audit_scan_mark]:
+			if is_instance_valid(mark) and not mark.is_queued_for_deletion():
+				mark.discard()
+		_net.log_line("audit red cant erased while blue control remains")
+		_audit_sonar_stage = 3
+
+
+func _audit_remote_mouse() -> Mouse:
+	var roster := _net.seats()
+	for peer: int in roster.peers():
+		if peer == _net.local_peer():
+			continue
+		var seated := roster.seat_of(peer)
+		if seated.is_empty():
+			continue
+		var candidate := _director.seat_mouse(seated[0], seated[1])
+		if candidate is Player:
+			return candidate
+	return null
+
+
+func _make_audit_mark(side: int, plane: int, cell: Vector2i) -> SonarMark:
+	var mark := SonarMark.new()
+	_tunnels.add_child(mark)
+	mark.configure(_tunnels, side, plane, cell)
+	return mark
+
+
+func _mark_at(side: int, plane: int, cell: Vector2i) -> SonarMark:
+	for node: Node in get_tree().get_nodes_in_group(SonarMark.MARK_GROUP):
+		var mark := node as SonarMark
+		if (
+			mark != null and mark.owner_team == side
+			and mark.plane == plane and mark.cell == cell
+		):
+			return mark
+	return null
 
 
 func _audit_brute_hit(rock: BarricadeRock) -> void:
@@ -1011,6 +1265,72 @@ func _barricade_at(
 	return null
 
 
+func _apply_cant(bytes: PackedByteArray) -> void:
+	var state := SonarState.from_bytes(bytes)
+	if state == null or state.revision <= _cant_tick:
+		return
+	_reconcile_cant(state)
+	_cant_tick = state.revision
+	_cant_states += 1
+
+
+func _reconcile_cant(state: SonarState) -> void:
+	var unmatched: Array[SonarMark] = []
+	for node: Node in get_tree().get_nodes_in_group(SonarMark.MARK_GROUP):
+		var mark := node as SonarMark
+		if mark != null and not mark.is_queued_for_deletion():
+			unmatched.append(mark)
+
+	for reading: SonarState.Mark in state.marks:
+		var mark := _cant_at(unmatched, reading.owner_team, reading.plane, reading.cell)
+		if mark == null:
+			mark = SonarMark.new()
+			_tunnels.add_child(mark)
+			mark.configure(_tunnels, reading.owner_team, reading.plane, reading.cell)
+		else:
+			unmatched.erase(mark)
+
+	# Missing means erased or no longer readable after a class change. Both remove the local world
+	# picture; only the first removed the authoritative mark on the host.
+	for stale: SonarMark in unmatched:
+		stale.discard()
+
+
+func _cant_at(
+	marks: Array[SonarMark], owner_team: int, plane: int, cell: Vector2i
+) -> SonarMark:
+	for mark: SonarMark in marks:
+		if mark.owner_team == owner_team and mark.plane == plane and mark.cell == cell:
+			return mark
+	return null
+
+
+func _apply_sonar_echo(bytes: PackedByteArray) -> void:
+	var reading := SonarState.echo_from_bytes(bytes)
+	if reading.is_empty():
+		return
+	var mouse := _director.local_mouse()
+	var sonar: Sonar = null
+	if mouse != null:
+		sonar = mouse.get_node_or_null(^"Sonar") as Sonar
+	if sonar == null:
+		return
+	var cells: Array[Vector2i] = []
+	for cell: Vector2i in reading["cells"]:
+		cells.append(cell)
+	sonar.reproduce_echo(int(reading["plane"]), cells)
+	_sonar_echoes += 1
+	_net.log_line("sonar echo: plane %d cells %s" % [reading["plane"], _cell_list(cells)])
+
+
+func _cell_list(cells: Array[Vector2i]) -> String:
+	var parts := PackedStringArray()
+	for cell: Vector2i in cells:
+		parts.append("%d,%d" % [cell.x, cell.y])
+	parts.sort()
+	return "[%s]" % " ".join(parts)
+
+
 func _puppet_for(key: int) -> Mouse:
 	if _client_seats == null:
 		return null
@@ -1119,3 +1439,9 @@ func _on_packet(from: int, bytes: PackedByteArray) -> void:
 		NetMessage.Kind.BARRICADES:
 			if not _net.is_server() and from == NetTransport.SERVER_ID:
 				_apply_barricades(bytes)
+		NetMessage.Kind.SONAR_MARKS:
+			if not _net.is_server() and from == NetTransport.SERVER_ID and _tunnels != null:
+				_apply_cant(bytes)
+		NetMessage.Kind.SONAR_ECHO:
+			if not _net.is_server() and from == NetTransport.SERVER_ID:
+				_apply_sonar_echo(bytes)
