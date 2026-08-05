@@ -1,4 +1,4 @@
-[gd_scene load_steps=35 format=3]
+[gd_scene load_steps=36 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="Script" path="res://scripts/game/nest.gd" id="14_nest"]
@@ -28,6 +28,7 @@
 [ext_resource type="Script" path="res://scripts/maps/cache_field.gd" id="29_cheese"]
 [ext_resource type="Script" path="res://scripts/ui/pause_menu.gd" id="31_pause"]
 [ext_resource type="Script" path="res://scripts/net/net_match.gd" id="32_netmatch"]
+[ext_resource type="Script" path="res://scripts/ui/disconnected.gd" id="33_disconnected"]
 
 [sub_resource type="ProceduralSkyMaterial" id="Sky_mat"]
 sky_top_color = Color(0.28, 0.44, 0.66, 1)
@@ -318,6 +319,11 @@ player_path = NodePath("../../Player")
 [node name="PauseMenu" type="CanvasLayer" parent="."]
 script = ExtResource("31_pause")
 hud_path = NodePath("../HUD")
+
+[node name="Disconnected" type="CanvasLayer" parent="."]
+script = ExtResource("33_disconnected")
+hud_path = NodePath("../HUD")
+pause_path = NodePath("../PauseMenu")
 
 [node name="NetMatch" type="Node" parent="."]
 script = ExtResource("32_netmatch")

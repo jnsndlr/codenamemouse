@@ -87,8 +87,21 @@ func _play_a_lobby() -> void:
 	# Boot, connect, sit, be started, load an arena, and report from inside it at least once. The
 	# report interval is five seconds, so the tail of this is waiting for evidence rather than events.
 	await _wait(42.0)
+
+	# THE LATECOMER GOES IN WHILE THE OTHER TWO ARE STILL PLAYING, which is the entire point and was
+	# the first version's bug: it was launched after the kills below and had nothing to join, so four
+	# checks failed on an audit that was itself broken rather than on the code under test. All three
+	# processes now live until every log has been read.
+	var late_log := _log_path("latecomer")
+	var late_pid := _launch_a_latecomer(godot, project, late_log)
+	if late_pid > 0:
+		await _wait(24.0)
+
 	var host_said := _read(host_log)
 	var client_said := _read(join_log)
+	var late_said := _read(late_log)
+	if late_pid > 0:
+		OS.kill(late_pid)
 	OS.kill(join_pid)
 	OS.kill(host_pid)
 	await _wait(2.0)
@@ -127,6 +140,52 @@ func _play_a_lobby() -> void:
 	var through_the_door := client_said.substr(0, maxi(first_report, 0))
 	_check("and nobody dropped on the way through the door",
 		not through_the_door.contains("connection lost"))
+
+	_check_the_latecomer(late_said, late_pid)
+
+
+## A third process turns up after the match has started, and is let in.
+##
+## **REJOINING WAS BROKEN AND NOT BY A LITTLE.** `START` is sent by the lobby's button, and the host
+## leaves that lobby the instant it presses it -- so anybody arriving later was seated, given a mouse on
+## the server, and sent snapshots and earth and cheese while *sitting on a lobby screen forever*
+## watching none of it. Indistinguishable from a hang. It is the same gap for a friend who turned up
+## ten minutes late and for a player whose wire dropped and who wants back in, and `drop_audit` had
+## just finished making the second of those a thing people would actually try.
+##
+## THIS PROCESS GETS `--join` AND NOTHING ELSE. No `--play` to walk itself into an arena and no
+## `--lobby-start`, so the only thing that can put it in a match is the host noticing it and saying so.
+## If `_start_the_latecomers` does nothing, this process sits in a lobby and every check below fails.
+func _launch_a_latecomer(godot: String, project: String, late_log: String) -> int:
+	var pid := OS.create_process(godot, [
+		"--headless", "--path", project, "--quit-after", LIFETIME_FRAMES,
+		"--", "--join", "127.0.0.1:%d" % PORT, "--audit-log", late_log,
+	])
+	if pid <= 0:
+		print("BROKEN: could not launch a latecomer")
+		_failures += 1
+	return pid
+
+
+func _check_the_latecomer(late_said: String, late_pid: int) -> void:
+	print("\n-- and somebody who turned up late is let in")
+	if late_pid <= 0:
+		return
+	_check("the latecomer reached a lobby with the match already running",
+		late_said.contains("lobby: joined 127.0.0.1:%d" % PORT))
+	_check("the host noticed and told it to come in",
+		late_said.contains("the host says the match is beginning"))
+	_check("and it is replicating a match that started without it",
+		late_said.contains("received ") and late_said.contains("snapshots"))
+	# THE WHOLE WORLD, NOT THE PART THAT HAPPENED WHILE IT WATCHED. This is the payoff of every
+	# complete-state decision in step 6: there are no spawn events to replay, so a latecomer is owed
+	# the same periodic pictures everybody else gets and catches up by receiving one of each.
+	_check("and was given the world as it stands, not as it started",
+		late_said.contains("cheese world: hold [")
+		and late_said.contains("barricade world: hold [")
+		and late_said.contains("cant viewer "))
+	_check("including earth it never dug",
+		late_said.contains("earth: took ") and not late_said.contains("hold []\nearth"))
 
 
 # ---------------------------------------------------------------------------------------- plumbing

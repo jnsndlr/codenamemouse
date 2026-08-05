@@ -270,11 +270,78 @@ replication report — because "the guest reached an arena" is satisfied by a gu
 one, and a check that something is absent without ruling out the other reasons it could be absent
 passes for free. That lesson came from the cant audit two commits ago and was worth writing down.
 
-**What is left of M7 is checkpoint 5 — and one known bug in front of it.** Losing the wire mid-match
-freezes the arena in silence: `go_offline` closes the transport, replication stops, the client's
-director was already told to stop simulating, and nothing says so. Loopback never drops, so no suite
-here could have caught it. `NetSession.wire_lost` exists now and the lobby already acts on it; the
-arena does not.
+**And a match that loses its host now says so.** Losing the wire mid-match used to freeze the arena in
+silence — `go_offline` closes the transport, `NetMatch` returns at its `is_established` guard forever,
+the client's director had already been told to stop simulating and nothing turns it back on. Every
+mouse stayed a puppet waiting for poses that would never arrive. The clock stopped, the HUD went on
+displaying the last numbers it was told, and the only way out was the pause menu if you thought to try
+it.
+
+[`disconnected.gd`](scripts/ui/disconnected.gd) is the arena admitting it, and the state it represents
+is deliberately **not** offline: going offline is also how a session starts and how "leave the lobby"
+is expressed, so `NetSession.wire_lost` fires for the failure alone — and only on a client, since a
+host that loses somebody hands their chair to a bot and plays on. The arena stays on screen, paused,
+under a heavy scrim with the HUD hidden, because the last thing you saw is information and being flung
+back to a menu tells you nothing. The notice is honest that it cannot tell a host quitting from a
+network dropping: the transport reports one `connection_lost` for both, [by
+argument](scripts/net/enet_transport.gd), so it names both rather than guessing.
+
+**Nothing in this project had ever tested a failure.** [`drop_audit.gd`](tools/drop_audit.gd) is the
+first suite that breaks something on purpose, and the reason the bug survived eight passing suites is
+worth stating plainly: **loopback never drops.** Every other audit gets two processes talking and ends
+while they still are, so `connection lost` appears in their logs exactly once — as the last line, at
+teardown, where nothing is left to observe what follows. This one plays a real match, kills the host
+outright with no goodbye (a crash, so ENet learns nothing until its peer timeout expires ~3s later),
+and asserts the client says something specific. Its load-bearing check is again an ordering one: the
+notice must appear **after the last replication report**, because "the client said the wire died" is
+satisfied by a client that never got into a match at all. Verified by disconnecting the listener,
+which turns exactly those two checks red and leaves the rest green.
+
+**And the three things loopback could never test.**
+
+**Rejoining was broken and not by a little.** `START` is sent by the lobby's button and the host leaves
+that lobby the instant it presses it — so anybody arriving later was seated, given a mouse on the
+server, and sent snapshots and earth and cheese while *sitting on a lobby screen forever* watching none
+of it arrive. Indistinguishable from a hang. Same gap for a friend ten minutes late and for a player
+whose wire just dropped, which `drop_audit` had made a thing people would actually try.
+`_start_the_latecomers` tells any peer seated after the arena exists to come in, once each, tracked by
+id. **The complete-state work is what makes it possible at all** — a latecomer is owed the whole world,
+and every runtime thing in it is a full picture resent on a timer rather than a spawn event that has
+been and gone, so there is nothing to replay. `lobby_audit` now launches a third process with `--join`
+and nothing else: no `--play` to walk itself in, so only the host noticing it can put it in a match.
+
+**The protocol has been arguing about bandwidth since its first commit with no numbers in it.** Now
+counted at the socket — the transport buckets bytes by first payload byte, which is all it should know,
+and `NetMatch` puts the enum's names to them. Measured, one client costs a host:
+
+```
+wire out 6.3 KB/s [SNAPSHOT 5.7 CHEESE 0.2 MATCH 0.2 SONAR_MARKS 0.1 BARRICADES 0.1 TUNNELS 0.0]
+wire in  2.2 KB/s [INPUT 2.2]
+```
+
+**Both claims were right and the emphasis was wrong.** Snapshots are about nine tenths of everything on
+the wire. The four separate per-peer periodic full pictures that step 6 kept apologising for — cheese,
+barricades, cant, scoreboard — come to under a tenth *between them*. The expensive thing was never the
+redundancy; it was the thing sent twenty times a second to keep mice moving. `replication_audit` now
+asserts a loose ceiling as a regression guard, not a target.
+
+**And there is a knob for making the wire bad.** `--lag <ms> --jitter <ms> --loss <percent>` on both
+ends, applied on the way *out* where reliability is still known — dropping a reliable packet at the
+application layer would discard something ENet had guaranteed, and a lost `SEATS` or `START` does not
+heal, so that would be testing a protocol this game does not have. [`link_audit.gd`](tools/link_audit.gd)
+runs a real match at 120ms lag, 40ms jitter and 12% loss and asserts the world still converges: the
+cheese matches, the pre-arena barricade arrives, the scoreboard agrees, the earth is still filtered.
+**A failure there is not "the wire is bad", it is "the protocol needed the wire to be good".**
+
+One measurement in it is deliberately weak and says so. Each end reports every five seconds, so even
+matched by wall clock the closest pair of readings can be 2.5s apart — nearly all of any position
+disagreement is the gap between two *reports*, not two machines. That check is set where it catches
+what it genuinely can (a client stuck at spawn) and a second, tight one does the real work: **once the
+mouse stops moving, latency explains nothing**, so any gap left is drift that never resolved.
+
+**What is left of M7 is checkpoint 5 itself** — a friend, over the internet, for a full match. That one
+is a playtest, not a suite, and the instrument for its open question now exists: listen-server host
+advantage is a named risk in the plan, and `--lag` is what will finally put a number on it.
 
 ## M6.5 — a build you can hand to somebody (closed)
 
@@ -639,10 +706,12 @@ On **CameraRig**: `pitch_degrees` (48), `zoom_idle` / `zoom_run` / `zoom_sprint`
 
 ### Audits
 
-**Eight** headless invariant suites — the three below plus `net_audit.gd`, `input_audit.gd`,
-`seat_audit.gd`, `lobby_audit.gd` and `replication_audit.gd`, all documented under M7 above. All must
-pass; each exits non-zero if it doesn't. The last three launch **real Godot processes** and take a
-few minutes between them, which is why they're listed last and not why they should be skipped.
+**Ten** headless invariant suites — the three below plus `net_audit.gd`, `input_audit.gd`,
+`seat_audit.gd`, `lobby_audit.gd`, `drop_audit.gd`, `link_audit.gd` and `replication_audit.gd`, all
+documented under M7 above. All must pass; each exits non-zero if it doesn't. **250 checks.** The last
+five launch **real Godot processes** — `lobby_audit` launches three at once — and take several minutes
+between them, which is why they're listed last and not why they should be skipped. `drop_audit.gd`
+spends most of its runtime waiting on purpose: it kills a host and then sits out ENet's peer timeout.
 
 ```bash
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/tunnel_audit.gd
@@ -656,7 +725,7 @@ few minutes between them, which is why they're listed last and not why they shou
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/cheese_audit.gd
 ```
 
-**Run all eight before cutting a build.** An exported release template does not accept `--script`,
+**Run all ten before cutting a build.** An exported release template does not accept `--script`,
 so none of them can ever run against the `.app` — the honest procedure is to run them on the same
 commit the export is built from and then smoke-test the binary by hand. A build that inherits
 confidence the audits didn't actually give it is the failure this whole project keeps warning about.

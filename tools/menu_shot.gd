@@ -35,6 +35,7 @@ func _initialize() -> void:
 	root.content_scale_size = SIZES[0]
 	await _shoot_lobby()
 	await _shoot_pause()
+	await _shoot_dropped()
 
 	print("written to %s" % ProjectSettings.globalize_path(OUT))
 	quit()
@@ -60,6 +61,36 @@ func _shoot_pause() -> void:
 
 	# Un-pause before the next frame runs, or the tool's own awaits never resume.
 	menu.call("close")
+	arena.queue_free()
+	for i in range(5):
+		await process_frame
+
+
+## The disconnect notice over a real yard, which is the only place it can be judged: the whole design
+## question is whether a frozen match under a heavy scrim reads as *over* rather than as a game that
+## has hung. Driven through `wire_lost` rather than by poking the node, so the picture is of the path
+## a real drop takes.
+func _shoot_dropped() -> void:
+	var net := root.get_node_or_null(^"Net")
+	if net == null:
+		print("skipped: menu_dropped.png needs the Net autoload")
+		return
+
+	var arena: Node = (load("res://scenes/maps/arena.tscn") as PackedScene).instantiate()
+	root.add_child(arena)
+	for i in range(60):
+		await process_frame
+
+	net.emit_signal("wire_lost")
+	for i in range(10):
+		await process_frame
+
+	RenderingServer.force_draw()
+	root.get_texture().get_image().save_png(OUT + "menu_dropped.png")
+	print("shot: menu_dropped.png (tree paused: %s)" % paused)
+
+	# The notice paused the tree, and this tool's own awaits are in it.
+	paused = false
 	arena.queue_free()
 	for i in range(5):
 		await process_frame

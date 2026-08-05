@@ -38,6 +38,11 @@ var _since_poll: float = 0.0
 ## button had keyboard focus -- so Start Match loses its focus ring half a second after the lobby
 ## opens, and a pad user watching for it has nothing to follow.
 var _drawn: String = ""
+## Whether the handshake ever completed, remembered because the answer is gone by the time it is
+## needed. `enet_transport` closes the peer BEFORE it emits `connection_lost`, so a `wire_lost`
+## handler asking `is_established` always hears "no" and cannot tell "nobody ever answered" from "the
+## host was there and left" -- two situations that want different sentences on screen.
+var _was_established: bool = false
 
 
 func _ready() -> void:
@@ -105,6 +110,7 @@ func _fingerprint() -> String:
 
 
 func _refresh() -> void:
+	_was_established = _was_established or Net.is_established()
 	if _fingerprint() != _drawn:
 		_rebuild()
 
@@ -265,5 +271,11 @@ func _on_leave() -> void:
 	Routes.to_title(self)
 
 
+## Back to the title WITH A SENTENCE. Landing on a menu with no explanation is the same failure the
+## arena had: a thing silently stopped working and the player is left to guess.
 func _on_wire_lost() -> void:
-	Routes.to_title(self)
+	Net.log_line("lobby: the wire died before the match started")
+	Routes.to_title(self, (
+		"The host closed the lobby." if _was_established
+		else "Could not reach that host. Check the address, and that they are hosting."
+	))

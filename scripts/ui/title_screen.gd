@@ -79,6 +79,14 @@ func _ready() -> void:
 	_controls.visible = false
 	add_child(_controls)
 
+	# Arrived here from a dropped match or a closed lobby: open on the page you would retry from, with
+	# the reason on it. Set before the first `_rebuild` so the page is drawn once rather than flashing
+	# the main menu and then replacing it.
+	var why := Routes.take_why()
+	if not why.is_empty():
+		_trouble = why
+		_page = Page.MULTIPLAYER
+
 	_rebuild()
 	get_viewport().size_changed.connect(_rebuild)
 

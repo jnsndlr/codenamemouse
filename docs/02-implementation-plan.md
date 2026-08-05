@@ -2083,6 +2083,49 @@ milliseconds away.
 > cant lesson applied on the first try this time, rather than after two false passes.
 >
 > Eight suites pass.
+>
+> **And then the failure path, which had no coverage whatsoever.** A client whose host went away froze
+> in silence: transport closed, `NetMatch` returning at its `is_established` guard forever, a director
+> already told to stop simulating and nothing to turn it back on, every mouse a puppet awaiting poses
+> that were not coming. No message, no exit but the pause menu. Eight suites passed over it, and the
+> reason is one sentence: **loopback never drops.** Every audit in `tools/` gets two processes talking
+> and finishes while they still are, so `connection lost` shows up once per log, as the last line, at
+> teardown, with nothing left to watch.
+>
+> The state is deliberately distinct from offline — offline is also how a session starts and how
+> leaving a lobby is expressed, so `wire_lost` is the failure alone, and client-only, because a host
+> that loses somebody gives the chair to a bot and plays on. The arena holds, paused, scrim over it and
+> HUD hidden: the last thing you saw is information, and a menu you were flung to is not. `drop_audit`
+> kills a host mid-match with no goodbye and asserts the notice arrives **after the last replication
+> report** — presence alone is satisfied by a client that never played. Verified by disconnecting the
+> listener.
+>
+> Nine suites pass; two hundred and twenty-eight checks.
+>
+> **Then the three things loopback was hiding.**
+>
+> *Rejoining did not work at all.* `START` comes from the lobby's button and the host leaves that lobby
+> pressing it, so anybody arriving afterwards was seated, simulated, and sent the entire world while
+> sitting on a lobby screen watching none of it — a hang, to look at. The fix is small and the reason it
+> *can* be small is the whole of step 6: a latecomer is owed the world as it stands, and every runtime
+> object in it is already a complete picture on a timer rather than a spawn event that has been and
+> gone. Nothing to replay. `lobby_audit` launches a third process with `--join` and nothing else, so
+> only the host noticing it can put it in a match.
+>
+> *The bandwidth arguments finally have numbers.* One client costs a host **6.3 KB/s down, 2.2 KB/s up**
+> — and **snapshots are nine tenths of it.** The four per-peer periodic full pictures this document
+> spent step 6 justifying come to under a tenth between them. Both original claims were correct; the
+> emphasis was wrong. The redundancy was never the expense.
+>
+> *And the wire can be made bad on purpose.* `--lag`, `--jitter`, `--loss`, applied on the way out where
+> reliability is still known — loss touches unreliable packets only, because dropping a guaranteed one
+> would be testing a protocol this game does not have. `link_audit` plays a real match at 120/40/12 and
+> asserts the world converges anyway. One of its checks is deliberately weak and documents why: at five
+> seconds between reports, most of any position disagreement is the gap between two reports rather than
+> two machines, so a second check does the real work — **once the mouse stops, latency explains nothing,
+> and whatever gap is left is drift.**
+>
+> Ten suites pass; two hundred and fifty checks.
 
 #### Sequencing — five checkpoints, each playable
 
@@ -2111,7 +2154,14 @@ Ordered so that something is testable at every stage and the risky part is not l
    distinct crew-or-same-plane-Sneak literacy rule, and the same suite proves enemy cant crosses
    only during the authoritative Sneak class without bleeding between depths. **Met, including
    every runtime-spawned world object.**
-5. **Over the internet, with a friend, for a full match.** The milestone's actual question.
+5. **Over the internet, with a friend, for a full match.** The milestone's actual question, and the
+   only checkpoint automation cannot answer — but it turned out to be two thirds automatable, which
+   was not obvious from here. It was blocked on a **door** (no Host or Join button existed; a friend
+   needed a terminal) and on a **failure path** (a dropped wire froze the arena in silence, because
+   loopback never drops and so no suite had ever seen one). Both built, both audited. What remains is
+   genuinely a human sitting down: **router reachability**, **how a stranger gets in**, and **whether
+   it feels fair**. `--lag`/`--jitter`/`--loss` exist now, so the protocol has already been shown to
+   converge on a bad line — what it has not met is a person's judgement about it. **Not met.**
 
 #### Risks
 
@@ -2134,7 +2184,13 @@ Ordered so that something is testable at every stage and the risky part is not l
   wire that stops — and a dropped connection currently freezes the arena in silence. Loopback
   cannot produce the failure, so it has to be caused on purpose.
 - **Listen-server host advantage** is real and unfixable at this scale. Name it, measure it, and
-  decide whether it matters before building anything to hide it.
+  decide whether it matters before building anything to hide it. **The instrument exists now** —
+  `--lag`/`--jitter`/`--loss` on both ends — and `link_audit` has shown the world still converges at
+  120ms with 12% loss. What has not been measured is the thing the risk is actually about: the host's
+  own actions resolve in zero milliseconds and a client's take a round trip, so **a contested dig or a
+  scruff at arm's reach is not a fair fight**. Measuring it means timestamping an intent and its effect
+  at both ends, which is instrumentation this project does not have yet — and the number is only worth
+  having next to a human's opinion of whether it was noticeable. Checkpoint 5's job.
 - **The scope trap is prediction.** Every deferred-prediction plan gets talked into it early by a
   single laggy playtest. The deferral is a decision already taken; reversing it needs evidence
   from checkpoint 5, not from checkpoint 1.
@@ -2177,7 +2233,14 @@ non-capsule mouse.
 
 ## What we deliberately don't build yet
 
-- Matchmaking, lobbies, parties — friends use a direct connect code
+- ~~Matchmaking, lobbies, parties — friends use a direct connect code~~ **Split, because this lumped
+  a day of work in with real infrastructure.** A lobby exists as of M7 checkpoint 5. What remains
+  deferred, in ascending cost: **LAN room names** (UDP broadcast, no infrastructure, host names a
+  lobby and the house sees it in a list); **internet room names** (an address book — one HTTP endpoint
+  and a key-value store, which also survives the host's IP changing — but the host still forwards a
+  port once); **no port forwarding at all** (UDP hole punching or a relay, needs an always-on box and
+  is impossible on HTTP-only serverless). Only the last removes what actually stops a friend joining,
+  and only the last costs anything. Real matchmaking — ranking, queues, parties — stays out entirely.
 - Accounts, persistence, stats, leaderboards
 - Anti-cheat beyond server authority and visibility filtering
 - Multiple maps — one map, iterated, beats three mediocre ones
@@ -2357,23 +2420,31 @@ business, not a playtest's, and it was easy to miss for exactly one reason: the 
 work perfectly, so every suite in `tools/` walked past it. **Built now** — Multiplayer page, Host,
 Join, a lobby, the errors surfaced, and `lobby_audit.gd` to keep it honest.
 
-**And losing the wire mid-match freezes the arena in silence.** `_on_connection_lost` calls
+**Losing the wire mid-match used to freeze the arena in silence — fixed.** `_on_connection_lost` calls
 `go_offline`, which closes the transport — so `is_established` goes false and `net_match` returns
 early forever, while the client's director had already been told `set_simulating(false)` and nothing
 turns it back on. Mice stay puppets receiving no poses. The clock stops. No message appears, the
 local peer is quietly reseated as host of an empty roster, and the only way out is the pause menu.
-**Loopback never drops, so no suite here could have caught it**: `connection lost` appears exactly
-once in the audit logs, as the last line, at teardown, where nothing is watching what follows. A
-real link will do this in the first ten minutes.
+**Loopback never drops, so no suite here could have caught it**: `connection lost` appeared exactly
+once in the audit logs, as the last line, at teardown, where nothing was watching what follows. A real
+link does this in the first ten minutes. `disconnected.gd` holds the arena and says what happened;
+`drop_audit.gd` kills a host on purpose to prove it.
 
-So checkpoint 5 is three pieces of work and only the third is the human question. **The first is
-done:** a Multiplayer page, Host and Join, a lobby to wait in, the errors surfaced, and
-`lobby_audit.gd` proving the guest does not reach an arena until the host says so. **The second is
-not:** the arena needs to notice `wire_lost` — the lobby does, the match does not — and say what
-happened rather than freezing, and that wants the suite's first audit of a *failure*, since loopback
-will not produce one on its own. **Then** the third: latency, router reachability, and whether a full
-human match feels fair. Mac only — the web build is a rendering decision, not an export target, and
-stays at M9.
+So checkpoint 5 was three pieces of work and only the third is the human question. **The first two are
+done:** a Multiplayer page, Host and Join, a lobby to wait in, the errors surfaced, and `lobby_audit`
+proving the guest does not reach an arena until the host says so; then a real "the wire died" state,
+distinct from offline, with `drop_audit` breaking a live match to check it. **The third is a playtest,
+not a suite:** latency, router reachability, and whether a full human match feels fair. Mac only — the
+web build is a rendering decision, not an export target, and stays at M9.
+
+**The deferral list needs splitting, too.** It reads "Matchmaking, lobbies, parties — friends use a
+direct connect code," which lumps a day of work in with real infrastructure. Three separate things:
+**LAN room names** are a UDP broadcast and no infrastructure at all; **internet room names** are an
+address book — an HTTP endpoint plus a key-value store, which also fixes a host's IP changing under a
+written-down number — and still leave the host forwarding a port once; **no port forwarding at all** is
+UDP hole punching or a relay, which needs an always-on box (the Hetzner instance already in the cost
+model below) and cannot be done on HTTP-only serverless hosting. Only the third is expensive, and only
+the third removes the thing that actually stops a friend from joining.
 
 **Fix in checkpoint 2:** bots still do not Scurry. Acceptable at M6, where the question was
 whether a human agonizes over a spend. Blocking at M7, where the other side is a human and a crew

@@ -58,6 +58,11 @@ signal joined_server()
 signal connection_lost()
 
 var _mode: Mode = Mode.OFFLINE
+## First payload byte -> bytes sent since the last `clear_traffic`. Kept as the raw byte because the
+## transport genuinely does not know what a kind is, and should not start now: `NetMatch` owns the
+## enum and can put names to these on the way to a log line. The wire counts, the protocol labels.
+var _out: Dictionary = {}
+var _in: Dictionary = {}
 
 
 # ----------------------------------------------------------------------------- what implementations owe
@@ -122,3 +127,44 @@ func is_established() -> bool:
 
 func broadcast(bytes: PackedByteArray, reliable: bool) -> void:
 	send(ALL_PEERS, bytes, reliable)
+
+
+# ---------------------------------------------------------------------------------------- what it costs
+
+
+## Bytes on the wire since the last reset, per payload kind, each way.
+##
+## **THE PROTOCOL HAS BEEN MAKING BANDWIDTH ARGUMENTS SINCE M7 STEP 1 WITHOUT A SINGLE NUMBER IN IT.**
+## `net_match.gd` explains that twenty snapshots a second is "deliberately below the physics rate"
+## because sending every tick "would double the bandwidth to buy smoothness the interpolation already
+## provides", and that the earth is a diff because resending it four times a second "genuinely could
+## not afford to be idempotent". Both are probably right. Neither was ever measured, and by the end of
+## step 6 there were **four** separate per-peer periodic full pictures plus snapshots plus the earth
+## going out to every client — a set nobody had added up.
+##
+## Counted here rather than in `NetMatch` because this is where a packet becomes bytes: a count kept
+## next to the code that *builds* payloads measures intent, and a count kept at the socket measures
+## what actually left.
+func traffic_out() -> Dictionary:
+	return _out.duplicate()
+
+
+func traffic_in() -> Dictionary:
+	return _in.duplicate()
+
+
+func clear_traffic() -> void:
+	_out.clear()
+	_in.clear()
+
+
+## For implementations to call as bytes actually go out and come in. Not abstract and not automatic:
+## `send` is the implementation's own, and a base class cannot count what it does not carry.
+func _note_out(bytes: PackedByteArray) -> void:
+	if not bytes.is_empty():
+		_out[bytes[0]] = int(_out.get(bytes[0], 0)) + bytes.size()
+
+
+func _note_in(bytes: PackedByteArray) -> void:
+	if not bytes.is_empty():
+		_in[bytes[0]] = int(_in.get(bytes[0], 0)) + bytes.size()

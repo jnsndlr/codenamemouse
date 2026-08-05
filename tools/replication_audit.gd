@@ -145,6 +145,7 @@ func _play_a_match() -> void:
 	_check_the_barricade_world(host_said, client_said)
 	_check_the_cant_world(host_said, client_said)
 	_check_the_earth(host_said, client_said)
+	_check_what_it_costs(host_said, client_said)
 
 
 # ------------------------------------------------------------------------------ bytes are moving
@@ -500,6 +501,55 @@ func _check_the_cant_world(host_said: String, client_said: String) -> void:
 		and _last_capture(host_said, "cant world: all \\[([^\\]]*)\\]").contains(
 			"2.-16,17@BLUE"
 		))
+
+
+# ------------------------------------------------------------------------------ and what it all costs
+
+
+## A ceiling, deliberately loose, on what one client costs a host.
+##
+## Set well above the measured figure because **this is a regression guard, not a target.** The point
+## is to catch somebody adding a payload an order of magnitude too big, or turning a periodic full
+## picture up to the physics rate -- not to police a kilobyte. A tight budget here would fail on a
+## busier match and get relaxed, and an assertion that gets relaxed is worse than none.
+const BUDGET_KBPS: float = 20.0
+
+
+## What the protocol actually costs, which until now was a thing this file argued about in prose.
+##
+## `net_match.gd` has claimed since its first commit that twenty snapshots a second is right because
+## the client interpolates, and `net_message.gd` that the earth is the one payload that cannot afford
+## to be idempotent. **Measured, both are correct and the emphasis was wrong.** Snapshots are about
+## nine tenths of everything on this wire; the four separate per-peer periodic full pictures that step
+## 6 kept apologising for -- cheese, barricades, cant, scoreboard -- come to well under a tenth
+## between them. The expensive thing was never the redundancy. It was the thing sent thirty times a
+## second to keep mice moving.
+func _check_what_it_costs(host_said: String, client_said: String) -> void:
+	print("\n-- and what an hour of this would cost somebody")
+	var host_out := _kbps(host_said, "wire out ([0-9.]+) KB/s")
+	var client_in := _kbps(
+		client_said, "wire out [0-9.]+ KB/s \\[[^\\]]*\\] \\| in ([0-9.]+) KB/s"
+	)
+	var client_out := _kbps(client_said, "wire out ([0-9.]+) KB/s")
+
+	_check("the host reports what it is sending (%.1f KB/s)" % host_out, host_out > 0.0)
+	_check("and the client reports what it is sending back (%.1f KB/s)" % client_out,
+		client_out > 0.0)
+	_check("one client costs the host under %.0f KB/s" % BUDGET_KBPS,
+		host_out > 0.0 and host_out < BUDGET_KBPS)
+	# The shape of the bill, not just its size. If this ever stops being true, either snapshots got
+	# cheaper or a full picture got much more expensive, and both are worth being told about.
+	_check("and snapshots are the bulk of it, not the full pictures",
+		host_said.contains("KB/s [SNAPSHOT"))
+	_check("the client is not somehow the expensive end (%.1f up vs %.1f down)"
+		% [client_out, client_in],
+		client_out < host_out or host_out <= 0.0)
+
+
+## The last figure a log reported for a pattern's first capture group, or 0.
+func _kbps(source: String, pattern: String) -> float:
+	var got := _last_capture(source, pattern)
+	return got.to_float() if got.is_valid_float() else 0.0
 
 
 # --------------------------------------------------------------------- and no floor plan it didn't earn

@@ -38,12 +38,30 @@ static func to_lobby(from: Node) -> void:
 	_go(from, LOBBY)
 
 
-## Back out to the title screen. Unpauses on the way, because `get_tree().paused` outlives the
-## scene that set it -- quitting to the title from a pause menu otherwise lands you on a frozen
-## title screen whose buttons do not respond.
-static func to_title(from: Node) -> void:
+## Why we are being sent back, for the screen that has to explain it.
+##
+## A STATIC RATHER THAN AN ARGUMENT PASSED ALONG, because the node that knows the reason is being
+## freed by the very transition that has to carry it -- there is nobody to hand it to. It lives here
+## rather than on `NetSession` because it is a sentence for a human, not a fact about a socket, and
+## the session has managed to know nothing about screens so far.
+static var _why: String = ""
+
+
+## Back out to the title screen, optionally saying why. Unpauses on the way, because
+## `get_tree().paused` outlives the scene that set it -- quitting to the title from a pause menu
+## otherwise lands you on a frozen title screen whose buttons do not respond.
+static func to_title(from: Node, why: String = "") -> void:
+	_why = why
 	from.get_tree().paused = false
 	_go(from, TITLE)
+
+
+## Read once and forgotten. Left lying about, a reason would turn up on the next visit to the title
+## screen and explain a disconnection that happened twenty minutes ago.
+static func take_why() -> String:
+	var was := _why
+	_why = ""
+	return was
 
 
 static func _go(from: Node, path: String) -> void:

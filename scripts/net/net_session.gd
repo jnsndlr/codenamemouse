@@ -49,6 +49,8 @@ var _joined: String = ""
 var _log_path: String = ""
 ## What the command line asked for, applied once the whole line has been parsed.
 var _start: Array = []
+## `--lag`/`--jitter`/`--loss`, if any. Empty in a normal run and in every shipped build.
+var _degraded: Dictionary = {}
 
 
 ## Everything this file reports, to stdout and — when `--audit-log <path>` was passed — to a file.
@@ -342,6 +344,25 @@ func _apply_command_line() -> void:
 			_start = ["host", next]
 		if arg == "--join":
 			_start = ["join", next]
+		# `--lag <ms> --jitter <ms> --loss <percent>`: make the wire worse on purpose. Read here with
+		# everything else, applied to the transport below -- and read on BOTH ends independently, since
+		# a link is only symmetric if you degrade both sides of it.
+		if arg == "--lag" or arg == "--jitter" or arg == "--loss":
+			_degraded[arg.substr(2)] = next.to_float() if next.is_valid_float() else 0.0
+
+	# Before the socket opens, so the very first packet is already going through the bad link rather
+	# than the handshake getting a clean one the rest of the match will not have.
+	if not _degraded.is_empty() and _transport.has_method("degrade"):
+		_transport.call(
+			"degrade",
+			float(_degraded.get("lag", 0.0)),
+			float(_degraded.get("jitter", 0.0)),
+			float(_degraded.get("loss", 0.0)),
+		)
+		log_line("wire degraded on purpose: %dms lag, %dms jitter, %d%% loss" % [
+			int(_degraded.get("lag", 0.0)), int(_degraded.get("jitter", 0.0)),
+			int(_degraded.get("loss", 0.0)),
+		])
 
 	# ACTED ON AFTER THE WHOLE LINE IS READ, not the moment the flag is seen. `--audit-log` may
 	# come after `--host`, and starting the socket first would send the interesting lines to

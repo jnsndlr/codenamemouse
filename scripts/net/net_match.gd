@@ -213,7 +213,11 @@ func _ready() -> void:
 			_net.log_line("audit cheese placed before the client arena exists")
 	else:
 		_become_client()
+	# THIS CALL IS THE LINE BETWEEN "CAME THROUGH THE LOBBY" AND "TURNED UP LATE". Everybody seated
+	# right now got here the ordinary way and already has their `START`; the flag goes up immediately
+	# afterwards, so every seating change from this point on belongs to somebody who needs telling.
 	_on_seating_changed()
+	_greeted_the_lobby = true
 
 
 ## How long the autopilot walks the lawn before it starts trying to get under it. Long enough that
@@ -375,6 +379,7 @@ func _report(delta: float) -> void:
 	# would make the comparison a comparison of two formatters; one means the audit is reading the
 	# same question answered twice, which is the only version of this that proves anything.
 	_net.log_line(_scoreboard())
+	_report_traffic()
 	_report_cheese()
 	_report_barricades()
 	_report_cant()
@@ -391,6 +396,51 @@ func _report(delta: float) -> void:
 	_barricade_states = 0
 	_cant_states = 0
 	_sonar_echoes = 0
+
+
+## What the last five seconds actually cost, per kind, both directions.
+##
+## **THIS FILE HAS BEEN ARGUING ABOUT BANDWIDTH SINCE ITS FIRST LINE WITHOUT ONE MEASUREMENT IN IT.**
+## The header explains that twenty snapshots a second is "deliberately below the physics rate" because
+## sending every tick "would double the bandwidth to buy smoothness the interpolation already
+## provides"; `net_message.gd` explains that the earth is the one payload that "genuinely could not
+## afford to be idempotent". Both are plausible and both were assertions. Meanwhile step 6 finished
+## with **four** separate per-peer periodic full pictures -- cheese, barricades, cant, and the
+## scoreboard -- on top of snapshots and the earth, and nobody had ever added the set up.
+##
+## THE TRANSPORT COUNTS AND THIS FILE NAMES, which is the only split that keeps both honest. A count
+## kept where payloads are *built* measures what we meant to send; the transport's counts are bytes
+## that left a socket, after a dropped-on-purpose packet was dropped. The transport buckets them by
+## first byte because it has no business knowing what a kind is -- the enum lives here.
+func _report_traffic() -> void:
+	var out := _transport.traffic_out()
+	var into := _transport.traffic_in()
+	_transport.clear_traffic()
+	_net.log_line("wire out %s | in %s" % [_traffic_of(out), _traffic_of(into)])
+
+
+## `12.3 KB/s [SNAPSHOT 8.1 BARRICADES 2.0 ...]`, biggest first, so the line answers "what is this
+## costing and what is the cost" in one read.
+func _traffic_of(counted: Dictionary) -> String:
+	var total: int = 0
+	var kinds: Array[int] = []
+	for kind: int in counted:
+		total += int(counted[kind])
+		kinds.append(kind)
+	kinds.sort_custom(func(a: int, b: int) -> bool:
+		return int(counted[a]) > int(counted[b])
+	)
+	var parts := PackedStringArray()
+	for kind: int in kinds:
+		parts.append("%s %.1f" % [
+			_kind_name(kind), int(counted[kind]) / REPORT_SECONDS / 1024.0,
+		])
+	return "%.1f KB/s [%s]" % [total / REPORT_SECONDS / 1024.0, " ".join(parts)]
+
+
+func _kind_name(kind: int) -> String:
+	var names := NetMessage.Kind.keys()
+	return String(names[kind]) if kind >= 0 and kind < names.size() else "?%d" % kind
 
 
 ## The earth, as cells, from whichever end this is.
@@ -809,6 +859,10 @@ func _send_cant() -> void:
 ## happens to be the same question while there is one Sonar per mouse and each is bound to its own
 ## -- which is a guard resting on a coincidence, and it built a fresh Callable every tick to do it.
 var _echo_linked: Dictionary = {}
+## Peers already told to load an arena, by id. See `_start_the_latecomers`.
+var _started: Dictionary = {}
+## Whether the lobby crowd has been counted. Below this line a seating change is a latecomer.
+var _greeted_the_lobby: bool = false
 
 
 func _ensure_sonar_echo_links() -> void:
@@ -1419,6 +1473,36 @@ func _on_seating_changed() -> void:
 			_director.seat_remote.call_deferred(side, seat, roster.is_human(side, seat))
 
 	_send_seating(NetTransport.ALL_PEERS)
+	_start_the_latecomers(roster)
+
+
+## Anybody seated since this arena existed is told to load one, because nobody else will tell them.
+##
+## **THIS IS WHAT REJOINING WAS MISSING, AND IT WAS MISSING COMPLETELY.** `START` is broadcast by the
+## lobby's button, and the host leaves that lobby the moment it presses it -- so a peer arriving
+## afterwards was seated, given a mouse on the server, and sent snapshots, earth and cheese while it
+## *sat on a lobby screen forever* watching none of it arrive. It looked exactly like a hang. Same gap
+## whether they are a returning player whose wire dropped or a friend who turned up ten minutes late:
+## the host is in a match and the newcomer has no way to learn it is allowed in.
+##
+## ONCE PER PEER, TRACKED BY ID, which is what makes it safe to hang off a signal that fires on every
+## seating change. Peers seated before this node finished starting came in through the lobby and have
+## their `START` already; they are marked on the way past rather than told a second time.
+##
+## THE PERIODIC FULL PICTURES ARE WHAT MAKE THIS WORK AT ALL -- the M7 argument arriving at its own
+## conclusion. A latecomer is owed the entire world, and every runtime thing in it is already a
+## complete state resent on a timer rather than a spawn event that has been and gone, so there is
+## nothing to replay. The earth is the one diff, and `tunnel_view` keys its delivery history by peer,
+## so a fresh id is owed all of it from the beginning.
+func _start_the_latecomers(roster: Seats) -> void:
+	for peer: int in roster.peers():
+		if peer == _net.local_peer() or _started.has(peer):
+			continue
+		_started[peer] = true
+		if not _greeted_the_lobby:
+			continue
+		_transport.send(peer, NetMessage.head(NetMessage.Kind.START).data_array, true)
+		_net.log_line("told peer %d to join the match already in progress" % peer)
 
 
 ## The whole table, to one peer or to everybody.

@@ -35,6 +35,28 @@ var _last_status: MultiplayerPeer.ConnectionStatus = MultiplayerPeer.CONNECTION_
 ## deliberately do not want.
 var _roster: Dictionary = {}
 
+## Milliseconds of one-way delay added to every outgoing packet, and the random spread on top of it.
+## Zero unless `--lag`/`--jitter` were passed.
+##
+## **THE PROTOCOL'S CENTRAL CLAIM HAD NO WAY TO BE LOOKED AT.** `net_match.gd` argues that twenty
+## snapshots a second is enough because "the client interpolates", and that unreliable delivery is
+## right because "the next one fixes it" -- both true statements about a network this game had never
+## met. Loopback has no latency, no jitter and no loss, so *every* audit in `tools/` has been running
+## on the one link where interpolation and self-healing are indistinguishable from doing nothing.
+##
+## APPLIED ON THE WAY OUT, WHERE RELIABILITY IS STILL KNOWN, and that is the only place it can honestly
+## go. Dropping packets as they *arrive* would discard ones ENet had already guaranteed -- a lost
+## `SEATS` or `START` never heals, so that is not a simulated network, it is a corrupted protocol.
+## Here `reliable` is a parameter, so loss can hit exactly what a real link would cost us: the
+## unreliable pictures, which are the ones designed to survive it.
+var _lag_ms: float = 0.0
+var _jitter_ms: float = 0.0
+## Fraction of UNRELIABLE packets to throw away, 0..1.
+var _loss: float = 0.0
+## Outgoing packets waiting for their release time, oldest first. FIFO, so a delay never reorders what
+## the protocol handed over in order.
+var _held: Array[Dictionary] = []
+
 
 func _ready() -> void:
 	# Nothing else in this game needs a socket drained while the pause menu is up, but the socket
@@ -102,6 +124,8 @@ func close() -> void:
 	_mode = Mode.OFFLINE
 	_last_status = MultiplayerPeer.CONNECTION_DISCONNECTED
 	_roster.clear()
+	# Anything a simulated link was still holding belongs to a socket that no longer exists.
+	_held.clear()
 	set_process(false)
 
 
@@ -111,12 +135,29 @@ func close() -> void:
 func _process(_delta: float) -> void:
 	if _peer == null:
 		return
+	_release_held()
+	if _peer == null:
+		return
 	_peer.poll()
 	_watch_status()
 	# `poll` above can have torn the connection down and `_watch_status` freed the peer with it.
 	if _peer == null:
 		return
 	_drain()
+
+
+## Let go of any delayed packet whose time has come, in the order it was handed over.
+##
+## Released BEFORE `poll` rather than after, so a packet queued this frame and due immediately still
+## goes out on the same pump it would have without the knob -- zero lag has to mean zero lag, or the
+## normal path pays for a debugging tool.
+func _release_held() -> void:
+	if _held.is_empty():
+		return
+	var now := Time.get_ticks_msec()
+	while not _held.is_empty() and int(_held[0]["at"]) <= now:
+		var packet: Dictionary = _held.pop_front()
+		_put(int(packet["to"]), packet["bytes"], bool(packet["reliable"]))
 
 
 ## A client has no "connected" signal to listen to, so the status is compared against last frame.
@@ -150,13 +191,37 @@ func _drain() -> void:
 		# wrong player, which looks like a game bug and is not one.
 		var from := _peer.get_packet_peer()
 		var bytes := _peer.get_packet()
+		_note_in(bytes)
 		packet_received.emit(from, bytes)
 
 
 # ------------------------------------------------------------------------------------ going out
 
 
+## Out, unless a simulated link ate it or is holding it back a moment.
+##
+## THE LOSS ONLY EVER TOUCHES UNRELIABLE PACKETS. Everything reliable in this protocol is reliable
+## because losing it does not heal -- a missed `SEATS`, `START` or scoreboard is not repaired by the
+## next one, since for two of those there is no next one. Simulating loss by dropping those would test
+## a protocol this game does not have. What a real link costs us is the unreliable pictures, and those
+## were designed on the argument that the next one fixes it; this is the switch that finally asks.
 func send(to: int, bytes: PackedByteArray, reliable: bool) -> void:
+	if _peer == null:
+		return
+	if not reliable and _loss > 0.0 and randf() < _loss:
+		return
+	if _lag_ms <= 0.0 and _jitter_ms <= 0.0:
+		_put(to, bytes, reliable)
+		return
+	_held.append({
+		"at": Time.get_ticks_msec() + int(maxf(0.0, _lag_ms + randf_range(0.0, _jitter_ms))),
+		"to": to, "bytes": bytes, "reliable": reliable,
+	})
+
+
+## The actual socket write. Counted here and nowhere else, so the number is bytes that really left --
+## a packet the simulated link dropped never reaches this and must not be counted as sent.
+func _put(to: int, bytes: PackedByteArray, reliable: bool) -> void:
 	if _peer == null:
 		return
 	_peer.set_transfer_mode(
@@ -165,6 +230,18 @@ func send(to: int, bytes: PackedByteArray, reliable: bool) -> void:
 	)
 	_peer.set_target_peer(to)
 	_peer.put_packet(bytes)
+	_note_out(bytes)
+
+
+## `--lag <ms>`, `--jitter <ms>`, `--loss <percent>`: pretend the wire is worse than loopback.
+##
+## A DEV KNOB WITH NO UI, deliberately. It exists so the interpolation and the self-healing full
+## pictures can be *looked at*, by an audit or by a person, on the only link this project has ever
+## had access to. Shipping it behind a menu would invite a player to break their own game.
+func degrade(lag_ms: float, jitter_ms: float, loss_percent: float) -> void:
+	_lag_ms = maxf(0.0, lag_ms)
+	_jitter_ms = maxf(0.0, jitter_ms)
+	_loss = clampf(loss_percent / 100.0, 0.0, 1.0)
 
 
 ## Hosting is established the moment the socket is open; joining is not established until ENet
