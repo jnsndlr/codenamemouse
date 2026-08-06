@@ -15,39 +15,52 @@ const MAX_MARKS: int = 512
 const MAX_ECHO_CELLS: int = 255
 ## kind, revision, count.
 const HEADER_SIZE: int = 1 + 4 + 2
-## owner team, source plane, signed cell x/y.
-const MARK_SIZE: int = 1 + 1 + 2 + 2
+## owner team, source plane, signed cell x/y, whose tunnel.
+##
+## THE LAST BYTE IS NEW, and it is the one field here that is not geometry. Whose corridor a mark
+## names is part of the mark (see [SonarMark]), so it travels with it or a client draws the wrong
+## glyph in the wrong colour -- and unlike the rest of this packet it cannot be recomputed at the
+## far end, because the far end's network holds only what its own crew knows.
+const MARK_SIZE: int = 1 + 1 + 2 + 2 + 1
 ## kind, source plane, count.
 const ECHO_HEADER_SIZE: int = 1 + 1 + 1
-const ECHO_CELL_SIZE: int = 2 + 2
+## signed cell x/y, whose tunnel.
+const ECHO_CELL_SIZE: int = 2 + 2 + 1
 
 
 class Mark:
 	var owner_team: int = Team.BLUE
 	var plane: int = 0
 	var cell: Vector2i = Vector2i.ZERO
+	## BLUE, RED or [constant SonarMark.SHARED].
+	var tunnel_team: int = SonarMark.SHARED
 
 	func _init(
-		by: int = Team.BLUE, source_plane: int = 0, at: Vector2i = Vector2i.ZERO
+		by: int = Team.BLUE, source_plane: int = 0, at: Vector2i = Vector2i.ZERO,
+		whose: int = SonarMark.SHARED
 	) -> void:
 		owner_team = by
 		plane = source_plane
 		cell = at
+		tunnel_team = whose
 
 
 var revision: int = 0
 var marks: Array[Mark] = []
 
 
-func add(owner_team: int, plane: int, cell: Vector2i) -> void:
+func add(
+	owner_team: int, plane: int, cell: Vector2i, tunnel_team: int = SonarMark.SHARED
+) -> void:
 	if (
 		marks.size() >= MAX_MARKS
 		or owner_team < Team.BLUE or owner_team > Team.RED
 		or plane < 0 or plane + 1 >= TunnelNetwork.PLANE_COUNT
 		or not _cell_fits(cell)
+		or tunnel_team < Team.BLUE or tunnel_team > SonarMark.SHARED
 	):
 		return
-	marks.append(Mark.new(owner_team, plane, cell))
+	marks.append(Mark.new(owner_team, plane, cell, tunnel_team))
 
 
 func to_bytes() -> PackedByteArray:
@@ -59,6 +72,7 @@ func to_bytes() -> PackedByteArray:
 		out.put_u8(mark.plane)
 		out.put_u16(mark.cell.x & 0xffff)
 		out.put_u16(mark.cell.y & 0xffff)
+		out.put_u8(mark.tunnel_team)
 	return out.data_array
 
 
@@ -82,39 +96,58 @@ static func from_bytes(bytes: PackedByteArray) -> SonarState:
 		var owner_team := into.get_u8()
 		var plane := into.get_u8()
 		var cell := Vector2i(_signed_16(into.get_u16()), _signed_16(into.get_u16()))
+		var tunnel_team := into.get_u8()
+		# IDENTITY IS UNCHANGED BY THE NEW FIELD, deliberately. Whose corridor a mark names is a
+		# property OF the mark, not part of which mark it is -- two marks cannot differ only in it,
+		# and treating it as identity would make a junction forming under an existing mark look
+		# like a second mark rather than like the same one saying something new.
 		var identity := "%d:%d:%d:%d" % [owner_team, plane, cell.x, cell.y]
 		if (
 			owner_team < Team.BLUE or owner_team > Team.RED
 			or plane + 1 >= TunnelNetwork.PLANE_COUNT
+			or tunnel_team < Team.BLUE or tunnel_team > SonarMark.SHARED
 			or identities.has(identity)
 		):
 			return null
 		identities[identity] = true
-		state.marks.append(Mark.new(owner_team, plane, cell))
+		state.marks.append(Mark.new(owner_team, plane, cell, tunnel_team))
 	return state
 
 
 ## The one player's short-lived scan result. Unlike cant this is not repeated: it is presentation
 ## for an action that just happened, and reliable delivery is its recovery path.
-static func echo_to_bytes(source_plane: int, cells: Array[Vector2i]) -> PackedByteArray:
+## THE OWNERS TRAVEL WITH THE CELLS AND CANNOT BE LEFT OUT. A client's tunnel network holds what
+## its own crew knows, so a cell sonar has just found is usually a cell it has never heard of --
+## asking it locally whose corridor that is returns "nobody knows about it", which renders as a
+## junction. Every enemy tunnel would draw as contested, which is the one wrong answer that looks
+## like a right one.
+static func echo_to_bytes(
+	source_plane: int, cells: Array[Vector2i], owners: Array[int]
+) -> PackedByteArray:
 	if source_plane < 0 or source_plane + 1 >= TunnelNetwork.PLANE_COUNT:
 		return PackedByteArray()
 	var accepted: Array[Vector2i] = []
-	for cell: Vector2i in cells:
+	var accepted_owners: Array[int] = []
+	for index in range(cells.size()):
 		if accepted.size() >= MAX_ECHO_CELLS:
 			break
-		if _cell_fits(cell):
-			accepted.append(cell)
+		if not _cell_fits(cells[index]):
+			continue
+		accepted.append(cells[index])
+		var whose: int = owners[index] if index < owners.size() else SonarMark.SHARED
+		accepted_owners.append(clampi(whose, Team.BLUE, SonarMark.SHARED))
 	var out := NetMessage.head(NetMessage.Kind.SONAR_ECHO)
 	out.put_u8(source_plane)
 	out.put_u8(accepted.size())
-	for cell: Vector2i in accepted:
-		out.put_u16(cell.x & 0xffff)
-		out.put_u16(cell.y & 0xffff)
+	for index in range(accepted.size()):
+		out.put_u16(accepted[index].x & 0xffff)
+		out.put_u16(accepted[index].y & 0xffff)
+		out.put_u8(accepted_owners[index])
 	return out.data_array
 
 
-## `{}` means malformed; a valid reading contains `plane` and a typed `cells` array.
+## `{}` means malformed; a valid reading contains `plane`, a typed `cells` array, and a parallel
+## typed `owners` array.
 static func echo_from_bytes(bytes: PackedByteArray) -> Dictionary:
 	if bytes.size() < ECHO_HEADER_SIZE:
 		return {}
@@ -129,9 +162,14 @@ static func echo_from_bytes(bytes: PackedByteArray) -> Dictionary:
 	):
 		return {}
 	var cells: Array[Vector2i] = []
+	var owners: Array[int] = []
 	for i: int in range(count):
 		cells.append(Vector2i(_signed_16(into.get_u16()), _signed_16(into.get_u16())))
-	return {"plane": plane, "cells": cells}
+		var whose := into.get_u8()
+		if whose < Team.BLUE or whose > SonarMark.SHARED:
+			return {}
+		owners.append(whose)
+	return {"plane": plane, "cells": cells, "owners": owners}
 
 
 static func _cell_fits(cell: Vector2i) -> bool:

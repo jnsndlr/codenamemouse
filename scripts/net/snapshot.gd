@@ -55,6 +55,14 @@ class Pose:
 enum Flag {
 	SCRUFFED = 1,
 	SWINGING = 2,
+	## Put down by a collapse rather than by a paw. Only ever set alongside SCRUFFED -- it says
+	## *how*, not *whether*, and a client reading it alone would be asking the wrong question.
+	##
+	## BIT 6, the first of the two the plane and class bits left spare in this byte. Worth the bit
+	## rather than deriving it at the far end: there is nothing in a pose a client could infer it
+	## from, and the alternative is a remote player's HUD confidently reporting the wrong word for
+	## the six seconds it is on screen.
+	BURIED = 64,
 }
 
 ## Which of the four layers a mouse is on, packed into the spare bits of the same byte.

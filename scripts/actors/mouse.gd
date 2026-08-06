@@ -25,8 +25,13 @@ extends CharacterBody3D
 ##   Collision    Own crew's layer, masking the other crew's, so enemies body-block and
 ##                allies pass through.
 
-## Emitted when this mouse is knocked flat. `by` may be null -- a cave-in will scruff you at
-## M8 and there is nobody to credit. The director listens; nothing here knows about respawns.
+## Emitted when this mouse is knocked flat. `by` may be null -- a cave-in can put you down with
+## nobody to credit. The director listens; nothing here knows about respawns.
+##
+## THE CAUSE IS NOT ON THE SIGNAL, it is read off the mouse with [method was_buried]. A second
+## argument would have meant touching every listener and every `is_connected` comparison for a
+## fact that is a property of the mouse's current state rather than of the event -- and the
+## director already reaches back into the mouse for what it was carrying.
 signal scruffed(mouse: Mouse, by: Mouse)
 ## For the HUD and, later, hit sounds. Carries the damage rather than the resulting health so
 ## a listener can react to the size of the blow.
@@ -179,6 +184,8 @@ var _shown_swing: bool = false
 var _plane: int = 0
 var _health: float = 0.0
 var _scruffed: bool = false
+## Whether the thing that put this mouse down was the roof rather than a paw. See [method bury].
+var _buried: bool = false
 var _since_damage: float = 999.0
 var _swing_left: float = 0.0
 var _swing_hit: bool = false
@@ -472,6 +479,34 @@ func take_hit(damage: float, from: Vector3, knockback: float, by: Mouse = null) 
 		_scruff(by)
 
 
+## The roof came in on you. A different way to go down, and it wants a different word.
+##
+## SCRUFFING IS SOMETHING A MOUSE DOES TO YOU. Four connected swings, a paw on the scruff of your
+## neck, and you lie there looking annoyed -- which is the tone the whole game is written in
+## (intent doc: nothing here dies). A cave-in is not that. Nobody wrestled you; a cubic metre of
+## earth arrived where you were standing, and calling it a scruffing was the one place the word
+## was doing no work at all.
+##
+## MECHANICALLY A SCRUFF, AND THAT IS DELIBERATE RATHER THAN LAZY. You drop what you were holding
+## where you fell, the crew pays its cheese, you come back at your nest. The cost of being buried
+## is a dial on the director (`buried_extra_seconds`) that starts at zero, so this change is a
+## word and a picture until somebody decides it should also be a punishment. Making it hurt more
+## is one number; unpicking a balance change nobody asked for is not.
+##
+## THE FLAG IS SET BEFORE THE DAMAGE, because `take_hit` is what reaches `_scruff` and emits, and
+## a listener that read the cause afterwards would be reading it one frame late.
+func bury(by: Mouse = null) -> void:
+	if _scruffed:
+		return
+	_buried = true
+	take_hit(9999.0, global_position, 0.0, by)
+
+
+## Was the mouse currently down put there by a collapse? Meaningless while it is on its feet.
+func was_buried() -> bool:
+	return _scruffed and _buried
+
+
 ## Knocked flat: no steering, no collision with anyone, and the model on its side. The
 ## director puts you back on your feet at your nest.
 ##
@@ -510,6 +545,7 @@ func revive_at(place: Vector3, facing: float = 0.0) -> void:
 	_health = max_health
 	_since_damage = 999.0
 	_scruffed = false
+	_buried = false
 	_facing = facing
 	_visual.rotation = Vector3(0.0, facing, 0.0)
 	set_plane(0)
@@ -685,6 +721,11 @@ func apply_pose(at: Vector3, facing: float, flags: int, health: int) -> void:
 		# Set directly rather than through `scruff()`: that is the RULE, and rules resolve on the
 		# server. This is the picture of a rule that already resolved somewhere else.
 		_scruffed = down
+	# Taken every pose rather than only on the transition, because the two bits are decided one
+	# frame apart on the server -- `bury` sets the cause and `take_hit` does the scruffing -- so a
+	# pose can legitimately carry SCRUFFED before it carries BURIED. Read only on the edge, that
+	# first pose would pin the wrong word on screen for the whole six seconds.
+	_buried = down and (flags & Snapshot.Flag.BURIED) != 0
 
 	# A TELEPORT, NOT A GLIDE, when the gap is absurd. Respawns put a mouse most of an arena away
 	# and interpolating across that draws it skating through the yard at fifty metres a second --

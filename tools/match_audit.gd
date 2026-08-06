@@ -81,6 +81,7 @@ func _initialize() -> void:
 		["classes", _check_classes],
 		["cave_in", _check_cave_in],
 		["stomp", _check_stomp],
+		["tremor", _check_tremor],
 		["barricade", _check_barricade],
 		["sonar", _check_sonar],
 		["tunnel_sight", _check_tunnel_sight],
@@ -464,8 +465,19 @@ func _check_cave_in() -> void:
 	await _advance(0.2)
 	_fire(cave)
 	_expect(not network.is_dug(1, Vector2i(-13, -17)), "a Brute brings the cell down")
-	_expect(caught.is_scruffed(), "and scruffs whoever was standing in it")
+	_expect(caught.is_scruffed(), "and puts whoever was standing in it down")
 	_expect(not player.is_scruffed(), "without burying the Brute as well")
+
+	# BURIED IS ITS OWN WORD, and the pair of checks is the point: the flag has to be true here and
+	# false for an ordinary scruffing, or it is not distinguishing anything. A `was_buried` that
+	# simply returned `is_scruffed` would pass the first line on its own.
+	_expect(caught.was_buried(), "and the cause is BURIED -- it was the roof, not a paw")
+	var struck := _puppet(Team.RED, player.global_position + Vector3(2.0, 0.0, 0.0))
+	struck.take_hit(9999.0, struck.global_position, 0.0, player)
+	_expect(
+		struck.is_scruffed() and not struck.was_buried(),
+		"while a mouse simply beaten down is scruffed, not buried"
+	)
 
 	# And then has to wait. A second one on the same breath would make a corridor disappear
 	# faster than anyone could react to it.
@@ -515,14 +527,23 @@ func _check_stomp() -> void:
 
 	# A patch under the surface, deliberately spread over three planes and out past the radius so
 	# the footprint has edges to be wrong about in every direction.
+	#
+	# `corner` IS THE TAPER'S WHOLE TEST, and it is one offset asked twice. At radius 2.2 a diagonal
+	# neighbour is 1.41 away and inside the shock on plane 1; one layer down the radius is 1.2 and
+	# the same offset is outside it. So the same cell coordinate must come down on one plane and
+	# survive on the next, which no single-plane assertion could have caught.
 	var here := Vector2i(-17, -17)
 	var neighbour := here + Vector2i(1, 0)
-	var diagonal := here + Vector2i(1, 1)
+	var corner := here + Vector2i(1, 1)
+	# 2.236 away -- a hair outside 2.2, which is where a radius that had been rounded or compared
+	# with `<` instead of `<=` would show up.
+	var edge := here + Vector2i(2, 1)
 	var far := here + Vector2i(3, 0)
-	for cell in [here, neighbour, diagonal, far]:
+	for cell in [here, neighbour, corner, edge, far]:
 		network.dig(1, cell)
 	network.dig(2, here)
 	network.dig(2, neighbour)
+	network.dig(2, corner)
 	network.dig(3, here)
 	await _advance(0.2)
 
@@ -544,15 +565,23 @@ func _check_stomp() -> void:
 	_fire(cave)
 	_expect(not network.is_dug(1, here), "a Brute's stomp takes the cell under its feet")
 	_expect(not network.is_dug(1, neighbour), "and its neighbours on the layer below")
-	_expect(caught.is_scruffed(), "and scruffs whoever was standing in them")
+	_expect(not network.is_dug(1, corner), "and the diagonals, at the widened radius")
+	_expect(caught.is_scruffed(), "and puts whoever was standing in them down")
+	_expect(caught.was_buried(), "BURIED rather than scruffed -- it was the roof, not a paw")
 	_expect(not player.is_scruffed(), "without hurting the Brute up on the lawn")
 
-	# THE PATCH TAPERS. A plus-shape one layer down, a single cell two layers down, nothing at all
-	# on plane 3 -- which is the Engineer's answer and therefore the load-bearing one.
-	_expect(network.is_dug(1, diagonal), "the corners of the patch are out of the shock")
-	_expect(network.is_dug(1, far), "and so is a cell three along")
+	# THE EDGE OF THE PATCH, asked at 2.236 against a radius of 2.2. The nearest cell that must
+	# survive, so a radius quietly rounded up has somewhere to be caught.
+	_expect(network.is_dug(1, edge), "a cell a hair outside the radius survives")
+	_expect(network.is_dug(1, far), "and so does one three along")
+
+	# THE PATCH TAPERS, asked with one offset on two planes -- see the note where `corner` is dug.
 	_expect(not network.is_dug(2, here), "the cell directly beneath goes two layers down")
-	_expect(network.is_dug(2, neighbour), "but the patch has narrowed to one cell by then")
+	_expect(not network.is_dug(2, neighbour), "with its own neighbours")
+	_expect(
+		network.is_dug(2, corner),
+		"but not the diagonal that fell on plane 1 -- the shock narrows with depth"
+	)
 	_expect(network.is_dug(3, here), "and plane 3 is under the floor -- dig deeper is the answer")
 
 	# THE FLOOR IS THE CAP, NOT THE TAPER, and asked separately because at the shipped radius the
@@ -641,6 +670,91 @@ func _intend(who: Node, action: int) -> void:
 	frame.set_pressed(action, true)
 	frame.set_held(action, true)
 	who.call("drive", frame)
+
+
+## The near miss, and the leak it could have been. (M8a)
+##
+## THE TREMOR IS DECORATION AND THIS IS STILL AN M5 CHECK, which is the whole reason it exists.
+## Ceiling dust is drawn over open corridor near a collapse -- so a Brute could stomp blindly at a
+## wall and read the enemy's floor plan off where the dust landed, which is exactly the free sonar
+## sweep the ability spends ten seconds refusing to be, arriving through a particle effect. A leak
+## of this shape is invisible from inside a match and cannot fail any rule check that only looks at
+## tunnels, because nothing about the tunnels is wrong.
+##
+## THE FILTER MUST BE SHOWN A CASE THE OTHER RULES WOULD HAVE PERMITTED, per the standing rule: a
+## cell that IS dug, IS within the tremor radius, and is on the viewer's own plane -- everything
+## except knowledge. Absence proves nothing otherwise, because a check that dug no enemy corridor
+## at all would pass with the filter deleted.
+func _check_tremor() -> void:
+	await _arena(1)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+	var player := _director.get_player()
+	var cave: CaveIn = null
+	if player != null:
+		cave = player.get_node_or_null("CaveIn") as CaveIn
+	if cave == null or player == null:
+		_expect(false, "the arena has a cave-in and a player")
+		return
+
+	# The player's own corridor, and the enemy's running parallel a couple of cells over -- close
+	# enough that both are inside the tremor and only knowledge separates them.
+	var here := Vector2i(-17, -17)
+	var mine := here + Vector2i(1, 0)
+	var theirs := here + Vector2i(0, 2)
+	network.dig_shaft_down(0, here)
+	for cell in [here, mine]:
+		network.dig(1, cell, player.team)
+	network.dig(1, theirs, Team.other(player.team))
+	await _advance(0.2)
+
+	player.set_physics_process(false)
+	player.global_position = network.cell_to_world(1, here) + Vector3.UP * 0.05
+	player.set_plane(1)
+	player.set_class(MouseClass.BRUTE)
+	_aim(player, network.cell_to_world(1, mine))
+	await _advance(0.3)
+
+	var sight := _scene.get_tree().get_first_node_in_group(TunnelSight.SIGHT_GROUP) as TunnelSight
+	_expect(
+		sight != null and not sight.knows(player.team, 1, theirs),
+		"the enemy corridor is genuinely unknown to this crew -- otherwise nothing below bites"
+	)
+	_expect(network.is_dug(1, theirs), "and it is genuinely there to be leaked")
+
+	_fire(cave)
+	await _advance(0.05)
+
+	var dusted := _dusted_cells(network)
+	_expect(dusted.has(mine) or dusted.has(here), "a collapse shakes dust out of nearby ceiling")
+	_expect(
+		not dusted.has(theirs),
+		"but never over a corridor this crew has not found -- dust is not a sonar sweep"
+	)
+
+
+## Which cells currently have ceiling dust trickling into them, read back off the world.
+##
+## BY POSITION RATHER THAN BY ASKING THE ABILITY, deliberately. What leaks is what is *drawn*, so
+## the check has to look at what was drawn -- a helper that reported which cells the ability
+## intended to dust would agree with the ability by construction and prove nothing about the yard.
+func _dusted_cells(network: TunnelNetwork) -> Dictionary:
+	var found: Dictionary = {}
+	for node: Node in network.get_children():
+		var dust := node as CeilingDust
+		if dust != null and not dust.is_queued_for_deletion():
+			found[network.world_to_cell(dust.global_position)] = true
+	return found
+
+
+## A copy of `bytes` with its last byte replaced. For corrupting one field of a packet without
+## changing its length -- which is what separates "the decoder validates this value" from "the
+## decoder rejects anything the wrong size", a distinction every truncation check here already
+## covers and none of them can make.
+func _with_last_byte(bytes: PackedByteArray, value: int) -> PackedByteArray:
+	var copy := bytes.duplicate()
+	if not copy.is_empty():
+		copy[copy.size() - 1] = value
+	return copy
 
 
 ## The Engineer's other capability: a boulder in the way, and the Brute who shifts it. (M4)
@@ -864,8 +978,10 @@ func _check_sonar() -> void:
 	# may scratch the same place.
 	var picture := SonarState.new()
 	picture.revision = 43
-	picture.add(Team.BLUE, 0, Vector2i(-321, 412))
-	picture.add(Team.RED, 0, Vector2i(-321, 412))
+	# The two crews mark the same place, and each names a DIFFERENT corridor owner -- so a decoder
+	# that read the owner crew twice, or defaulted the second field, has two ways to be caught.
+	picture.add(Team.BLUE, 0, Vector2i(-321, 412), Team.RED)
+	picture.add(Team.RED, 0, Vector2i(-321, 412), SonarMark.SHARED)
 	var bytes := picture.to_bytes()
 	var decoded := SonarState.from_bytes(bytes)
 	_expect(
@@ -882,6 +998,15 @@ func _check_sonar() -> void:
 			decoded.marks[1].owner_team == Team.RED,
 			"opposing crews may mark the same place independently"
 		)
+		_expect(
+			decoded.marks[0].tunnel_team == Team.RED
+			and decoded.marks[1].tunnel_team == SonarMark.SHARED,
+			"and each keeps whose corridor it names, separately from who scratched it"
+		)
+	_expect(
+		SonarState.from_bytes(_with_last_byte(bytes, 7)) == null,
+		"a cant picture naming an impossible corridor owner is rejected"
+	)
 	_expect(SonarState.from_bytes(bytes.slice(0, bytes.size() - 1)) == null,
 		"a truncated cant picture is rejected rather than erasing a mark")
 	var padded := bytes.duplicate()
@@ -889,15 +1014,27 @@ func _check_sonar() -> void:
 	_expect(SonarState.from_bytes(padded) == null,
 		"and padding cannot disguise a malformed cant picture")
 	var duplicate := SonarState.new()
-	duplicate.add(Team.BLUE, 0, Vector2i(4, -9))
-	duplicate.add(Team.BLUE, 0, Vector2i(4, -9))
+	# The two differ in `tunnel_team` and are still the same mark, which is the point: whose
+	# corridor a mark names is a property of it, not part of which mark it is.
+	duplicate.add(Team.BLUE, 0, Vector2i(4, -9), Team.BLUE)
+	duplicate.add(Team.BLUE, 0, Vector2i(4, -9), Team.RED)
 	_expect(SonarState.from_bytes(duplicate.to_bytes()) == null,
 		"one crew cannot send the same cant identity twice")
 	var echo_cells: Array[Vector2i] = [Vector2i(-8, 13), Vector2i(9, -14)]
-	var echo := SonarState.echo_from_bytes(SonarState.echo_to_bytes(1, echo_cells))
+	# Two cells, two different owners. The echo's colours are read straight off this array, and it
+	# is the one place a client CANNOT recompute them -- its own network has never heard of an
+	# enemy corridor -- so a dropped field here would silently paint every enemy tunnel as neutral.
+	var echo_owners: Array[int] = [Team.RED, SonarMark.SHARED]
+	var echo := SonarState.echo_from_bytes(
+		SonarState.echo_to_bytes(1, echo_cells, echo_owners)
+	)
 	_expect(
 		not echo.is_empty() and echo["plane"] == 1 and echo["cells"] == echo_cells,
 		"a private sonar shimmer keeps its plane and signed cells"
+	)
+	_expect(
+		not echo.is_empty() and echo["owners"] == echo_owners,
+		"and which crew each answering cell belongs to"
 	)
 
 	var blue_cell := Vector2i(-16, -16)

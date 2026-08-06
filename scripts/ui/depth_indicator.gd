@@ -17,6 +17,10 @@ var _network: TunnelNetwork
 var _player: Node3D
 var _refusal: String = ""
 var _refusal_left: float = 0.0
+## Whether the line currently showing is something that DIDN'T happen or something that did. One
+## slot, two voices: they are the same piece of screen and they are never both true at once,
+## because both are answers to the same keypress.
+var _refusal_blocked: bool = true
 
 
 func _ready() -> void:
@@ -24,6 +28,7 @@ func _ready() -> void:
 	_player = get_node_or_null(player_path) as Node3D
 	if _network != null:
 		_network.dig_refused.connect(_on_dig_refused)
+		_network.dig_noted.connect(_on_dig_noted)
 
 
 ## The tunnel has real placement rules -- no shaft without floor to sink it from, none on a
@@ -33,6 +38,15 @@ func _ready() -> void:
 func _on_dig_refused(reason: String) -> void:
 	_refusal = reason
 	_refusal_left = refusal_seconds
+	_refusal_blocked = true
+
+
+## The same line, for something that DID happen -- the stomp's "there was nothing under there",
+## which is news rather than a refusal. Unlabelled, because the label is the difference.
+func _on_dig_noted(what: String) -> void:
+	_refusal = what
+	_refusal_left = refusal_seconds
+	_refusal_blocked = false
 
 
 func _process(delta: float) -> void:
@@ -75,7 +89,9 @@ func _process(delta: float) -> void:
 		hint += "\nX: barricade"
 	elif kind == MouseClass.BRUTE:
 		hint += "\nQ: stomp the ground" if plane <= 0 else "\nQ: cave in the tunnel beside you"
-	var blocked := "\n\nBLOCKED: %s" % _refusal if _refusal_left > 0.0 else ""
+	var blocked := ""
+	if _refusal_left > 0.0:
+		blocked = "\n\nBLOCKED: %s" % _refusal if _refusal_blocked else "\n\n%s" % _refusal
 	text = "%s\n%s\n\n%s%s" % [
 		NAMES[clampi(plane, 0, NAMES.size() - 1)], " ".join(counts), hint, blocked
 	]

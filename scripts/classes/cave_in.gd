@@ -67,11 +67,17 @@ signal refused(reason: String)
 ## Seconds between stomps. Longer than the aimed form, because it takes a patch rather than a tile
 ## and because it is the one that gets spent on a guess -- see `_stomp`.
 @export var stomp_cooldown: float = 10.0
-## Radius of the patch on the layer DIRECTLY below, in cells. 1.2 is a plus-shape: the cell under
-## your feet and its four neighbours. Small on purpose -- the fantasy is a heavy mouse putting a
-## foot through a roof, not an earthquake, and a wide one would make the Sneak's mark unnecessary
-## because you could stand anywhere near it and still connect.
-@export var stomp_radius_cells: float = 1.2
+## Radius of the patch on the layer DIRECTLY below, in cells.
+##
+## `[REVISED]` 2.2, UP FROM 1.2 -- a tile wider. At 1.2 the patch was a plus-shape of five cells,
+## which turned out to ask more of the Sneak's mark than the mark can give: cant names a *cell*,
+## the Brute has to walk to the lawn above it, and standing one tile off meant the whole ten
+## seconds bought nothing. Thirteen cells on the layer below is a patch you can aim by eye from a
+## mark, which is what makes the handoff (GDD section 5) a play rather than a precision test.
+##
+## The taper below is unchanged, so the layer under that still narrows to five cells and plane 3
+## is still out of reach -- widening the mouth of the shock did not widen its depth.
+@export var stomp_radius_cells: float = 2.2
 ## Deepest layer a stomp reaches. GDD section 5 hangs the whole counterplay web on this number:
 ## the Engineer's answer to a Brute is to dig BELOW it, and that answer only exists because there
 ## is a floor the shock does not get through.
@@ -79,6 +85,21 @@ signal refused(reason: String)
 ## Kept as its own dial rather than left to fall out of the taper below, because it is a DESIGN
 ## rule and the taper is a feel one. Widening the patch should not quietly hand the Brute plane 3.
 @export var stomp_max_plane: int = 2
+## Camera trauma at the Brute's own feet, 0..1. See [method CameraRig.shake].
+@export_range(0.0, 1.0, 0.05) var stomp_shake: float = 0.85
+## How far away the thump is still felt at all, in metres. Roughly two zoomed-out screen heights:
+## far enough that a Brute working a chokepoint registers on a teammate holding the nest, close
+## enough that it is never news about a part of the map you cannot see.
+@export var stomp_shake_range: float = 14.0
+
+@export_group("Tremor")
+## How far past the collapse the earth is felt to move, in cells. Added to whatever the collapse
+## itself reached, so the dust always covers ground the cave-in did *not* take -- the near miss is
+## the entire point of it (see [CeilingDust]).
+@export var tremor_extra_cells: float = 2.0
+## Camera trauma for a mouse underground inside the tremor, at its centre. A fraction of what the
+## Brute upstairs feels: you are being rattled by something happening nearby, not doing it.
+@export_range(0.0, 1.0, 0.05) var tremor_shake: float = 0.35
 
 var _cooldown_left: float = 0.0
 ## Built on the first frame anybody is looking at this mouse, and never on the other nine.
@@ -261,6 +282,9 @@ func _cave_in() -> void:
 		return
 
 	_bury(plane, cell)
+	# Reach zero: this form takes exactly the cell it aimed at, so the tremor is `tremor_extra_cells`
+	# and nothing more. A cave-in should be felt by the corridor next door, not by the whole level.
+	_shake_the_earth([[plane, cell, 0.0]])
 	_cooldown_left = cooldown
 	collapsed.emit(plane, cell)
 
@@ -292,6 +316,14 @@ func _stomp() -> void:
 		refused.emit("catching your breath -- %ds" % ceili(_cooldown_left))
 		return
 
+	# THE DUST AND THE THUMP GO OFF HERE, above the puppet check, and that placement is the whole
+	# of how they stay honest. Everything below this line is about what happened UNDERGROUND --
+	# which cells came down, who was buried, whether anything was there at all -- and none of it
+	# may reach the surface. Firing the presentation before any of that is known means it cannot
+	# accidentally come to depend on it: there is no branch here that a found tunnel could take
+	# and an empty stomp could not.
+	_kick_up_dust(here)
+
 	# A puppet runs its cooldown and moves no earth, exactly as the aimed form does -- BUT IT STILL
 	# HAS TO SAY SOMETHING, and this is the one place in the five controls where that is true.
 	#
@@ -308,11 +340,19 @@ func _stomp() -> void:
 	# just stamped; what happened underneath arrives, or does not, from the server.
 	if not acts():
 		_cooldown_left = stomp_cooldown
-		explain("you throw your weight into the ground")
+		note("you throw your weight into the ground")
 		return
 
+	# THE TREMOR IS AIMED AT WHAT THE STOMP WOULD HAVE REACHED, not at what it did -- so it is
+	# computed before the collapsing starts and does not care how much of it was actually there.
+	# A stomp over nothing rattles the corridors around it exactly as hard as one that brings a
+	# room down, which is the same rule the surface dust obeys, extended underground: the earth
+	# moving is what a nearby mouse hears, and it does not tell them whether anything gave.
+	var reached := stomp_cells(here)
+	_shake_the_earth(_tremor_seed_cells(here))
+
 	var taken := 0
-	for entry: Array in stomp_cells(here):
+	for entry: Array in reached:
 		var plane: int = entry[0]
 		var cell: Vector2i = entry[1]
 		if not _network.collapse(plane, cell):
@@ -322,23 +362,161 @@ func _stomp() -> void:
 
 	_cooldown_left = stomp_cooldown
 	stomped.emit(taken)
-	# `explain` DIRECTLY RATHER THAN THROUGH `refused`, because neither of these is a refusal --
-	# the ability fired. The base class's door is the one line on screen that says what a control
-	# just did, and a stomp is the first thing in the game whose OUTCOME needs it rather than its
-	# rejection. Emitting a success on a signal named `refused` would read as one for anything that
-	# later listens for real refusals -- a feed, a tutorial, an audit counting failed presses.
-	explain(
+	# `note` RATHER THAN `explain`, because neither of these is a refusal -- the ability fired.
+	# These two lines are the reason [MouseControl] has a second door at all: sent down the refusal
+	# channel they came out on screen as **BLOCKED: the ground gives way beneath you**, which is
+	# what a channel named for one voice does to a message written in the other.
+	note(
 		"the ground gives way beneath you" if taken > 0
 		else "solid ground -- nothing under here"
 	)
 
 
+## The surface half of a stomp: a ring of dust, and a thump in the camera.
+##
+## SPAWNED IN THE WORLD, WATCHED OR NOT. The dust is a thing that happens in the yard rather than a
+## thing one player is shown -- an enemy Sneak lying in the grass should see a Brute testing the
+## ground twenty metres away, because that is exactly the information the stomp is meant to give
+## away in exchange for what it learns. That makes it the opposite of the sonar echo, which is one
+## Sneak's private hearing and is gated on `watched()`.
+##
+## THE SHAKE IS THE OPPOSITE, and belongs to one pair of eyes: there is one camera on this machine
+## and it is the local viewer's. FELT AT A DISTANCE, though, and falling off with it -- a Brute
+## stamping beside you should rattle your view whoever is driving it. That is not a leak: a Brute
+## on the lawn is a mouse standing in the open, in plain sight, doing the loudest thing in the
+## game. What the shake never says is whether the stomp FOUND anything, which is the rule the
+## whole ability is built around.
+##
+## ON A CLIENT THIS RUNS FOR ITS OWN MOUSE ONLY, which is the known gap. A remote Brute's stomp
+## reaches this machine as a collapsed cell if the crew may know about it, and as nothing at all
+## if it may not -- so its dust does not travel. Fixing that is a one-shot world event on the wire
+## (`SONAR_ECHO` is the pattern), and it is deliberately not built here: the message would have to
+## be filtered per-crew or it would announce every stomp on the map, which is a bigger question
+## than a dust cloud.
+func _kick_up_dust(here: Vector2i) -> void:
+	# Seeded from the cell so both ends of a wire draw the same cloud. Nothing compares them; it
+	# costs one integer and removes a class of "why do the screenshots differ" question.
+	StompDust.burst(
+		_network, _network.cell_to_world(0, here) + Vector3.UP * 0.02, here.x * 73856093 ^ here.y
+	)
+
+	var rig := get_tree().get_first_node_in_group(CameraRig.RIG_GROUP) as CameraRig
+	var watcher := director().local_mouse() if director() != null else _player
+	if rig == null or watcher == null:
+		return
+	# Full trauma under your own feet, nothing past the falloff. Squared so the strong half of the
+	# curve is close in -- a linear falloff has the whole yard feeling a faint tremor, which is
+	# both noisy and, at the edges, a hint that something happened somewhere you cannot see.
+	var distance := watcher.global_position.distance_to(_player.global_position)
+	var nearness := 1.0 - clampf(distance / stomp_shake_range, 0.0, 1.0)
+	rig.shake(stomp_shake * nearness * nearness)
+
+
+## Where a stomp's tremor radiates from, regardless of what was under the lawn.
+##
+## THE CENTRE OF EACH LAYER IT COULD HAVE REACHED, not the cells it found. `stomp_cells` only
+## returns cells that are actually dug, so a stomp over solid earth returns nothing and would
+## radiate nothing -- which would make the *absence* of a tremor the same free answer the ability
+## spends ten seconds refusing to give. This says "the shock arrived on planes 1 and 2 under this
+## spot" and lets the tremor find whatever open corridor is near it.
+##
+## EACH SEED CARRIES ITS OWN REACH -- `[plane, cell, radius]`. The tremor is *the collapse plus a
+## couple of cells*, so it has to be told how far the collapse got, and the two forms of this
+## ability get very different answers: a stomp spreads a patch, an aimed cave-in takes one tile.
+## The first build read `stomp_radius_cells` in both cases and gave a single-cell cave-in a
+## four-cell cloud of dust, which is not a near miss, it is weather.
+func _tremor_seed_cells(here: Vector2i) -> Array:
+	var seeds: Array = []
+	var deepest := mini(stomp_max_plane, TunnelNetwork.PLANE_COUNT - 1)
+	for plane in range(1, deepest + 1):
+		var radius := stomp_radius_cells - float(plane - 1)
+		if radius < 0.0:
+			break
+		seeds.append([plane, here, radius])
+	return seeds
+
+
+## The near miss: dust out of the ceiling over open corridor near a collapse, and a rattle in the
+## view of anyone underground close enough to feel it.
+##
+## WIDER THAN THE COLLAPSE, BY DESIGN. `tremor_extra_cells` is added on top of whatever the
+## collapse itself reached, so this always covers ground the cave-in did not take. Everyone it
+## reaches is someone who was *not* buried -- that is the whole content of the effect. Before it,
+## a collapse two tiles away was completely silent to the mouse it nearly got.
+##
+## PRESENTATION, AND THEREFORE VIEWER-LOCAL AND FILTERED. Two rules, and the second is the one that
+## matters:
+##
+##   The dust is drawn only for the machine's own viewer, like the sonar echo. A host runs this
+##   ability for every human in the match and would otherwise trickle four crews' worth of dust
+##   through its own yard.
+##
+##   And only over cells that viewer's crew MAY KNOW ABOUT. Dust falling in an enemy corridor
+##   would draw its floor plan in the air for anybody within earshot of a collapse -- a Brute could
+##   stomp blindly and read the answer off where the dust landed, which is precisely the free sonar
+##   sweep the ability is built to refuse, arriving by a side door. `TunnelSight.knows` is the same
+##   predicate the minimap and the cutaway ask.
+func _shake_the_earth(seeds: Array) -> void:
+	if seeds.is_empty() or _network == null:
+		return
+	var watcher := director().local_mouse() if director() != null else _player
+	if watcher == null or watcher.get_plane() <= 0:
+		return  # Nobody underground is looking; there is no ceiling to shed for anyone.
+
+	var sight := get_tree().get_first_node_in_group(TunnelSight.SIGHT_GROUP) as TunnelSight
+	var watching := watcher.get_plane()
+	var strongest := 0.0
+	var here := _network.world_to_cell(watcher.global_position)
+
+	for seed_entry: Array in seeds:
+		var plane: int = seed_entry[0]
+		var centre: Vector2i = seed_entry[1]
+		# The layer the shock hit, and the one under it -- the floor that just moved is somebody
+		# else's ceiling. Deeper than that is out of reach for the same reason the collapse is.
+		if watching != plane and watching != plane + 1:
+			continue
+		var radius: float = float(seed_entry[2]) + tremor_extra_cells
+		if watching == plane + 1:
+			radius -= 1.0  # A layer further from it, so a little less of it arrives.
+		if radius <= 0.0:
+			continue
+
+		var span := ceili(radius)
+		for dx in range(-span, span + 1):
+			for dy in range(-span, span + 1):
+				var cell := centre + Vector2i(dx, dy)
+				var away := Vector2(dx, dy).length()
+				if away > radius or not _network.is_dug(watching, cell):
+					continue
+				if sight != null and not sight.knows(watcher.team, watching, cell):
+					continue
+				CeilingDust.fall(
+					_network,
+					_network.cell_to_world(watching, cell),
+					TunnelNetwork.SPACING,
+					cell.x * 73856093 ^ cell.y ^ watching
+				)
+		strongest = maxf(
+			strongest, 1.0 - clampf(Vector2(here - centre).length() / radius, 0.0, 1.0)
+		)
+
+	if strongest <= 0.0:
+		return
+	var rig := get_tree().get_first_node_in_group(CameraRig.RIG_GROUP) as CameraRig
+	if rig != null:
+		rig.shake(tremor_shake * strongest * strongest)
+
+
 ## Everyone standing in the cell as it comes down (GDD section 3).
 ##
 ## Credited to the Brute, which matters for the feed and for anything that later counts who did
-## what -- a cave-in is a kill you earned, not an act of God. The damage is deliberately enormous
-## rather than exact: this is a roof landing on you, and a Brute surviving it on high health would
-## read as the mechanic being broken rather than as the Brute being tough.
+## what -- a cave-in is one you earned, not an act of God.
+##
+## `[REVISED]` BURIED, NOT SCRUFFED. [method Mouse.bury] rather than a nine-thousand-point hit --
+## same outcome, different word, and the word was the point: nobody wrestled you, a cubic metre of
+## earth arrived where you were standing. The blunt damage is still what does it underneath, and
+## still deliberately enormous rather than exact: this is a roof, and a Brute surviving one on high
+## health would read as the mechanic being broken rather than as the Brute being tough.
 func _bury(plane: int, cell: Vector2i) -> void:
 	for node in get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
 		var mouse := node as Mouse
@@ -346,4 +524,4 @@ func _bury(plane: int, cell: Vector2i) -> void:
 			continue
 		if _network.world_to_cell(mouse.global_position) != cell:
 			continue
-		mouse.take_hit(9999.0, mouse.global_position, 0.0, _player)
+		mouse.bury(_player)

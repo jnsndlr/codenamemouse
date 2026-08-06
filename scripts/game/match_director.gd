@@ -104,6 +104,15 @@ const SEATS: Array[Dictionary] = [
 ## disengaging and going to refill a real option rather than a concession. Section 2 asks
 ## specifically that this not be tuned away.
 @export var broke_respawn_seconds: float = 20.0
+## Extra seconds on top, for a mouse the roof came in on ([method Mouse.bury]).
+##
+## ZERO, AND DELIBERATELY LEFT THERE. Burial arrived as a *word*: a collapse is not a scruffing and
+## should not be called one. Whether digging yourself out should also take longer than getting up
+## off the floor is a genuinely separate question -- it changes what the Brute's ability is worth
+## and how much a corridor costs to stand in -- and it is the sort of thing that should be decided
+## by playing rather than inherited from a rename. The dial is here so that decision is one number
+## when somebody wants to make it.
+@export var buried_extra_seconds: float = 0.0
 ## How far off the spawn point each arrival is placed. See `_send_home`: mice sharing a point
 ## do not stand on each other, they launch.
 @export var spawn_spread: float = 0.4
@@ -729,12 +738,27 @@ func _on_scruffed(mouse: Mouse, by: Mouse) -> void:
 	# READ BEFORE THE CHARGE. A crew on its last cheese pays for this respawn at the normal rate
 	# and goes broke for the next one -- charging first would take the cheese and then bill the
 	# same death for the broke timer, which is the one life you already paid for.
-	_down[mouse] = respawn_wait(mouse.team)
+	# BURIED IS A LONGER WAIT AND THE DIAL IS AT ZERO. `buried_extra_seconds` exists so that "the
+	# roof costs more than a paw" is one number rather than a refactor -- and it starts at nothing,
+	# because renaming an outcome is a change to what the game SAYS and lengthening a respawn is a
+	# change to what it costs, and the two arrived in one request wearing the same coat.
+	_down[mouse] = respawn_wait(mouse.team) + (
+		buried_extra_seconds if mouse.was_buried() else 0.0
+	)
 	# The life, charged at the moment it is spent rather than when the mouse stands back up. You
 	# are down, the crew is already a cheese poorer, and the counter ticking as you hit the dirt
 	# is the whole reason it is on screen (GDD section 10).
 	_spend_cheese(mouse.team, 1)
-	if by != null:
+	if mouse.was_buried():
+		# Named even with nobody to credit, unlike a scruff. A collapse is the one way to go down
+		# that has no attacker in half the cases that matter -- caught in your own Engineer's
+		# corridor, or in a stomp from a Brute you never saw -- and "nothing appeared in the feed"
+		# is how a player concludes the game glitched rather than that the ceiling arrived.
+		if by != null:
+			event.emit("%s buries %s" % [by.get_display_name(), mouse.get_display_name()])
+		else:
+			event.emit("%s is buried" % mouse.get_display_name())
+	elif by != null:
 		event.emit("%s scruffs %s" % [by.get_display_name(), mouse.get_display_name()])
 
 

@@ -2095,9 +2095,110 @@ can close behind itself. That is the open question this creates and it is a play
 the Engineer proves uncatchable without it, the fix is a barricade that buys longer, not the
 cave-in coming back.
 
+#### Then the feel pass, and what the screenshots caught that prose could not
+
+Dust and a camera thump on the stomp; crew colour, two glyphs and a departing pulse on the sonar.
+All presentation, no new rules — and it still turned up three things, every one of them found by
+looking at a picture rather than by reading the code that produced it.
+
+- **The dust was a blob.** Fourteen billboarded quads at 0.42m and 0.85 alpha, all born at the
+  Brute's feet, closed into a single beige disc wider than the mouse and hid it completely. In
+  prose *"a ring of dust puffs thrown outward"* describes the intended effect and that blob
+  equally well, which is the whole argument for `tools/stomp_shot.gd` existing. The fix was three
+  numbers and two ideas: **born already out on the ring** rather than at the centre, and a
+  **procedurally generated radial falloff texture** — a flat-coloured quad is a *square*, and the
+  shape of a dust puff is entirely in its edge.
+- **A success was being announced as a failure.** `MouseControl.explain` rides `dig_refused`,
+  which is the one line of HUD that says why a key did nothing — and `depth_indicator.gd` labels
+  it **BLOCKED:**. The stomp is the first control whose *outcome* needs narrating, so the screen
+  read `BLOCKED: the ground gives way beneath you`. A channel named for one voice will be read in
+  that voice by everything downstream however carefully the sender phrases it, so there is a
+  second signal now (`dig_noted`) and a second door (`MouseControl.note`).
+- **The echo's crew colour was technically present and practically invisible.** `PRIMITIVE_LINES`
+  draws a hairline one pixel wide at any zoom; sampling the first build gave `0.88,0.77,0.74` for
+  what should have been a strong red — the pale ground, essentially. It is a translucent wash with
+  a thick border now, built from triangles. Colour needs somewhere to *be*.
+
+**The one rule the dust has to obey is that it must not say whether it worked**, for exactly the
+reason the ability refuses to. A bigger cloud over a tunnel would rebuild the free sonar sweep in
+particles. So it is fired *above* the puppet check and above every branch that knows what was
+found — it structurally cannot come to depend on the answer — and `stomp_shot.gd` photographs the
+same moment over a corridor and over bare earth so the claim can be checked by eye. Put the two
+side by side; if you can tell which is which, it is broken.
+
+**Whose corridor a mark names had to go on the wire**, and that is the only part of this pass that
+is not local. A client's network holds what its own crew knows, so a cell sonar has just found is
+usually one it has never heard of — asking it locally returns "nobody knows about this", which
+renders as a junction, and *every enemy tunnel would draw as neutral*. One byte per mark and per
+echo cell. `replication_audit` asserts it survives the crossing, with the three fixtures carrying
+three different values so a decoder returning a constant cannot pass; verified by making
+`to_bytes` write `SHARED` and watching it go red.
+
+#### A tuning pass, a word, and the near miss
+
+Four changes that read as polish and are not: three of them alter what the ability *means* to the
+people it happens to.
+
+- **The patch is a tile wider** — radius 2.2, thirteen cells on plane 1. At 1.2 the stomp asked
+  more of the Sneak's mark than a mark can give: cant names a cell, a Brute has to find the lawn
+  above it by eye, and one tile out meant the whole ten seconds bought nothing. The taper and the
+  plane-3 cap are untouched, so the shock got a wider mouth and no more depth. **The audit's
+  footprint check had to be rebuilt around it**, which is the useful part: the old geometry
+  asserted a five-cell plus-shape and would have gone on passing had the numbers been reverted
+  behind it. It now tests one offset on two planes — a diagonal neighbour is inside the shock on
+  plane 1 and outside it on plane 2 — plus a cell at 2.236 against a radius of 2.2, which is where
+  a radius quietly rounded up would show.
+- **Buried, not scruffed.** `Mouse.bury` and `was_buried`, a feed line, a HUD word, and one spare
+  bit of the pose flags so a client says the same thing. *Scruffed* is something a mouse does to
+  you; a collapse is not that. It is also the only way to go down that routinely has **no attacker
+  to name** — caught in your own Engineer's corridor, or under a Brute you never saw — so the feed
+  says *"NIBS is buried"* rather than staying silent, which is otherwise how a player concludes the
+  game glitched. **The cost is unchanged and the dial is at zero**: `buried_extra_seconds` exists
+  so "the roof should cost more than a paw" is one number, and renaming an outcome should not
+  smuggle in a balance change.
+- **The near miss.** Ceiling dust over open corridor near a collapse, and a smaller camera shake
+  for anyone underground inside it — deliberately reaching **wider** than the collapse, so everyone
+  it touches is somebody who was *not* buried. Before this, a collapse two tiles away was
+  completely silent: you were either buried or entirely unaware, which is a strange thing for the
+  most dangerous event underground to be.
+- **The echo lasts thirty seconds** instead of 1.8. It was a shimmer, which made the outline
+  decoration and the single mark the whole product of the ability — backwards, since the outline
+  is the half that says what shape the thing is and whose. Outline as a **reading** that goes
+  stale, mark as a **record** that persists: the same loud-and-temporary against
+  quiet-and-permanent pairing `spotting.gd` already uses for mice. The shimmer had to be re-timed
+  with it — a sine pulse that reads as *arriving* over 1.8 seconds reads as a fault over thirty —
+  so it now decays out over the first second and a half and the outline holds flat.
+
+**The dust is an M5 rule wearing a particle effect, and it gets an invariant.** Ceiling dust is
+drawn over open corridor, so unfiltered it would let a Brute stomp blindly at a wall and read the
+enemy's floor plan off where the dust landed — the free sonar sweep the ability spends ten seconds
+refusing to be, arriving by a side door. It is filtered through `TunnelSight.knows`, the same
+predicate the minimap and the cutaway ask, and `match_audit`'s new `tremor` check digs an enemy
+corridor that is dug, in range, and on the viewer's own plane so that *only knowledge* separates
+it — per the standing rule that a filter must be shown a case the other rules would have
+permitted. Verified by deleting the filter and watching it name the leak.
+
+**Two more things the screenshots caught**, which is now three passes running:
+
+- **The aimed cave-in was dusting four cells for a one-cell collapse.** The tremor read
+  `stomp_radius_cells` whichever form had fired, so a surgical seal produced a cloud. Each seed
+  carries its own reach now — zero for the aimed form, the taper for the stomp — and the tremor is
+  *the collapse plus a couple of cells* in both.
+- **The ceiling dust was the wrong colour, and only underground.** In the stomp's sandy hue it
+  landed within a few percent of lamplit corridor wall and read as patches of *glow* rather than
+  falling grit. Pulled toward grey and down to a third of the surface dust's opacity. Same
+  generated falloff texture, because it is the same earth — different light.
+
 **Still to build in 8a:** *Slam*, and a verdict on corking (which is geometry rather than code —
 a one-cell corridor plus body-blocking — so it is a playtest, not a feature). Brute bots stay
 Generalists until Slam exists.
+
+> **A remote Brute's dust does not travel, and that is a known gap rather than an oversight.** The
+> effect runs wherever the ability runs — the host for every mouse, a client for its own — so a
+> client does not see another Brute's stomp. Closing it means a one-shot world event on the wire
+> (`SONAR_ECHO` is the pattern), and the message would have to be filtered per crew or it would
+> announce every stomp on the map. That is a hidden-information question wearing a dust cloud, and
+> it wants deciding rather than defaulting.
 
 **8b — The world:** the Cat first, on a fixed schedule. Then the Crow. Does the match
 get better when they show up — as threat *and* as respite?
@@ -2199,6 +2300,18 @@ Ten suites in `tools/`, all `--script` runners. Three shapes, and the distinctio
   rule check can see. `bot_soak` printing cells-per-mouth is what told a corridor from a scatter;
   `screenshot_probe` asserts a decoded image with more than one colour in it.
 
+> **The shot probes answer a fourth question, and M8a is what made it explicit: *does it look like
+> what it is called?*** Nothing in an audit can fail on a dust cloud that has closed into a beige
+> disc over the mouse, on a crew colour that is a hairline against pale ground, or on a success
+> printed under the word BLOCKED — all three shipped, all three were caught by opening a `.png`.
+> The rule that came out of it: **a shot probe must photograph the thing it is named after, and it
+> must photograph the case that would look the same if the feature were broken.** `sonar_probe`
+> now digs two crews' corridors under one scan, because a picture with one crew in it cannot tell
+> a working colour rule from a hardcoded tint; `stomp_shot` takes the same frame over a tunnel and
+> over bare earth, because the stomp's whole design is that those two must be indistinguishable.
+> It is the screenshot version of *"a check on a filter must observe a case the other rules would
+> have permitted"*.
+
 **The recurring failure is a check that cannot fail**, caught five times with a different cause
 every time: scaffolding that silently no-opped and left every scenario reporting `ok`; a subject
 arranged so the rule could not bite; timing that happened to be favourable; a caller left behind
@@ -2272,6 +2385,21 @@ the Brute and grown its surface form — the **stomp** — which closes the `[DE
 carried since M4 and makes §5's counterplay web a loop for the first time: a Sneak's cant mark is
 now something another class can act on. `match_audit` is 21 checks; the new `stomp` check is the
 one that matters, because the rule it guards (a stomp over nothing still costs the cooldown) is a
-hidden-information leak that no playtest could see. **Slam and the corking verdict are what is
-left of 8a**, and the map verdict above is what 8a's real question — *does the Engineer start
-digging deeper?* — is still waiting on.
+hidden-information leak that no playtest could see.
+
+**Then the feel pass, which is what makes the handoff legible**: dust and a camera thump on the
+stomp, and cant that names *whose* corridor it found — crew colour on the echo and the mark, a
+reticle instead of a rune when the tunnel is theirs, and a pulse that leaves whether or not
+anything answers. One byte of it crosses the wire and is asserted there. Three bugs came out of
+photographing it that no audit could have seen, written up under M8a.
+
+**Then a tuning pass that turned out not to be one.** The patch is a tile wider so a cant mark is
+enough to aim it; a mouse caught in a collapse is **buried** rather than scruffed, with its own
+feed line, HUD word and pose bit; the echo lasts thirty seconds rather than 1.8, which makes the
+outline a *reading* and the mark a *record*; and a collapse now dusts the ceiling and rattles the
+view of anyone underground nearby who was **not** caught — the near miss, which until now was
+completely silent. `match_audit` is 22 checks: the new one guards the dust against being a free
+sonar sweep, which is what it would be unfiltered.
+
+**Slam and the corking verdict are what is left of 8a**, and the map verdict above is what 8a's
+real question — *does the Engineer start digging deeper?* — is still waiting on.

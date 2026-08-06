@@ -399,7 +399,7 @@ without these.
 |---|---|
 | Fantasy | The big one who says "not through here" |
 | Stats | High health, slow, heavy damage |
-| **Unique capability** | **Brings tunnels down.** `[REVISED]` **Built** — the whole of un-digging, in two postures: **`Q` underground** caves in the one cell you are pointing at, at arm's length; **`Q` on the lawn** is a **stomp** that drops a small patch of the layers beneath your feet (planes 1–2 only). |
+| **Unique capability** | **Brings tunnels down.** `[REVISED]` **Built** — the whole of un-digging, in two postures: **`Q` underground** caves in the one cell you are pointing at, at arm's length; **`Q` on the lawn** is a **stomp** that drops a patch of the layers beneath your feet (planes 1–2 only) — thirteen cells one layer down, five the layer under that. Anyone caught is **buried** (§6). |
 | Ability | *Slam* — short-range knockback; **makes carriers drop the flag**. Still to build. |
 | **Shifts rock** | **Built (M4)** — the only class that breaks a barricade (3 swings) or a boulder (**5 per cell**, so a four-cell rock is 20 and comes apart a quarter at a time). Anyone else may swing at one all day. |
 | Underground | Very slow, but **plugs a tunnel completely** |
@@ -431,11 +431,35 @@ without these.
 > them.
 
 > **The patch tapers with depth, and the floor is a design number rather than a consequence.**
-> Full radius on the layer directly below, one cell narrower for each layer under that: five
-> cells on plane 1, one cell on plane 2, nothing on plane 3. A foot through a roof does not shake
-> the cellar evenly. And **plane 3 is out of reach no matter how the radius is tuned**, because
-> "dig deeper" is the Engineer's whole answer to a Brute and the web is only a loop while that
-> answer exists.
+> Full radius on the layer directly below, one cell narrower for each layer under that: thirteen
+> cells on plane 1, five on plane 2, nothing on plane 3. A foot through a roof does not shake the
+> cellar evenly. And **plane 3 is out of reach no matter how the radius is tuned**, because "dig
+> deeper" is the Engineer's whole answer to a Brute and the web is only a loop while that answer
+> exists.
+>
+> `[REVISED]` **The patch is a tile wider than it was** (radius 2.2, from 1.2 — five cells on plane
+> 1 originally). At the old size it asked more of the Sneak's mark than a mark can give: cant names
+> a *cell*, the Brute has to find the lawn above it by eye, and being one tile out meant the whole
+> ten seconds bought nothing. Thirteen cells is a patch you can aim from a mark, which is what
+> makes the handoff a play rather than a precision test. The taper below it is untouched — widening
+> the mouth of the shock did not widen its depth.
+
+> **Being caught in a collapse is being *buried*, not scruffed (§6).** Same outcome, different
+> word, for a good reason: nobody wrestled you.
+
+> **The near miss is the other half, and it used to be silent.** Standing in a corridor when a
+> collapse lands two tiles away produced *nothing at all* — you were either buried or entirely
+> unaware. Now the earth answers: **dust trickles from the ceiling over open corridor nearby**, and
+> anyone underground close enough gets a rattle in the view. The dusted radius is deliberately
+> **wider than the collapse**, so everyone it reaches is somebody who was *not* caught. That is the
+> whole content of it — a warning you get to react to, and reacting to it is a mouse deciding to be
+> somewhere else.
+>
+> It says *something came in near here* and nothing more. The motes fall straight down over the
+> cell they are in, with no direction and no distance to triangulate from, and — the part that
+> matters for §3 — **only over corridor your own crew already knows about**. Dust over an enemy
+> tunnel would draw its floor plan in the air for anyone within earshot of a collapse, which is
+> the free sonar sweep the stomp refuses to be, arriving through a particle effect.
 
 > **Paving stops a stomp.** You cannot stamp through a slab, so the earth under the patio is the
 > one earth a Brute cannot reach from above — which quietly makes a no-surface zone (§3) a thing
@@ -526,10 +550,48 @@ without these.
 |---|---|
 | Fantasy | The one you don't see until it's too late |
 | Stats | **Lowest health**, fastest, **highest burst damage** |
-| **Unique capability** | **Sonar** — briefly sounds one layer below and leaves contestable thieves' cant for the team |
-| Ability | *Fade* — hard to see while moving slowly; broken by attacking or sprinting |
+| **Unique capability** | **Sonar** — briefly sounds one layer below and leaves contestable thieves' cant for the team. `[REVISED]` **Built (M5), extended (M8a)** — the echo and the mark now name **whose corridor** was found, not merely that one is there. |
+| Ability | *Fade* — hard to see while moving slowly; broken by attacking or sprinting. Still to build. |
 | Weakness | Dies to anything that touches them. Loses every fair fight. |
 | Role | Scouting, assassin, counter-Engineer, cache raider |
+
+> `[REVISED]` **Cant names the crew, and that is what turned a note into an order.** Until M8a a
+> mark said *"a way runs beneath this place"* and stopped — a fine thing for a scout to write and
+> a useless thing for a Brute to read, because the one question a Brute has before putting a foot
+> through a roof is **whose roof**. Now the mark carries it, on two channels that answer two
+> different questions and are deliberately not the same channel:
+>
+> - **Colour is the crew whose corridor it is** — blue, red, or a blend for a junction both crews
+>   know. Same for the echo, so the floor plan you hear reads as *their* route or *ours* at a
+>   glance rather than as geometry you then have to place.
+> - **The glyph is whether that crew is the one who scratched the mark.** Your own tunnels keep the
+>   forked downward rune. Theirs get a **reticle** — four corner brackets closing on a spot, which
+>   is the only glyph in the game that is an instruction rather than an observation. What it is
+>   telling a Brute to do is stand here.
+>
+> The reticle is read from the *scratching* crew's side, always, so an enemy Sneak who finds the
+> mark sees a target drawn on its own tunnel. That is the correct reading and rather a good one:
+> you are looking at somebody else's plan for you.
+
+> `[REVISED]` **The two live on two clocks, and that pairing is the design.** The **outline** is a
+> **reading** and readings go stale — it stays lit for **thirty seconds**. The **mark** is a
+> **record** and records persist — it stays until an enemy Sneak rubs it out. Loud and temporary
+> against quiet and permanent, which is the same pairing spotting already uses for mice.
+>
+> The outline used to be a 1.8-second shimmer, which made it decoration and made the single mark
+> the entire product of the ability — backwards, because the outline is the part that says what
+> shape the thing is and whose. Half a minute is long enough to sound a corridor, walk to your
+> Brute and still have it on screen; short enough that it is never a map. **It remains one Sneak's
+> private readout** — only the mark is shared with the crew — so §3's boundary is exactly where it
+> was, and what changed is that the scout gets time to use what it heard.
+
+> **The pulse goes out whether or not anything answers.** A ring of sound leaving the Sneak's own
+> floor, running out to the scan radius. It fixes the same failure the stomp had — press `Q` over
+> bare earth and the whole ability used to be one line of text — and it matters that the feedback's
+> shape matches the mechanic's: **you always sound, you do not always hear something.** The pulse
+> is one fixed colour for that reason. The moment it took the hue of what it found it would be
+> answering during the half second the answer is still travelling, and the echo is what a Sneak is
+> supposed to read.
 
 **Concealment model `[DECIDED]`: camouflage while stationary.** Octopus-style — a shader
 samples the surrounding terrain and blends the Sneak into it. Effectiveness scales with
@@ -616,6 +678,13 @@ No hard counters — every answer costs position, cheese, time, or exposure. Not
 > where to stand — which is the arrow from sonar, and the only thing in the game that makes one
 > class's information another class's action. And it **never refuses for finding nothing**, so a
 > Brute cannot substitute for a Sneak by probing; the arrow points one way.
+>
+> **The arrow needed a third thing, and it is why cant now names the crew (§4).** *"A tunnel is
+> here"* is not an instruction a Brute can act on — half the time the corridor is its own crew's,
+> and collapsing that is friendly fire it had no way to see coming. A mark that says **whose**
+> makes the middle arrow a real handoff: a Sneak finds it, the mark says *theirs*, the Brute walks
+> over and stands on it. Three classes, one decision, no conversation required — which is what a
+> counterplay web is supposed to feel like from inside a match.
 
 ---
 
@@ -628,6 +697,19 @@ Simple by design (Pillar 1). Simple combat also keeps netcode sane.
 - **Thrown weapons are slow arcing projectiles**, never hitscan. Dodgeable on reaction.
 - **Health**, no armor, no shields. Regenerates after 5s out of combat `[ASSUMED]`.
 - **Scruffed, not killed** — drops flag and cheese, costs the team 1 cheese.
+- **Buried**, when it was a collapse rather than a paw. `[REVISED]` **Built (M8a)** — the same
+  outcome by every mechanical measure (drop, cheese, respawn) under a different word, because
+  *scruffed* is something a mouse does to you and a cave-in is not that: nobody wrestled you, a
+  cubic metre of earth arrived where you were standing. It is the only way to go down that
+  frequently has **no attacker to name** — caught in your own Engineer's corridor, or under a
+  Brute you never saw — so the feed says *"NIBS is buried"* rather than nothing at all.
+
+  > **It costs the same as a scruffing, and the dial to change that is at zero.** Whether digging
+  > yourself out should take longer than getting up off the floor is a real question and a separate
+  > one: it changes what the Brute's ability is worth and what a corridor costs to stand in. That
+  > wants deciding by playing rather than inheriting from a rename, so `buried_extra_seconds` exists
+  > and is nothing. **Still not a death** — §1's tone holds, the mouse is under the earth looking
+  > annoyed.
 - **Displacement matters more than damage.** Slam, cave-ins, and hazards move mice around.
 - **Fully deterministic.** No crits, no random damage, no headshots.
 

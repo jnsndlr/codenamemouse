@@ -434,6 +434,17 @@ func _check_the_cant_world(host_said: String, client_said: String) -> void:
 
 	_check("own cant made before its arena appears to a Generalist", own_before_join)
 	_check("enemy cant never crosses to that Generalist", not enemy_leaked_to_generalist)
+
+	# WHOSE CORRIDOR THE MARK NAMES, which is a field and not a rule -- and therefore the kind of
+	# thing that gets dropped on the wire and is never missed, because the glyph it draws is still
+	# A glyph. The host's control names blue's tunnel; the client has to say the same. Asserted
+	# against `@RED/BLUE` rather than against `/BLUE` alone so a decoder that returned a constant
+	# for every mark could not satisfy it -- the deep control is deliberately SHARED and the blue
+	# surface one deliberately BLUE, so all three values are in play in one picture.
+	var tunnel_team_crossed := false
+	for hold: String in generalist_holds:
+		tunnel_team_crossed = tunnel_team_crossed or hold.contains("0.12,12@RED/BLUE")
+	_check("and it carries whose corridor it names, not just where", tunnel_team_crossed)
 	_check("the same enemy cant crosses while the server says it is a Sneak",
 		host_said.contains("audit sonar made remote a Sneak") and enemy_read_by_sneak)
 	_check("enemy cant on another depth never crosses to that Sneak",

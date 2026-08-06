@@ -1,6 +1,13 @@
+class_name CameraRig
 extends Node3D
 ## Fixed isometric camera that follows the player, leads toward the cursor, and pulls
 ## back as they pick up speed.
+##
+## `class_name` AND A GROUP, added when the stomp needed to shake it. Everything that had wanted
+## the rig until then was authored beside it in the scene and could reach it by NodePath (the
+## minimap and the look panel both do). An ability cannot: most mice in a match are spawned long
+## after the scene was saved, so a control on one has no path to anything -- the same problem
+## [MouseControl] solves for the network by looking its subject up in a group.
 ##
 ## The angles are exported and applied at runtime rather than baked into the scene file,
 ## because "what does isometric actually feel like" is a question you answer by dragging
@@ -81,6 +88,20 @@ extends Node3D
 ## makes the crawl worse rather than better. The look panel drives both from one slider.
 @export_range(1.0, 20.0, 1.0) var pixel_size: float = 4.0
 
+@export_group("Shake")
+## Peak offset at full trauma, in metres. Small on purpose: the view is orthographic and quite
+## zoomed in, so a metre here is a large fraction of the screen. This is a thump, not an
+## earthquake.
+@export var shake_offset: float = 0.28
+## Peak roll at full trauma, in degrees. Rotation is what makes a shake read as force rather than
+## as the camera being dragged, and a little of it goes a very long way at this zoom.
+@export var shake_roll_degrees: float = 1.1
+## How fast trauma bleeds off, per second. The shake ends well before the dust does -- a camera
+## still moving after the event that caused it reads as a bug.
+@export var shake_decay: float = 2.4
+## How fast the noise is sampled. Higher is more of a rattle, lower is more of a lurch.
+@export var shake_frequency: float = 26.0
+
 @export_group("Follow")
 @export var target: NodePath
 ## Higher snaps to the player faster. Frame-rate independent.
@@ -107,11 +128,27 @@ var _speed_signal: float = 0.0
 ## lerp_angle, which always takes the short way round -- so the ninth quarter turn is a
 ## quarter turn, not two and a bit revolutions.
 var _wanted_yaw: float = 0.0
+## 0..1. Squared before it becomes movement, which is the whole trick: a linear decay spends most
+## of its life in a range where the camera is perceptibly but pointlessly drifting, and squaring
+## makes a shake hit hard and then actually stop.
+var _trauma: float = 0.0
+## Sampled rather than randomised per frame. `randf` at 120Hz is white noise and looks like the
+## image tearing; a continuous function looks like something heavy landing nearby.
+var _shake_noise: FastNoiseLite
+var _shake_time: float = 0.0
+
+
+## So an ability spawned mid-match can find the one camera without a path to it.
+const RIG_GROUP: StringName = &"camera_rig"
 
 
 func _ready() -> void:
+	add_to_group(RIG_GROUP)
 	_target = get_node_or_null(target) as Node3D
 	_camera_rest = _camera.position
+	_shake_noise = FastNoiseLite.new()
+	_shake_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	_shake_noise.frequency = 1.0
 	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	_wanted_yaw = deg_to_rad(yaw_degrees)
 	rotation.y = _wanted_yaw
@@ -162,6 +199,10 @@ func _physics_process(delta: float) -> void:
 	# Last, because it reads the zoom that was just written -- a fat pixel is a fraction of
 	# the orthographic size, so it changes width every frame the view is breathing.
 	_align_to_pixel_grid()
+	# After the grid alignment, and that order is not arbitrary: the alignment WRITES
+	# `_camera.position` outright, so a shake applied before it would be thrown away every frame
+	# that pixel snapping is on. This adds to what the alignment decided.
+	_apply_shake(delta)
 
 
 ## Turn the world a quarter at a time, and glide rather than snap -- a hard cut leaves you with
@@ -220,6 +261,53 @@ func _align_to_pixel_grid() -> void:
 ## the correction is never more than half a pixel in either direction.
 func _fraction(value: float) -> float:
 	return value - roundf(value)
+
+
+## Something heavy happened. `amount` is trauma in 0..1 -- 1 is a Brute's boot at your feet.
+##
+## ADDITIVE AND CLAMPED, so two stomps in the same second do not multiply into a seizure, and the
+## second one still registers rather than being swallowed because the first is already running.
+func shake(amount: float) -> void:
+	_trauma = clampf(_trauma + maxf(amount, 0.0), 0.0, 1.0)
+
+
+## Whether the view is still settling. For the audits, which otherwise have to infer a shake from
+## a camera position that is also being driven by the follow lerp.
+func is_shaking() -> bool:
+	return _trauma > 0.0
+
+
+## Trauma, squared, turned into an offset on the camera's OWN axes and a little roll.
+##
+## SQUARED, which is the one thing worth insisting on: shake strength that decays linearly spends
+## most of its life somewhere between "clearly moving" and "not quite still", and the tail is
+## where a shake stops reading as impact and starts reading as drift. Squaring makes the fall-off
+## steep at the end -- the camera hits hard, then genuinely stops.
+##
+## ON THE CAMERA'S LOCAL AXES, never on the rig's position, for exactly the reason
+## [method _align_to_pixel_grid] gives about itself: the rig is what the follow lerp and the
+## cursor lead read back, and shoving a shake into it would feed the noise into the smoothing that
+## produced it. The rig stays smooth; only the eye is thrown about.
+##
+## THREE DIFFERENT SLICES OF ONE NOISE FIELD rather than three noise objects. They only have to be
+## uncorrelated, and sampling far apart on the y axis achieves that for free.
+func _apply_shake(delta: float) -> void:
+	if _trauma <= 0.0:
+		_camera.rotation.z = 0.0
+		return
+
+	_trauma = maxf(0.0, _trauma - shake_decay * delta)
+	_shake_time += delta * shake_frequency
+	var force := _trauma * _trauma
+
+	_camera.position += Vector3(
+		_shake_noise.get_noise_2d(_shake_time, 0.0) * shake_offset * force,
+		_shake_noise.get_noise_2d(_shake_time, 137.0) * shake_offset * force,
+		0.0
+	)
+	_camera.rotation.z = deg_to_rad(
+		_shake_noise.get_noise_2d(_shake_time, 419.0) * shake_roll_degrees * force
+	)
 
 
 ## Whether the view is still turning. Anything that reads a screen-space direction wants to

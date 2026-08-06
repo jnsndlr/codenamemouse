@@ -550,6 +550,15 @@ func _contacts() -> void:
 
 ## Persistent tunnel locations sounded out by a Sneak. Your crew sees its own cant; an enemy
 ## Sneak sees the marks too, because finding and erasing them is the counterplay.
+##
+## `[REVISED]` IT DRAWS WHAT THE FLOOR DRAWS: crew colour for whose corridor, and a reticle rather
+## than a rune when it is not yours. That agreement is the whole reason to change it. A Brute is
+## the reader this mark was rebuilt for, and a Brute crossing the lawn is looking at the minimap
+## rather than at the ground -- if the two pictures disagreed about which marks were targets, the
+## one you plan from and the one you act on would be different maps.
+##
+## The rule lives in [SonarMark] and is asked, not restated. `marks_enemy_ground` and
+## `tunnel_color` are the same calls the glyph makes.
 func _cant_marks() -> void:
 	if _sonar == null or _director == null:
 		return
@@ -558,9 +567,21 @@ func _cant_marks() -> void:
 		return
 	for mark: SonarMark in _sonar.marks_for(player.team, player.mouse_class, player.get_plane()):
 		var at := _at(mark.global_position)
-		var colour := Team.color_of(mark.owner_team).lerp(Color(0.95, 0.91, 0.72), 0.55)
+		var colour := mark.tunnel_color()
 		var size := cant_size * _ui
 		var stroke := 1.5 * _ui
+		if mark.marks_enemy_ground():
+			# Four corner ticks closing on the spot: the same reticle the floor glyph draws, at the
+			# scale a minimap can afford. Brackets survive being three pixels long; a ring does not.
+			var arm := size * 0.55
+			for corner: Vector2 in [
+				Vector2(-1.0, -1.0), Vector2(1.0, -1.0), Vector2(1.0, 1.0), Vector2(-1.0, 1.0)
+			]:
+				var out := at + corner * size
+				draw_line(out, out - Vector2(corner.x * arm, 0.0), colour, stroke)
+				draw_line(out, out - Vector2(0.0, corner.y * arm), colour, stroke)
+			draw_rect(Rect2(at - Vector2(stroke, stroke), Vector2(stroke, stroke) * 2.0), colour)
+			continue
 		draw_polyline(
 			PackedVector2Array([at + Vector2(-size, -size * 0.35), at, at + Vector2(size, -size * 0.35)]),
 			colour, stroke

@@ -30,6 +30,17 @@ extends Node3D
 ## Why a dig didn't happen. Refusing silently is indistinguishable from the controls being
 ## broken -- the entrance key spent a whole session looking dead for exactly that reason.
 signal dig_refused(reason: String)
+
+## What just happened, when something DID. The same one line of screen, said in the other voice.
+##
+## SPLIT OUT WHEN THE STOMP ARRIVED, and the reason is worth keeping because it is a small lesson
+## about reusing a channel. The stomp is the first control whose *success* needs narrating -- its
+## whole result is underground, so "you brought four cells down" and "there was nothing there" are
+## both news, and both are outcomes rather than refusals. Sending them down `dig_refused` worked
+## exactly as well as the wording of the label allowed, which is to say the HUD cheerfully printed
+## **BLOCKED: the ground gives way beneath you**. A channel named for one voice will be read in
+## that voice by everything downstream, however carefully the sender phrases it.
+signal dig_noted(note: String)
 ## A cell was opened, or a shaft was sunk through one. The routing graph rides on these rather
 ## than rescanning: a dig changes one cell out of five thousand, and a graph that rebuilds itself
 ## to learn that is a graph nobody can afford to keep current.

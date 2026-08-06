@@ -105,3 +105,14 @@ func watched() -> bool:
 func explain(reason: String) -> void:
 	if _network != null and watched():
 		_network.dig_refused.emit(reason)
+
+
+## Say what a control just DID -- to the local viewer, and to nobody else.
+##
+## THE OTHER VOICE, and a separate door because the HUD reads the two differently: a refusal is
+## labelled and a note is not. [method explain] would have carried these too, and the first build
+## of the stomp used it -- which is how "the ground gives way beneath you" came to be printed on
+## screen under the word BLOCKED.
+func note(what: String) -> void:
+	if _network != null and watched():
+		_network.dig_noted.emit(what)

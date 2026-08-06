@@ -414,13 +414,25 @@ crew out of three planes the moment its Engineer goes down.
 **And the Brute can bring a tunnel down.** `Q`, on the cell you're pointing at, one at a
 time, at arm's length. It's aimed rather than automatic on purpose: the cursor is the steering
 wheel, so looking at what you're sealing means not running for a moment. Anyone standing in the
-cell is scruffed. Shaft cells are refused — either end of a ladder would be left starting in
-solid earth. This was the Engineer's until the Brute needed a reason to exist and it turned out
-the two classes had been handed the same verb twice; the Engineer keeps the barricade.
+cell is **buried** — the same outcome as a scruffing by every mechanical measure, under a different
+word, because *scruffed* is something a mouse does to you and a roof landing on you is not that.
+It's also the only way to go down that often has nobody to credit, so the feed says "NIBS is
+buried" rather than nothing at all. Shaft cells are refused — either end of a ladder would be left
+starting in solid earth. This was the Engineer's until the Brute needed a reason to exist and it
+turned out the two classes had been handed the same verb twice; the Engineer keeps the barricade.
+
+**And a collapse is felt by the people it missed.** Dust trickles out of the ceiling over open
+corridor nearby and the view rattles for anyone underground close enough — over a radius
+deliberately **wider than the collapse**, so everyone it reaches is somebody who wasn't caught.
+Standing in a tunnel when a cell came down two tiles away used to produce nothing whatsoever: you
+were buried or you were oblivious. It says *something came in near here* and no more — the motes
+fall straight down with no direction to triangulate from, and **only over corridor your own crew
+already knows about**, because dust over an enemy tunnel would draw its floor plan in the air for
+anyone within earshot of a collapse.
 
 **And the Brute can stomp.** The same key on the lawn, where there is nothing to point at: a foot
-through the roof of whatever is beneath you — a small plus-shaped patch of the layer below, the
-single cell directly under you on the layer beneath that, and **nothing on plane 3**, which is why
+through the roof of whatever is beneath you — thirteen cells of the layer below, five on the layer
+beneath that, and **nothing on plane 3**, which is why
 "dig deeper" is a real answer rather than a stalling tactic. It has **no cursor and it never
 refuses for finding nothing**: a stomp that only fired over a tunnel would let a Brute pace the
 yard tapping `Q` and read the enemy's whole network off which presses bounced, which is the
@@ -428,6 +440,18 @@ hidden-information pillar handed away by a guard clause. Ten seconds is what tha
 a crew with no Sneak to tell them where to stand — and a Sneak's cant mark is now the first piece
 of information in the game that another class can act on directly. **Paving stops it**, so the
 earth under the patio is the one earth a Brute can't reach from above.
+
+**And it throws up dust.** A ring of it off the lawn, a shock ring running out along the ground,
+and a thump in the camera that falls off with distance — so a Brute working a chokepoint registers
+on a teammate holding the nest. The whole result of a stomp is on a layer you cannot see and about
+a third of the time there is no result at all, which would otherwise make the most physical action
+in the game a keypress that plays nothing. **The dust is identical over a tunnel and over bare
+earth**, and that is a rule rather than a coincidence: a bigger cloud when something gave way would
+rebuild the free sonar sweep in particles. It is fired before anything about the outcome is known,
+so it cannot come to depend on it, and `tools/stomp_shot.gd` photographs the same frame over both
+so you can check by eye. Puffs are camera-facing quads with a procedurally generated radial
+falloff — no particle system, no imported texture, the same hand-integrated approach the boulder
+debris uses.
 
 **And the earth has rock in it.** Seeded seams on every plane, with a **different layout on each**
 — getting past one may mean going down a layer, round, and back up, which is what turns digging
@@ -483,9 +507,29 @@ absent, even where the two networks meet. The intersection is real floor in the 
 not donate the connected enemy floor plan. This is the first half of M5's visibility boundary.
 
 **And the Sneak can sound out what lies below.** Press **Q** to pulse through exactly one layer.
-Nearby tunnel cells shimmer briefly on the ground above, then resolve to one persistent piece of
-thieves' cant in the world and on your crew's minimap. An enemy Generalist cannot read it; an enemy
-Sneak can, and can rub it out with **Q** from arm's reach. A mark gives away a place, never the route.
+A ring of sound leaves your own floor, nearby tunnel cells light up on the ground above, and one
+of them becomes a persistent piece of thieves' cant in the world and on your crew's minimap. An
+enemy Generalist cannot read it; an enemy Sneak can, and can rub it out with **Q** from arm's
+reach. A mark gives away a place, never the route. **The pulse goes out whether or not anything
+answers** — you always sound, you do not always hear something, and the feedback should be the
+same shape as the mechanic.
+
+**Two clocks, on purpose.** The lit outline is a **reading** and readings go stale: it stays for
+**thirty seconds**, which is long enough to sound a corridor, walk to your Brute and still have it
+on screen, and short enough that it is never a map. The mark is a **record**: it stays until an
+enemy Sneak rubs it out. The outline is one Sneak's private readout; only the mark is shared with
+the crew, so what the ability gives away is unchanged and what changed is that the scout has time
+to use what it heard.
+
+**And cant says whose corridor it found**, which is what turns a scout's note into a Brute's
+orders. The echo and the mark are **coloured by the crew whose tunnel it is** — blue, red, or a
+blend where both crews know the cell — and the mark's *shape* says whether that crew is the one who
+scratched it: your own tunnels keep the forked downward rune, theirs get a **reticle**. It is the
+only glyph in the game that is an instruction rather than an observation, and what it tells a
+Brute to do is stand here. Read from the scratching crew's side always, so an enemy Sneak who
+finds one sees a target drawn on its own tunnel — which is the correct reading and a good one.
+The minimap draws the same two glyphs in the same two colours, because the map you plan from and
+the ground you act on must not disagree about which marks are targets.
 
 **And an enemy corridor is a dark hole you brought no lamp into.** Lamps are crew property now:
 your own network is warm and readable far ahead, and theirs simply has no light in it. Nothing is
@@ -770,8 +814,11 @@ in** (and on whom, and how often), checks a **stomp takes a tapering patch, neve
 and still spends its cooldown over bare ground** — that last one because a stomp that refused
 would be a free sonar sweep of the whole yard — checks a **barricade blocks the routing graph and only a Brute
 shifts it** (and the supply, and the cooldown, and that the cell comes back afterwards), checks a
-**Sneak sounds exactly one layer down, leaves crew-readable cant, and a rival Sneak can erase it**,
-checks tunnel cells and mouths never leak from one crew's map to the other's, checks that
+**Sneak sounds exactly one layer down, leaves crew-readable cant, and a rival Sneak can erase it**
+— and that the cant records **whose** corridor it names, separately from who scratched it, in the
+scene and across the wire — checks that **a collapse's dust never falls over corridor the viewer's
+crew has not found**, which is the one place a particle effect could hand away the hidden-information
+pillar, checks tunnel cells and mouths never leak from one crew's map to the other's, checks that
 **standing in an enemy corridor reveals what you can see and not the leg round the corner** — and
 that what you saw goes stale and is forgotten on time, and never becomes a cell you own, **and that
 the ground itself stays shut over a corridor you have never seen**, asked of the real cutaway mask
@@ -848,10 +895,22 @@ lid is discarded in a shader that samples that mask with its own idea of where a
 tunnels they belong to". A mask that is perfectly correct and sampled half a cell out passes every
 headless check in the project and still shows you their tunnel. Only a photograph closes that gap.
 
-`sonar_probe.gd`, `rock_top_probe.gd` and `arena_probe.gd` work the same way for the sonar echo and
-cant mark, revealed rock caps, and the arena at large. `menu_shot.gd` photographs the title screen,
-the controls sheet and the pause menu at four window sizes, which is how "test common resolutions"
-gets performed by somebody who would not resize a window twenty times.
+`sonar_probe.gd`, `stomp_shot.gd`, `rock_top_probe.gd` and `arena_probe.gd` work the same way for
+the sonar pulse, echo and both cant glyphs; the stomp's dust; revealed rock caps; and the arena at
+large. `menu_shot.gd` photographs the title screen, the controls sheet and the pause menu at four
+window sizes, which is how "test common resolutions" gets performed by somebody who would not
+resize a window twenty times.
+
+**A shot probe has to photograph the case that would look the same if the feature were broken**,
+which is the screenshot version of the rule about filters above, and it is a rule this project
+learned the expensive way. `sonar_probe` digs *two* crews' corridors under one scan, because a
+picture containing one crew cannot tell a working colour rule from a hardcoded tint — and it
+sounds twice from two places, because the mark lands on the nearest answer and one scan can only
+ever show one of the two glyphs. `stomp_shot` takes the same frame over a corridor and over bare
+earth, because the stomp's entire design is that those two must be indistinguishable. Between them
+they caught a dust cloud that had closed into a beige disc over the mouse, a crew colour that was
+a one-pixel hairline against pale ground, and a success message printed under the word **BLOCKED**
+— none of which any headless check in this project could have failed on.
 
 ```bash
 /Applications/Godot.app/Contents/MacOS/Godot --path . --script tools/screenshot_probe.gd

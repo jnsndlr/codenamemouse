@@ -83,7 +83,12 @@ func _centre_line() -> String:
 
 	var player := _director.get_player()
 	if player != null and player.is_scruffed():
-		return "SCRUFFED  --  back in %d" % ceili(_director.respawn_left(player))
+		# BURIED, when it was the roof rather than a paw. The word is the whole of the difference
+		# at this end -- the wait is the same number unless the director's dial says otherwise --
+		# and it is worth the branch: "SCRUFFED" over a mouse nobody touched, in a corridor that
+		# just stopped existing, reads as the HUD not having noticed what happened.
+		var word := "BURIED" if player.was_buried() else "SCRUFFED"
+		return "%s  --  back in %d" % [word, ceili(_director.respawn_left(player))]
 	return ""
 
 

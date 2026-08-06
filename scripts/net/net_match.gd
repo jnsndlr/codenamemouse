@@ -564,8 +564,12 @@ func _cant_of(viewer_team: int, viewer_class: int, viewer_plane: int) -> String:
 			and not mark.can_be_read_by(viewer_team, viewer_class, viewer_plane)
 		):
 			continue
-		parts.append("%d.%d,%d@%s" % [
+		# `@OWNER/TUNNEL`: who scratched it, then whose corridor it names. The separator is not
+		# cosmetic -- the audits match on `@RED` to mean "a mark red scratched", and a second crew
+		# name joined by anything they also use would start matching those by accident.
+		parts.append("%d.%d,%d@%s/%s" % [
 			mark.plane, mark.cell.x, mark.cell.y, Team.name_of(mark.owner_team),
+			SonarMark.team_label(mark.tunnel_team),
 		])
 	parts.sort()
 	return "[%s]" % " ".join(parts)
@@ -673,6 +677,8 @@ func _broadcast_snapshot() -> void:
 			var flags := 0
 			if mouse.is_scruffed():
 				flags |= Snapshot.Flag.SCRUFFED
+			if mouse.was_buried():
+				flags |= Snapshot.Flag.BURIED
 			if mouse.is_swinging():
 				flags |= Snapshot.Flag.SWINGING
 			flags |= (mouse.get_plane() << Snapshot.PLANE_SHIFT) & Snapshot.PLANE_MASK
@@ -843,7 +849,7 @@ func _send_cant() -> void:
 			# same call the renderer and the audit's report make, or the check they agree on is a
 			# check of three separately maintained opinions.
 			if mark.can_be_read_by(seated[0], viewer.mouse_class, viewer.get_plane()):
-				state.add(mark.owner_team, mark.plane, mark.cell)
+				state.add(mark.owner_team, mark.plane, mark.cell, mark.tunnel_team)
 		_transport.send(peer, state.to_bytes(), false)
 
 
@@ -887,14 +893,15 @@ func _ensure_sonar_echo_links() -> void:
 ## A scan's full outline is private to the mouse that paid the cooldown. The persistent mark is
 ## handled by `_send_cant`; this one-shot is only the brief presentation that leads into it.
 func _on_sonar_scanned(
-	source_plane: int, _target_plane: int, cells: Array[Vector2i], mouse: Mouse
+	source_plane: int, _target_plane: int, cells: Array[Vector2i], owners: Array[int],
+	mouse: Mouse
 ) -> void:
 	if cells.is_empty():
 		return  # Matches local presentation: "nothing answers" produces no empty shimmer.
 	var peer := _peer_for_mouse(mouse)
 	if peer <= Seats.BOT or peer == _net.local_peer():
 		return  # The listen-server player's own Sonar already draws this locally.
-	var bytes := SonarState.echo_to_bytes(source_plane, cells)
+	var bytes := SonarState.echo_to_bytes(source_plane, cells, owners)
 	if not bytes.is_empty():
 		_transport.send(peer, bytes, true)
 
@@ -982,9 +989,16 @@ func _try_audit_sonar() -> void:
 	if remote == null:
 		return
 	remote.set_class(MouseClass.GENERALIST)
-	_audit_red_mark = _make_audit_mark(Team.RED, 0, AUDIT_CANT_RED)
-	_audit_blue_mark = _make_audit_mark(Team.BLUE, 0, AUDIT_CANT_BLUE)
-	_audit_blue_deep_mark = _make_audit_mark(Team.BLUE, 2, AUDIT_CANT_BLUE_DEEP)
+	# THREE DIFFERENT `tunnel_team` VALUES ON THE THREE CONTROLS, on purpose. The field is new on
+	# the wire and it is presentation rather than a rule, which is exactly the kind of field that
+	# gets serialised wrong and never noticed -- if all three fixtures shared a value, a decoder
+	# that returned a constant would pass. Red's names blue's corridor (an enemy target, the case
+	# the whole feature exists for), blue's names its own, and the deep one is a junction.
+	_audit_red_mark = _make_audit_mark(Team.RED, 0, AUDIT_CANT_RED, Team.BLUE)
+	_audit_blue_mark = _make_audit_mark(Team.BLUE, 0, AUDIT_CANT_BLUE, Team.BLUE)
+	_audit_blue_deep_mark = _make_audit_mark(
+		Team.BLUE, 2, AUDIT_CANT_BLUE_DEEP, SonarMark.SHARED
+	)
 	_audit_sonar_done = (
 		_audit_red_mark != null and _audit_blue_mark != null
 		and _audit_blue_deep_mark != null
@@ -1076,10 +1090,12 @@ func _place_beside(remote: Mouse, offset: Vector2i, whose: String) -> SonarMark:
 	return mark
 
 
-func _make_audit_mark(side: int, plane: int, cell: Vector2i) -> SonarMark:
+func _make_audit_mark(
+	side: int, plane: int, cell: Vector2i, whose: int = SonarMark.SHARED
+) -> SonarMark:
 	var mark := SonarMark.new()
 	_tunnels.add_child(mark)
-	mark.configure(_tunnels, side, plane, cell)
+	mark.configure(_tunnels, side, plane, cell, whose)
 	return mark
 
 
@@ -1393,9 +1409,20 @@ func _reconcile_cant(state: SonarState) -> void:
 		if mark == null:
 			mark = SonarMark.new()
 			_tunnels.add_child(mark)
-			mark.configure(_tunnels, reading.owner_team, reading.plane, reading.cell)
+			mark.configure(
+				_tunnels, reading.owner_team, reading.plane, reading.cell, reading.tunnel_team
+			)
 		else:
 			unmatched.erase(mark)
+			# A MATCHED MARK MAY STILL HAVE CHANGED WHAT IT SAYS. Identity is crew-plane-cell, so
+			# a corridor that becomes a junction after the two networks meet arrives as the same
+			# mark carrying a different `tunnel_team` -- and without this the client would keep
+			# drawing the old glyph for the rest of the match. Rebuilt only when it actually moved,
+			# because `configure` regenerates the mesh.
+			if mark.tunnel_team != reading.tunnel_team:
+				mark.configure(
+					_tunnels, reading.owner_team, reading.plane, reading.cell, reading.tunnel_team
+				)
 
 	# Missing means erased or no longer readable after a class change. Both remove the local world
 	# picture; only the first removed the authoritative mark on the host.
@@ -1425,7 +1452,10 @@ func _apply_sonar_echo(bytes: PackedByteArray) -> void:
 	var cells: Array[Vector2i] = []
 	for cell: Vector2i in reading["cells"]:
 		cells.append(cell)
-	sonar.reproduce_echo(int(reading["plane"]), cells)
+	var owners: Array[int] = []
+	for whose: int in reading["owners"]:
+		owners.append(whose)
+	sonar.reproduce_echo(int(reading["plane"]), cells, owners)
 	_sonar_echoes += 1
 	_net.log_line("sonar echo: plane %d cells %s" % [reading["plane"], _cell_list(cells)])
 
