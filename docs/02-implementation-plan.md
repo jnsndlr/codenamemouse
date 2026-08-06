@@ -2201,8 +2201,74 @@ permitted. Verified by deleting the filter and watching it name the leak.
   generated falloff texture, because it is the same earth — different light.
 
 **Still to build in 8a:** *Slam*, and a verdict on corking (which is geometry rather than code —
-a one-cell corridor plus body-blocking — so it is a playtest, not a feature). Brute bots stay
-Generalists until Slam exists.
+a one-cell corridor plus body-blocking — so it is a playtest, not a feature).
+
+#### 8d — The bots start playing the same game
+
+Four changes to the AI, added in an order chosen so each one's failure would be visible before the
+next arrived. The through-line: **every mechanic the game has was a mechanic three quarters of the
+mice could not use, and one of them they could not be subject to.**
+
+- **Bots see through the contact book now, and only through it.** `bot.gd` scanned the scene tree
+  and filtered on opacity, which got two things wrong at once: it saw through boulders and walls —
+  `spotting.gd` says plainly that range and line of sight are the sweep's business, and nothing on
+  the AI side was doing that work — and it was *per mouse*, so a crew mate holding a lane was worth
+  nothing to anybody but themselves. Worse, the opacity gate had been written for the rule that
+  produces a **destination** and never for the rule that produces a **fight**, so a mouse doing
+  everything the grass asks still got faced, tracked and hit from four metres. `match_audit`'s
+  `bot_blind` asserts the case a player actually feels — *it stops swinging at you* — and was
+  verified by putting the old scan back.
+- **The stale contacts turned out to be the feature.** A contact freezes where it was last seen and
+  fades over fifteen seconds, so a defender that loses you walks to where you *were* and finds
+  nothing. Nobody wrote a search behaviour; it is what reading an out-of-date book looks like from
+  outside. It also arrived with its own bug — a bot that reached the ghost was handed the
+  destination it was already standing on and **froze for the full fifteen seconds**. `bot_soak.gd`
+  caught it on the first long run, which is exactly the class of failure it exists for: perfectly
+  legal, invisible to every rule check, and obvious in the numbers.
+
+> **M4 and M5 had been contradicting each other in the dark, and the AI's private perception model
+> was what kept it quiet.** `bots_follow` asserted that a defender goes down a shaft after an
+> intruder — and passed only because bots ignored planes and could see through a metre of earth,
+> which is the one thing `_check_spotting` asserts is impossible and the whole reason the tunnel
+> layer exists. Resolved the narrow way: a bot may not notice a *corridor*, only a *mouse*, on the
+> lawn, in the open, climbing into a hole. **The real counterplay is the Sneak's sonar** — a WATCH,
+> which is what the defending Sneak seat is *for* (see `MatchDirector.SEATS`) and which nothing in
+> the game has ever fired. That wants building next, and a passive *hears an enemy one layer down*
+> on the Sneak is worth weighing alongside it, as a class ability rather than as a fact about earth.
+
+- **A crew's routes are built only from entrances that crew knows about.** `route_planner.gd` was
+  planning from `graph.mouths()` — every hole on the map — so a bot could not *see* the enemy's
+  shaft and would walk into it anyway. `bot_digger.gd` had this right since M5, so the walker and
+  the digger had been disagreeing about which holes exist. **It was invisible because of a dial:**
+  `tunnel_bias` sat at 1.0, almost nothing underground wins that comparison on eighty metres of open
+  lawn, and lowering it is what would have turned a quiet leak into visible behaviour — hence fixing
+  it first and in the same pass. The bias is 0.7 now, which is the argument `REUSE_SLACK` already
+  makes in the digger's own words: **underground is cover, and arriving unseen is worth walking
+  further for.** A pure shortest-path comparison cannot express the reason to use a tunnel at all.
+- **Bots play the cheese economy on purpose.** They picked wedges up by treading on them, never went
+  to get any, and never banked what they held — so an AI crew played GDD §2's whole economy by
+  accident, and a bot crew facing a human one was playing a different game with the same rules. Two
+  rules: bank what you are carrying (above everything except a banner in play), and, when the crew
+  is poor, go and fetch some (raiders only — sending the defender shopping empties the nest). **The
+  refill latches**, which is not a detail: a bare threshold banks one wedge, declares the crisis
+  over and walks off, leaving the crew where it started. Same jitter that killed the first dynamic
+  class rule.
+- **The speed ladder moved from `Player` to `Mouse`.** Sprint and Slow lived on the driven mouse
+  with a note explaining that a bot has no stamina to give a duration to. That note described the
+  bug: a human could outrun any defender indefinitely, and could crouch past an AI that had no
+  concept of crouching. Bots sprint for the two moments the ranking already races over — and
+  deliberately the same two `_consider_scurry` spends cheese on, so the free burst is reached for
+  first — and go quiet while raiding *where there is cover to be quiet in*, asked of `cover_at`
+  rather than of their own opacity, which would latch them into a permanent crawl. **Slow beats
+  Sprint in the ladder itself now**; `slow_multiplier` has said *you can't be quiet and fast* since
+  M1 and `Player` was enforcing it by clearing its own flag — a rule that survives exactly until a
+  second driver arrives and forgets.
+
+**Class distribution is deliberately not here.** The seat table is still static, and making it
+respond to the match is the obvious next step — but the first attempt at a dynamic rule was reverted
+for jittering, and *mirroring whatever the human picked* would be the same mistake wearing a
+different hat. It needs rules about **when a crew should take more or less risk**, which is a
+question to answer by playing these four changes first.
 
 > **A remote Brute's dust does not travel, and that is a known gap rather than an oversight.** The
 > effect runs wherever the ability runs — the host for every mouse, a client for its own — so a

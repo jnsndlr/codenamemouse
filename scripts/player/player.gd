@@ -25,16 +25,12 @@ extends Mouse
 ## binding the design already had, arrived at as soon as there was a reason to care.
 
 @export_group("Sprint stamina")
-## Seconds of sprint at full stamina. This is the per-class dial (GDD section 9) -- sprint
-## SPEED is uniform, duration is what differs. Sneak 6.0, Brute 1.5.
-@export var sprint_seconds: float = 4.0
-## Quiet time before stamina starts coming back.
-@export var stamina_regen_delay: float = 2.0
-## Seconds to refill from empty, once regen has started.
-@export var stamina_refill_seconds: float = 6.0
-## Can't re-engage sprint below this much stamina. Stops stutter-sprinting on fumes.
-@export var sprint_minimum: float = 0.35
 ## How quickly the second W tap has to land.
+##
+## THE ONLY ONE OF THESE LEFT HERE, and the split is the point: a double tap is a fact about a
+## keyboard, and everything else about sprinting is a fact about a mouse. The tank, its duration,
+## its refill and the refusal on fumes moved to [Mouse] at M8 so bots could climb the same ladder
+## -- see the note on `Mouse.sprint_seconds`.
 @export var double_tap_window: float = 0.28
 
 @export_group("Aim")
@@ -43,9 +39,6 @@ extends Mouse
 @export var aim_deadzone: float = 0.45
 
 var _aim_point: Vector3 = Vector3.ZERO
-var _stamina: float = 0.0
-var _regen_timer: float = 0.0
-var _sprinting: bool = false
 var _since_forward_tap: float = 999.0
 ## The physics frame `_input` was last built on. See `input()`.
 var _captured_on: int = -1
@@ -61,33 +54,12 @@ var _remote: bool = false
 
 func _ready() -> void:
 	super()
-	_stamina = sprint_seconds
-	scurried.connect(_on_scurried)
 	# THE CONTROLS COME WITH THE MOUSE (M7). Digging, the two Engineer abilities, the Sneak's sonar
 	# and the swap point used to be five nodes in `arena.tscn` pointed at `../Player` -- fine while
 	# there was one, and the reason a remote human could press dig and have nothing happen at all.
 	# A `Player` is a mouse somebody is driving, wherever that somebody is sitting, so it is the
 	# one place that knows a set is wanted. See [MouseControls].
 	MouseControls.fit(self)
-
-
-## A second wind, not a stat buff (GDD section 2). Refilling stamina is what stops Scurry from
-## being a boost you tack onto an exhausted sprint and makes it the thing that resets a chase
-## you were losing -- the two seconds of burst run out and you still have a sprint left.
-func _on_scurried(_mouse: Mouse) -> void:
-	_stamina = sprint_seconds
-	_regen_timer = 0.0
-
-
-## Sprint duration is per-class (GDD section 9: Sneak 6.0, Brute 1.5) and sprint SPEED is not.
-## Handled here rather than in the base class because a bot has no stamina to give a duration to,
-## and the stat would be a property nothing reads on three quarters of the mice in the match.
-func apply_class(definition: ClassDefinition) -> void:
-	super(definition)
-	sprint_seconds = definition.sprint_seconds
-	# Topped up, not scaled. Swapping class at your own nest is the one moment stamina is
-	# uninteresting -- you are standing still, at home, and about to walk somewhere.
-	_stamina = sprint_seconds
 
 
 ## Where the cursor currently sits on the ground plane. This is the aim source -- thrown
@@ -140,21 +112,6 @@ func drive(frame: InputFrame) -> void:
 	_aim_point = _input.aim_point
 
 
-func is_sprinting() -> bool:
-	return _sprinting
-
-
-## 0..1, for the HUD. Personal and private -- never shown for anyone else (GDD section 10).
-func get_stamina_ratio() -> float:
-	return _stamina / maxf(sprint_seconds, 0.001)
-
-
-func get_walk_speed() -> float:
-	return speed
-
-
-func get_sprint_speed() -> float:
-	return speed * sprint_multiplier
 
 
 ## The one method the base class asks for. Aim, then the ladder, then a heading.
@@ -179,46 +136,32 @@ func _control(delta: float) -> void:
 	_wish = _wish_direction(frame)
 
 
-func _tier_multiplier() -> float:
-	if _sprinting:
-		return sprint_multiplier
-	if input().is_held(InputFrame.Action.SLOW):
-		return slow_multiplier
-	return 1.0
-
-
-## Double-tap W. Sprint holds while W is held and dies the moment you stop pushing forward,
-## run dry, or drop to Slow -- so it can never be left on by accident, which is why it doesn't
-## need to be a toggle.
+## Double-tap W. Sprint holds while W is held and dies the moment you stop pushing forward, run
+## dry, or drop to Slow -- so it can never be left on by accident, which is why it doesn't need to
+## be a toggle.
+##
+## PURELY THE READING NOW. Since M8 this decides what the keyboard is ASKING for and hands it to
+## [Mouse]; the tank, the refusal on fumes and the drain live there, so a bot climbing the same
+## ladder cannot end up on a second copy of the rules that drifts.
 func _update_sprint(frame: InputFrame, delta: float) -> void:
 	if frame.is_pressed(InputFrame.Action.FORWARD):
-		if _since_forward_tap <= double_tap_window and _stamina >= sprint_minimum:
-			_sprinting = true
+		if _since_forward_tap <= double_tap_window:
+			request_sprint(true)
 		_since_forward_tap = 0.0
 	else:
 		_since_forward_tap += delta
 
 	# L3 on a pad, because you can't double-tap a stick.
-	if frame.is_pressed(InputFrame.Action.SPRINT) and _stamina >= sprint_minimum:
-		_sprinting = true
+	if frame.is_pressed(InputFrame.Action.SPRINT):
+		request_sprint(true)
 
 	# Read off `move` rather than off the FORWARD bit, because a stick pushed a third of the way
 	# is forward without the action's threshold being crossed -- and letting it drift back to
 	# centre has to end a sprint, or a pad player sprints until the stamina runs out.
-	if frame.move.y <= 0.0 or frame.is_held(InputFrame.Action.SLOW):
-		_sprinting = false
-
-	if _sprinting:
-		_stamina = maxf(0.0, _stamina - delta)
-		_regen_timer = 0.0
-		if _stamina <= 0.0:
-			_sprinting = false
-		return
-
-	_regen_timer += delta
-	if _regen_timer >= stamina_regen_delay:
-		var rate := sprint_seconds / maxf(stamina_refill_seconds, 0.001)
-		_stamina = minf(sprint_seconds, _stamina + rate * delta)
+	var quiet := frame.is_held(InputFrame.Action.SLOW)
+	set_creeping(quiet)
+	if frame.move.y <= 0.0 or quiet:
+		request_sprint(false)
 
 
 ## Facing-relative, which is the whole scheme. Note the penalties are applied AFTER the radial

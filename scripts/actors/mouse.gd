@@ -66,6 +66,25 @@ const MOUSE_GROUP: StringName = &"mouse"
 ## fast, which is the whole point of the tier.
 @export_range(0.1, 1.0, 0.01) var slow_multiplier: float = 0.45
 @export_range(1.0, 2.5, 0.05) var sprint_multiplier: float = 1.4
+
+@export_subgroup("Sprint stamina")
+## Seconds of sprint at full stamina. The per-class dial (GDD section 9) -- sprint SPEED is
+## uniform, duration is what differs. Sneak 6.0, Brute 1.5.
+##
+## `[MOVED at M8]` These four lived on `Player`, with a note saying a bot has no stamina to give a
+## duration to and the stat would be a property nothing read on three quarters of the mice in the
+## match. That was true and it was the bug: bots could not sprint, could not go quiet, and ran
+## every step of every match at exactly one speed. A human could sprint away from a defender
+## indefinitely and crouch past one that had no idea what crouching was -- two mechanics that
+## simply did not apply to three quarters of the mice, which is the definition of the AI playing a
+## different game. The ladder belongs to a mouse; who climbs it is the driver's business.
+@export var sprint_seconds: float = 4.0
+## Quiet time before stamina starts coming back.
+@export var stamina_regen_delay: float = 2.0
+## Seconds to refill from empty, once regen has started.
+@export var stamina_refill_seconds: float = 6.0
+## Can't re-engage sprint below this much stamina. Stops stutter-sprinting on fumes.
+@export var sprint_minimum: float = 0.35
 ## Sidestepping and backpedalling are slower than running forward. The backpedal number is
 ## load-bearing: it's what makes turning-to-throw-while-fleeing a real trade rather than a
 ## free action (GDD section 9).
@@ -199,6 +218,15 @@ var _body_material: StandardMaterial3D
 var _wedges: int = 0
 var _boost_left: float = 0.0
 var _boost_cooldown: float = 0.0
+var _stamina: float = 0.0
+var _regen_timer: float = 0.0
+## Spending stamina to run. INTENT, set by whoever is driving -- a double-tapped W for a player, a
+## rule in the ranking for a bot -- and cleared here when the tank runs dry. Nothing outside sets
+## it directly; see `request_sprint`.
+var _sprinting: bool = false
+## Deliberately moving quietly: the other half of the ladder, and the one with no meter behind it.
+## Slow costs nothing but speed, which is why it is the tier a mouse can hold all match.
+var _creeping: bool = false
 ## The swipe. Built here rather than placed in the scenes so bot.tscn, player.tscn and a mouse a
 ## headless audit builds by hand all telegraph identically -- see swing_arc.gd.
 var _swing_arc: SwingArc
@@ -221,6 +249,13 @@ func _ready() -> void:
 	add_to_group(ACTOR_GROUP)
 	add_to_group(MOUSE_GROUP)
 	set_plane(_plane)
+	_stamina = sprint_seconds
+	# A SECOND WIND, NOT A STAT BUFF (GDD section 2). Refilling stamina is what stops Scurry from
+	# being a boost you tack onto an exhausted sprint and makes it the thing that resets a chase you
+	# were losing -- the burst runs out and you still have a sprint left. Connected here rather than
+	# on `Player` since M8, because the tank is every mouse's now and a bot spends cheese on the
+	# same two moments a human does (see bot.gd's `_consider_scurry`).
+	scurried.connect(_on_scurried)
 
 
 # ------------------------------------------------------------------------------ identity
@@ -254,14 +289,17 @@ func set_class(kind: int) -> void:
 	_health = minf(_health, max_health)
 
 
-## Copy a definition onto this mouse. Overridden by Player to pick up the stats only a driven
-## mouse has -- see player.gd, which owns sprint.
+## Copy a definition onto this mouse.
 func apply_class(definition: ClassDefinition) -> void:
 	max_health = definition.max_health
 	speed = definition.speed
 	turn_speed = definition.turn_speed
 	attack_damage = definition.attack_damage
 	carry_penalty = definition.carry_penalty
+	sprint_seconds = definition.sprint_seconds
+	# Topped up, not scaled. Swapping class at your own nest is the one moment stamina is
+	# uninteresting -- you are standing still, at home, and about to walk somewhere.
+	_stamina = sprint_seconds
 
 
 ## How fast this mouse opens a tile, as a multiplier on the dig controller's own timing.
@@ -632,6 +670,8 @@ func _physics_process(delta: float) -> void:
 
 	_wish = Vector3.ZERO
 	_control(delta)
+	# Between the intent and the motion, deliberately -- see `_tick_stamina`.
+	_tick_stamina(delta)
 	if _stun_left > 0.0:
 		_wish = Vector3.ZERO
 	_apply_motion(delta)
@@ -817,9 +857,83 @@ func move_speed() -> float:
 	return top
 
 
-## The speed ladder. Base sits at Run; Player overrides for Slow and Sprint.
+## The speed ladder: Slow, Run, Sprint.
+##
+## SLOW IS TESTED FIRST, which is the rule `slow_multiplier` has stated since M1 -- *you can't be
+## quiet and fast* -- and it had never actually been written down in code. `Player` got the same
+## answer by clearing its own sprint flag whenever Slow was held, so the ordering here was
+## unreachable and could be either way round without anything noticing. That is exactly the kind of
+## rule that breaks the moment a second driver arrives, which is what a bot is: one driver that
+## forgets to clear the flag and a mouse sprints at a tenth opacity, invisible to everything except
+## somebody wondering why the AI is so hard to see.
 func _tier_multiplier() -> float:
+	if _creeping:
+		return slow_multiplier
+	if _sprinting:
+		return sprint_multiplier
 	return 1.0
+
+
+## Ask to sprint, or to stop. REFUSED ON AN EMPTY TANK rather than silently granted, which is what
+## `sprint_minimum` is for: without it a mouse on fumes stutters in and out of a sprint every frame.
+func request_sprint(on: bool) -> void:
+	if not on:
+		_sprinting = false
+		return
+	if _stamina >= sprint_minimum:
+		_sprinting = true
+
+
+## Move quietly, or stop. No meter and no refusal -- Slow costs speed and nothing else, which is
+## why it is the tier a mouse can hold for a whole match.
+func set_creeping(on: bool) -> void:
+	_creeping = on
+
+
+func is_sprinting() -> bool:
+	return _sprinting
+
+
+func is_creeping() -> bool:
+	return _creeping
+
+
+## 0..1, for the HUD. Personal and private -- never shown for anyone else (GDD section 10).
+func get_stamina_ratio() -> float:
+	return _stamina / maxf(sprint_seconds, 0.001)
+
+
+func get_walk_speed() -> float:
+	return speed
+
+
+func get_sprint_speed() -> float:
+	return speed * sprint_multiplier
+
+
+## Burn the tank while sprinting, refill it after a quiet spell.
+##
+## RUN AFTER `_control` AND BEFORE `_apply_motion`, which is the only ordering that works: the
+## driver states its intent, the tank is charged for it and may refuse, and only then does the
+## speed get read. Charged before the intent and a sprint is free for one frame; charged after the
+## motion and an empty tank still moves you.
+func _tick_stamina(delta: float) -> void:
+	if _sprinting:
+		_stamina = maxf(0.0, _stamina - delta)
+		_regen_timer = 0.0
+		if _stamina <= 0.0:
+			_sprinting = false
+		return
+
+	_regen_timer += delta
+	if _regen_timer >= stamina_regen_delay:
+		var rate := sprint_seconds / maxf(stamina_refill_seconds, 0.001)
+		_stamina = minf(sprint_seconds, _stamina + rate * delta)
+
+
+func _on_scurried(_mouse: Mouse) -> void:
+	_stamina = sprint_seconds
+	_regen_timer = 0.0
 
 
 ## Turn toward a world direction at the capped rate. The cap is where the weight comes from.

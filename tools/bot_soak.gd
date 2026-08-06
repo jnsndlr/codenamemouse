@@ -52,6 +52,14 @@ var _director: MatchDirector
 var _was: Dictionary = {}
 ## bot -> how many readings in a row it has not moved for.
 var _frozen: Dictionary = {}
+## bot -> physics frames spent on each of the M8 behaviours. See `_tally`.
+var _frames_below: Dictionary = {}
+var _frames_digging: Dictionary = {}
+var _frames_creeping: Dictionary = {}
+var _frames_sprinting: Dictionary = {}
+## side -> wedges banked, and the last reading the count was taken against.
+var _banked: Dictionary = {}
+var _cheese_was: Dictionary = {}
 var _findings: Array[String] = []
 
 
@@ -77,6 +85,9 @@ func _initialize() -> void:
 
 	_network = _scene.get_node("Tunnels") as TunnelNetwork
 	_director = _scene.get_node("MatchDirector") as MatchDirector
+	for side in [Team.BLUE, Team.RED]:
+		_cheese_was[side] = _director.cheese_of(side)
+	_director.cheese_changed.connect(_on_cheese_changed)
 
 	print("=".repeat(78))
 	print("BOT SOAK -- %d seconds, crew of %d a side" % [int(seconds), _director.crew_size])
@@ -183,6 +194,8 @@ func _verdict() -> void:
 			Team.name_of(side), owned, reach
 		])
 
+	_behaviours()
+
 	# A crew with no tunnel at all is a different report from a crew with a bad one, and only the
 	# second is a failure of the digging. Nothing dug usually means nothing got the chance to.
 	if mouths > 0 and float(cells) / float(mouths) < MIN_CELLS_PER_MOUTH:
@@ -203,6 +216,89 @@ func _verdict() -> void:
 	quit(1)
 
 
+## What the crews actually did with the four things M8 gave them.
+##
+## SECONDS RATHER THAN FRAMES, because a frame count is a number nobody can weigh. "Eleven seconds
+## underground" is a claim you can argue with; "660" is not.
+func _behaviours() -> void:
+	print("")
+	print("-- what they did with it (M8)")
+	# SAID OUT LOUD, because a zero here would otherwise look like a broken rule. The grass is
+	# stripped from this harness for speed, so there is no concealment model, `Spotting.cover_at`
+	# fails closed at zero and no bot has any reason to slow down. Creeping is asserted in
+	# match_audit's `gears` check, where the cover can be dictated instead of hunted for.
+	print("   (grass is stripped here -- 'crept' will read zero; see match_audit gears)")
+	for side in [Team.BLUE, Team.RED]:
+		print("   %-4s banked %d wedges, holding %d" % [
+			Team.name_of(side), int(_banked.get(side, 0)), _director.cheese_of(side)
+		])
+
+	var rows: Array[String] = []
+	for node in root.get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
+		var bot := node as Bot
+		if bot == null:
+			continue
+		var below := _seconds(_frames_below.get(bot, 0))
+		var digging := _seconds(_frames_digging.get(bot, 0))
+		var creeping := _seconds(_frames_creeping.get(bot, 0))
+		var sprinting := _seconds(_frames_sprinting.get(bot, 0))
+		if below + digging + creeping + sprinting <= 0.05:
+			continue
+		rows.append("   %-10s %-4s  tunnel %4.1fs   dug %4.1fs   crept %4.1fs   sprinted %4.1fs" % [
+			bot.name, MouseClass.tag_of(bot.mouse_class), below, digging, creeping, sprinting
+		])
+	if rows.is_empty():
+		print("   nobody tunnelled, crept or sprinted at all")
+		return
+	for row: String in rows:
+		print(row)
+
+
+func _seconds(frames: Variant) -> float:
+	return float(int(frames)) / 60.0
+
+
 func _advance(seconds: float) -> void:
 	for i in range(maxi(1, int(ceilf(seconds * 60.0)))):
 		await physics_frame
+		_tally()
+
+
+## Count what the bots are DOING, every frame, because none of it is visible in a five-second
+## snapshot.
+##
+## THE M8 BEHAVIOURS ARE ALL RARE-BUT-IMPORTANT, which is the worst shape for a sampled readout. A
+## crew refills its cheese two or three times a match; a Generalist takes its Engineer's tunnel on
+## the runs where the geometry happens to favour it; a raider creeps only where there is cover to
+## creep in. Every one of those can be completely broken and still never appear in a sample -- and
+## worse, can be broken in the direction of NEVER HAPPENING, which reads exactly like a quiet match.
+## These are printed rather than asserted for the reason the header gives: thresholds go where a
+## behaviour is broken, and "how much should a crew tunnel" is a tuning question nobody has played
+## enough matches to answer yet.
+func _tally() -> void:
+	for node in root.get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
+		var bot := node as Bot
+		if bot == null or bot.is_scruffed():
+			continue
+		if bot.get_plane() > 0:
+			# THE ENGINEER IS EXCLUDED because an Engineer underground is an Engineer digging, which
+			# the cell count already reports. What was never happening before M8 -- and is the whole
+			# point of lowering `tunnel_bias` -- is somebody ELSE using the corridor it cut.
+			if bot.mouse_class == MouseClass.ENGINEER:
+				_frames_digging[bot] = int(_frames_digging.get(bot, 0)) + 1
+			else:
+				_frames_below[bot] = int(_frames_below.get(bot, 0)) + 1
+		if bot.is_creeping():
+			_frames_creeping[bot] = int(_frames_creeping.get(bot, 0)) + 1
+		if bot.is_sprinting():
+			_frames_sprinting[bot] = int(_frames_sprinting.get(bot, 0)) + 1
+
+
+## Somebody put a wedge in a pile. Counted off the director's own signal rather than by watching
+## paws, so a wedge that is picked up and then dropped in a fight is not miscounted as banked --
+## only the number on the HUD going UP is a refill.
+func _on_cheese_changed(side: int, amount: int) -> void:
+	var before := int(_cheese_was.get(side, amount))
+	if amount > before:
+		_banked[side] = int(_banked.get(side, 0)) + (amount - before)
+	_cheese_was[side] = amount

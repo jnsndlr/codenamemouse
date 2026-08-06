@@ -58,6 +58,19 @@ func opacity_of(mouse: Mouse) -> float:
 	return _opacity.get(mouse, 1.0)
 
 
+## How much concealment the GROUND here offers, 0..1, before anything about who is standing on it.
+##
+## A DIFFERENT QUESTION FROM `opacity_of`, and the difference matters to the one caller that needs
+## it. `opacity_of` is about a mouse -- its speed, whether it is carrying, whether it is boosting --
+## and a bot deciding whether to slow down cannot use it, because a bot that has already slowed
+## down is already hidden and would latch into a permanent crawl on its own answer. This is about
+## the grass, so it says the same thing whatever the mouse does.
+func cover_at(at: Vector3) -> float:
+	if _grass == null or not _grass.has_method("concealment_at"):
+		return 0.0
+	return _grass.call("concealment_at", at)
+
+
 func _process(delta: float) -> void:
 	for node in get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
 		var mouse := node as Mouse

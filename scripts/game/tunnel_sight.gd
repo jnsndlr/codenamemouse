@@ -113,6 +113,26 @@ func seen_cells(side: int, plane: int) -> Dictionary:
 	return found
 
 
+## Every entrance on the lawn this crew may ACT on: the ones it cut, and the ones it has walked
+## past and not yet forgotten.
+##
+## THE UNION IS ONE QUESTION AND IT BELONGS IN ONE PLACE. The minimap draws the two sets separately
+## because it fades the second -- an entrance you found is the same KIND of fact as one you cut,
+## differing only in how sure you still are -- but *do I know about that hole at all* is a single
+## question, and route_planner.gd has to be asking the same one the map is answering. A bot that
+## refused to use an entrance its own minimap was drawing would be the mirror image of the leak
+## that made the filter necessary, and just as invisible from inside a match.
+func known_mouths(side: int) -> Array[Vector2i]:
+	var found: Array[Vector2i] = []
+	if _network == null:
+		return found
+	found.append_array(_network.known_shaft_cells(0, side))
+	for cell: Vector2i in _mouths[clampi(side, Team.BLUE, Team.RED)]:
+		if not found.has(cell):
+			found.append(cell)
+	return found
+
+
 ## Enemy shaft mouths this crew has walked past, as cell -> confidence.
 func seen_mouths(side: int) -> Dictionary:
 	var found: Dictionary = {}

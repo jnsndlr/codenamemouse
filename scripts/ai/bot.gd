@@ -28,6 +28,17 @@ extends Mouse
 ## happens to run through a shaft. Until M4 the same decision produced a bot standing on the lawn
 ## above them, which is what made digging an exploit rather than a choice -- not because the AI
 ## was too stupid to follow, but because it structurally could not.
+##
+## IT ONLY KNOWS WHAT ITS CREW HAS SEEN (M8). Every rule below that names an enemy reads
+## spotting.gd's contact book rather than the scene tree -- the same book the minimap draws from,
+## with the same range, the same line of sight, the same opacity threshold and the same fifteen
+## seconds of memory. What a bot does is therefore legible from your own HUD: the marker you can
+## see is the marker it is acting on.
+##
+## THE BOOK IS ALLOWED TO BE WRONG, and that is what makes it worth reading. A contact freezes
+## where it was last seen and fades from there, so a defender that loses you in the grass walks to
+## where you WERE and arrives at nothing. Nobody had to write a search behaviour; it is what
+## reading a stale book looks like from the outside.
 
 enum { RAIDER, DEFENDER }
 
@@ -50,6 +61,14 @@ enum { RAIDER, DEFENDER }
 ## away from the thing it is guarding. This is the whole anti-lure rule and it is one word:
 ## `nest`.
 @export var defend_radius: float = 9.0
+## How near a shaft mouth a contact has to have been lost for a defender to conclude they climbed
+## into it. A little over one cell, because the sweep runs four times a second and a mouse can be
+## most of a stride from the hole in the frame it was last resolved.
+##
+## Tight ON PURPOSE. It is the difference between "I watched them drop into that hole" and "they
+## disappeared somewhere over there and there happens to be a tunnel nearby", and only the first
+## is knowledge. See `_went_to_ground`.
+@export var mouth_slack: float = 1.2
 
 @export_group("Thinking")
 ## Seconds between decisions. Doubles as reaction time.
@@ -69,6 +88,21 @@ enum { RAIDER, DEFENDER }
 ## so a bot doesn't clip you with the very edge of a cone it never aimed.
 @export var strike_arc: float = 40.0
 
+@export_group("Cheese")
+## How low the crew's pile has to get before a raider goes shopping instead of raiding.
+##
+## LOW ON PURPOSE. Cheese is the crew's lives, not a second score (GDD section 2), so fetching it
+## is what you do when you are running out -- not a steady errand somebody is always on. Set this
+## near the starting twenty and a crew spends the whole match hauling wedges and never contests a
+## banner, which is a worse game than the one where they never fetch any.
+@export var forage_below: int = 6
+## And how much it wants before it stops. Above `forage_below` by enough to be worth the trip --
+## see `_foraging`, where the gap between these two numbers is the whole point.
+@export var forage_until: int = 12
+## How far a bot will walk for a pile. Beyond this the trip costs more than the wedge is worth and
+## the crew would be better off defending what it has.
+@export var forage_range: float = 30.0
+
 @export_group("Scurry")
 ## How close a pursuer has to be before a carrying bot spends a life on getting away.
 ##
@@ -87,20 +121,32 @@ enum { RAIDER, DEFENDER }
 ## How near the destination counts as arrived.
 @export var arrival_slack: float = 0.5
 ## What a tunnel route has to beat the surface by before a bot bothers, as a multiplier on its
-## cost. 1.0 is "take whichever is genuinely shorter".
+## cost. 1.0 is "take whichever is genuinely shorter"; below 1.0 buys a tunnel some slack.
 ##
 ## This only ever applies when BOTH ends are on the lawn -- following someone down is not a
-## preference, it is the only way to get there. On the current arena, eighty metres of open dirt,
-## almost nothing underground wins this comparison, and that is the honest answer rather than a
-## disabled feature: tunnels pay off on a map with things in the way, which is a map problem
-## (GDD section 8) and belongs to whichever milestone first lays out a real yard.
-@export var tunnel_bias: float = 1.0
+## preference, it is the only way to get there.
+##
+## `[REVISED at M8]` 0.7, which is "worth a route up to about forty per cent longer". It sat at 1.0
+## and the note here used to argue that almost nothing underground wins a straight comparison on
+## eighty metres of open dirt, and that this was the honest answer rather than a disabled feature.
+## Half of that was right and the conclusion was wrong: a pure shortest-path comparison cannot
+## express the reason to use a tunnel at all. **Underground is cover.** Arriving unseen is worth
+## walking further for, and a planner that only ever prices distance will decline every tunnel on
+## every map until the surface route is physically longer, which is a very high bar.
+##
+## THE NUMBER IS BORROWED RATHER THAN INVENTED. bot_digger.gd's `REUSE_SLACK` is 1.35 and makes
+## exactly this argument in exactly these words for exactly this trade -- how much further a bot
+## will walk to arrive through a hole. The digger and the walker had been disagreeing about it,
+## which is the sort of split that shows up as a bot walking to a mouth and then deciding not to
+## use it.
+@export var tunnel_bias: float = 0.7
 
 @onready var _agent: NavigationAgent3D = $Agent
 
 var _director: MatchDirector
-## Found lazily, like the director. Optional: a map without one still plays, it just has no
-## concealment for the bots to respect.
+## Found lazily, like the director. THIS BOT'S ENTIRE SENSORY APPARATUS since M8 -- every rule that
+## names an enemy goes through it. Optional: a map without one still plays, and `_unaided_within`
+## says what a bot sees then.
 var _spotting: Spotting
 var _network: TunnelNetwork
 var _goal: Vector3 = Vector3.ZERO
@@ -121,8 +167,28 @@ var _digger := BotDigger.new()
 ## cell to stand in and decides for itself when it has got there, so the arrival slack that keeps
 ## a bot from jittering on the lawn would leave it stalled half a tile short of a face.
 var _driven: bool = false
-## Whether `_decide` fell all the way through to rule 6. The one errand a dig may replace.
+## Whether `_decide` fell all the way through to the raid. The one errand a dig may replace.
 var _raiding: bool = false
+## Whether this bot is currently on a refill run. Latched rather than recomputed, which is what
+## keeps the crew from oscillating across the threshold -- see `_foraging`.
+var _stocking: bool = false
+## Contacts this bot has personally walked to and found nothing at. Keyed by mouse; a key is struck
+## out the moment that mouse is seen again.
+##
+## WITHOUT THIS A DEFENDER FREEZES ON A GHOST, and bot_soak.gd caught it doing so within one run of
+## the contact book landing: two defenders stood still for fifteen seconds each, 'checking a
+## contact'. A stale contact keeps its last-seen position for the whole of `memory_seconds`, so a
+## bot that walks there, finds nobody, and reads the same book again is handed the destination it is
+## already standing on -- `_heading` measures a gap inside `arrival_slack` and returns nothing. It
+## is the investigation behaviour working perfectly, right up to the point where it should have
+## ended and did not.
+##
+## BY IDENTITY, NOT BY DISTANCE, which is the part worth getting right. "Have I already checked
+## somewhere near here" answered from position is true while the bot stands on the spot and false
+## again the moment it walks back to its post -- so the bot turns round and comes back, forever.
+## That is an oscillation wearing a fix. What a mouse actually knows is *I looked for THEM and they
+## were not there*, and that is about who, not where.
+var _cleared: Dictionary = {}
 ## WHERE THE RANKING WANTS TO GO, kept apart from `_goal`, which is where the feet are pointed
 ## this frame. Almost always the same thing -- and catastrophically not while the digger is
 ## driving, because the digger STEERS by writing `_goal` (stand at this face, walk to that cell)
@@ -162,6 +228,7 @@ func _control(delta: float) -> void:
 		_reclass()
 		_decide()
 		_consider_scurry()
+		_consider_pace()
 		# Taken here, once, straight off the ranking -- before anything downstream is allowed to
 		# point the feet somewhere else for a frame.
 		_errand = _goal
@@ -259,37 +326,125 @@ func _decide() -> void:
 		_goal_plane = thief.get_plane()
 		return
 
-	# 4. A defender's whole job: meet anyone who comes into the yard, and go back home when they
+	# 4. Holding a wedge: put it in the pile. A wedge in the paws is worth nothing at all until it
+	#    is banked (GDD section 2, and match_director.gd's `_check_cheese` is where the walk gets
+	#    paid), so a mouse that picks one up and then wanders off has taken cheese OUT of the
+	#    economy -- it is off the map, uncounted, and it drops on the floor the moment they are
+	#    scruffed.
+	#
+	#    ABOVE EVERYTHING EXCEPT THE BANNER, and below all three banner rules, which is the whole
+	#    of the argument for where it sits. It is one short walk to convert, so making it wait
+	#    behind a raid means it never converts; but a crew that is losing its flag right now does
+	#    not stop to do the shopping.
+	if get_carried_cheese() > 0:
+		_intent = "banking a wedge"
+		_goal = _director.nest_of(team).stores_point()
+		return
+
+	# 5. A defender's whole job: meet anyone who comes into the yard, and go back home when they
 	#    don't. Measured from the nest, so it cannot be walked away from its post.
 	if role == DEFENDER:
 		var nest := _director.nest_of(team)
-		var intruder := _nearest_enemy_within(nest.global_position, defend_radius)
-		if intruder != null:
-			_intent = "defending"
-			_goal = intruder.global_position
-			# THE ONE THAT MATTERS. Someone crossing your patch three planes down is still
-			# crossing your patch, and until M4 a defender watched them do it from the lawn.
-			# Measured from the nest in plan view, so a tunnel does not buy an intruder distance
-			# it did not walk.
-			_goal_plane = intruder.get_plane()
-			return
+		var intruder := _seen_within(nest.global_position, defend_radius, false)
+		if not intruder.is_empty():
+			# STALE CONTACTS ARE ALLOWED HERE, unlike in `_pick_quarry`, and the three intents say
+			# which is which out loud. Walking to where somebody was last seen is a perfectly
+			# sensible thing to do about a shape that went into the grass thirty metres from your
+			# nest -- it is what a person does -- and it is the only way losing a defender by
+			# breaking line of sight can feel like something you achieved rather than a bot bug.
+			var live := bool(intruder["live"])
+			# WHERE THE CREW LAST SAW THEM, not where they are. Reading the mouse's live position
+			# here would quietly undo the whole of the change above it: the bot would arrive at a
+			# stale marker's coordinates by way of a perfect pursuit curve.
+			#
+			# THE ONE THAT MATTERS about the plane. Someone crossing your patch three planes down is
+			# still crossing your patch, and until M4 a defender watched them do it from the lawn.
+			var at: Vector3 = intruder["at"]
+			var plane := int(intruder["plane"])
+			var label := "defending"
+
+			if not live:
+				label = "checking a contact"
+				# LOST ON A SHAFT MOUTH MEANS THEY WENT DOWN IT. Resolved BEFORE the arrival test
+				# below, and getting that order wrong broke `bots_follow` in exactly the way the
+				# check exists to catch: a defender that reached the hole had, by the arrival test's
+				# reckoning, checked the spot and found nothing -- so it struck the contact off and
+				# went home, standing on the entrance its quarry had just climbed into.
+				if plane == 0:
+					var below := _went_to_ground(at)
+					if not below.is_empty():
+						label = "following them down"
+						at = below["at"]
+						plane = int(below["plane"])
+
+			# ARRIVED AND FOUND NOBODY: strike it off and go back to the post. Measured against
+			# where the bot is actually being sent -- which for a contact that went underground is
+			# the corridor and not the lawn above it, hence the plane term. Without that, a defender
+			# standing on a mouth is already "at" the cell below and never descends.
+			if live or plane != get_plane() or _flat_gap(at) > arrival_slack:
+				_intent = label
+				_goal = at
+				_goal_plane = plane
+				return
+			_cleared[intruder["mouse"]] = true
 		_intent = "holding the nest"
 		_goal = _post(nest)
 		return
 
-	# 5. An ally has their banner -- escort them home rather than running a second raid into a
+	# 6. An ally has their banner -- escort them home rather than running a second raid into a
 	#    nest that no longer has anything to steal.
 	if theirs.state == Banner.CARRIED and theirs.carrier != null and theirs.carrier.team == team:
 		_intent = "escorting"
 		_goal = theirs.carrier.global_position
 		return
 
-	# 6. Otherwise: go and take theirs. THE ONLY ERRAND AN ENGINEER MAY DIG, because it is the only
+	# 7. The crew is running out of lives: go and fetch some. THE BANKRUPTCY PLAY (GDD section 2)
+	#    -- disengage, concede if you have to, go and refill -- and until M8 the AI could not
+	#    perform it at all. Bots picked cheese up by walking over it and never once went to get any,
+	#    so a crew of bots played the whole economy by accident.
+	#
+	#    RAIDERS ONLY. Sending the defender shopping empties the nest, which is how a refill turns
+	#    into a conceded capture nobody chose.
+	#
+	#    NOT `_raiding`, deliberately: an Engineer does not tunnel to a cheese pile. Digging is a
+	#    twenty-second investment that pays off by arriving somewhere unwatched, and a wedge on the
+	#    open lawn is neither.
+	if role == RAIDER and _foraging():
+		var pile := CheeseCache.nearest(get_tree(), global_position)
+		if pile != null and global_position.distance_to(pile.global_position) <= forage_range:
+			_intent = "fetching cheese"
+			_goal = pile.global_position
+			return
+
+	# 8. Otherwise: go and take theirs. THE ONLY ERRAND AN ENGINEER MAY DIG, because it is the only
 	#    one that is not urgent -- everything above this is a banner in play, and a tunnel is a
 	#    twenty-second investment nobody makes while the match is being decided above their head.
 	_intent = "going for their banner"
 	_goal = theirs.global_position
 	_raiding = true
+
+
+## Is this crew poor enough to go shopping, and has it stopped being poor yet?
+##
+## HYSTERESIS, AND IT IS NOT OPTIONAL. A bare `cheese_of(team) < forage_below` flips the moment a
+## single wedge lands, so a bot banks one, decides the crew is fine, turns round for the enemy
+## nest, gets scruffed, and the crew is a wedge poorer than when it started. The same jitter that
+## made the old dynamic class rule unusable (see `_wanted_class`), one system over: a threshold
+## read raw is a threshold something will oscillate across.
+##
+## So it latches. Below `forage_below` the crew starts shopping, and it does not stop until it has
+## `forage_until` -- which means a refill is a decision the crew commits to for a stretch, and
+## reads from outside as a crew that has pulled back to regroup rather than as five mice
+## twitching.
+func _foraging() -> bool:
+	if _director == null:
+		return false
+	var pile := _director.cheese_of(team)
+	if _stocking:
+		_stocking = pile < forage_until
+	else:
+		_stocking = pile < forage_below
+	return _stocking
 
 
 ## Spend a life, or don't. The economy half of the ranking above.
@@ -318,8 +473,11 @@ func _consider_scurry() -> void:
 	if not scurry_ready():
 		return
 
+	# LIVE CONTACTS ONLY. A burst is a life, and spending one because somebody was seen near this
+	# spot twelve seconds ago is spending it on a memory. The rule is "I am being chased", which is
+	# a thing you have to be able to SEE to be true.
 	if is_carrying():
-		if _nearest_enemy_within(global_position, scurry_pursuit) != null:
+		if not _seen_within(global_position, scurry_pursuit, true).is_empty():
 			_director.try_scurry(self)
 		return
 
@@ -333,6 +491,64 @@ func _consider_scurry() -> void:
 		_director.try_scurry(self)
 
 
+## Which gear to walk in. The third decision, alongside where to go and who to hit.
+##
+## BOTS COULD NOT DO EITHER OF THESE UNTIL M8, and it was a real asymmetry rather than a missing
+## flourish. `_tier_multiplier` lived on `Player`, so every bot in every match ran at exactly one
+## speed: it could not sprint, which meant a human could simply outrun a defender for as long as
+## they liked, and it could not go quiet, which meant the grass concealed the human from the AI
+## (M8's other half) and never the AI from the human. Two mechanics that applied to one mouse in
+## four.
+##
+## SPRINT IS FOR THE TWO MOMENTS THE RANKING ALREADY CARES ABOUT -- getting away with their banner,
+## and catching whoever has yours -- because those are the two errands that are a race. It is
+## deliberately the same pair `_consider_scurry` spends cheese on, and the two stack the way they
+## do for a player: sprint is free and runs out, Scurry costs a life and does not. A bot reaches for
+## the free one first by simply having both rules read the same situation.
+##
+## CREEPING IS FOR A RAID, and only while the raid is the errand. The point is not that slow is
+## safer -- it is that a mouse crossing the yard at a walk stays under `reveal_opacity` in cover and
+## therefore off the enemy's map (grass_camouflage.gd), which is the same trade the human makes
+## with the same key. It is skipped the moment anything urgent happens, because everything above
+## the raid in the ranking is a banner in play and none of it waits.
+##
+## NO CREEPING WHILE THE DIGGER DRIVES. A dig is meant to look like standing still, the digger
+## returns the bot's own position to express that, and halving a zero heading achieves nothing
+## except making the walk to the next face take twice as long.
+func _consider_pace() -> void:
+	var racing := is_carrying()
+	if not racing:
+		var thief := _director.carrier_of(team)
+		racing = thief != null and not thief.is_scruffed()
+	request_sprint(racing)
+
+	# Only worth the speed when there is something to hide in. Asked of the same node the enemy
+	# crew's sweep asks, so a bot slows down exactly when slowing down would buy it something --
+	# and out in the open, where it would buy nothing, it walks like everybody else.
+	set_creeping(_raiding and not racing and not _driven and _in_cover())
+
+
+## Would going quiet actually hide this mouse? True only where there is cover to be hidden by.
+##
+## ASKED OF ITS OWN CONCEALMENT rather than of the enemy's contact book, and the distinction is the
+## whole reason this is legal. "Am I hidden right now" is a fact about this mouse and the grass it
+## is standing in; "does the enemy know where I am" is a fact about THEIR knowledge, and a bot
+## reading that would be omniscience wearing a stealth costume.
+##
+## Fails closed. No spotting node means no concealment model, so there is nothing to be quiet for
+## and the bot walks at its normal pace -- which is exactly what the headless audits should see.
+func _in_cover() -> bool:
+	if _spotting == null:
+		_spotting = get_tree().get_first_node_in_group(Spotting.SPOTTING_GROUP) as Spotting
+	if _spotting == null:
+		return false
+	# Measured at RUNNING pace rather than at the pace it is considering, which is the only way to
+	# ask the question without it answering itself: a bot already creeping is already hidden, so
+	# reading its current opacity would latch it into a permanent crawl the moment it touched a
+	# patch. `concealment_at` is about the ground, not about the mouse on it.
+	return _spotting.cover_at(global_position) > 0.0
+
+
 ## Where a defender stands when nothing is happening: a step out of the nest, toward the middle
 ## of the arena. On the banner itself it would be in the way of its own crew returning it.
 func _post(nest: Nest) -> Vector3:
@@ -343,74 +559,162 @@ func _post(nest: Nest) -> Vector3:
 	return nest.global_position + toward.normalized() * 2.2
 
 
-## Who this bot is squaring up to: the nearest enemy close enough to be worth facing. Never a
-## destination -- see `engage_radius`.
+## Who this bot is squaring up to: the nearest enemy its crew can see RIGHT NOW, close enough to
+## be worth facing. Never a destination -- see `engage_radius`.
+##
+## LIVE CONTACTS ONLY, and that is the whole difference between this and the defender's rule. A
+## remembered contact is a guess about where somebody was, and you do not swing at a guess. Until
+## M8 this asked the scene tree with no concealment test of any kind -- the gate had been written
+## once, for the rule that produces a destination, and never for this one -- so a mouse doing
+## everything the grass asks still got faced, tracked and hit from four metres. Worse than merely
+## being seen: `_walk` hands the facing to the fight, so the bot also visibly STOPPED and stared,
+## which is how you know you have been spotted by something that cannot see you.
+## MY PLANE ONLY, and asked as part of the search rather than of the answer. Filtering afterwards
+## reads the same and is not: the book belongs to the CREW, so the nearest live contact may have
+## been picked out by a mouse two planes up, and rejecting the winner leaves this bot ignoring the
+## enemy actually standing next to it. Same bug the plane test in spotting.gd's own sweep exists to
+## prevent, arriving through the back door.
 func _pick_quarry() -> Mouse:
-	var near := _nearest_enemy()
-	if near == null:
+	var seen := _seen_within(global_position, engage_radius, true, true)
+	if seen.is_empty():
 		return null
-	if global_position.distance_to(near.global_position) > engage_radius:
-		return null
-	return near
+	return seen["mouse"] as Mouse
 
 
-## The nearest enemy this bot has actually SEEN within `reach` of a spot.
+## The nearest enemy this bot's CREW believes is within `reach` of a spot, or an empty dictionary.
+## `fresh` demands the contact was seen in the most recent sweep rather than merely remembered;
+## `reachable` demands it be on this bot's own plane.
 ##
-## The concealment gate belongs here and not in `_nearest_enemy`, because this is the one that
-## produces a DESTINATION -- a defender reading this sets `_goal` to whatever it returns. Walking
-## at a mouse crouched in deep grass is the precise failure GDD section 8 is meant to prevent:
-## the human does everything the mechanic asks, goes still, watches the blades settle, and the
-## defender strolls over anyway. Whatever the grass hides, it has to hide from both crews or it
-## is scenery.
+## Returns `{mouse, at, plane, live}`. **`at` is where the crew last SAW them, which is not where
+## they are** -- every caller wanting a destination wants that and not the mouse's position.
 ##
-## A carrier is never hidden -- grass_camouflage.gd pins them at full opacity -- so the rule that
-## sends a bot after its stolen banner needs no exception here and does not get one.
-func _nearest_enemy_within(of: Vector3, reach: float) -> Mouse:
-	var best: Mouse = null
+## PERCEPTION IS THE CONTACT BOOK AND THERE IS NO SECOND COPY OF IT. What used to be here was a
+## direct scan of the scene tree filtered through one opacity threshold, and it got two things
+## wrong at once. It saw through boulders, walls and its own back -- spotting.gd says plainly that
+## range and line of sight are the sweep's business and not `hidden`'s, and nothing on this side
+## was doing that work. And it was PER MOUSE, so a crew mate watching a lane was worth nothing to
+## anybody but themselves, which is the opposite of what a shared picture is for.
+##
+## Asking the book buys plane, range, line of sight, the opacity threshold and the carrier
+## exemption in one call, from the same node that decides what your minimap shows. The bot knows
+## exactly what the marker on your HUD knows -- so when it does something surprising, the reason is
+## on screen.
+func _seen_within(of: Vector3, reach: float, fresh: bool, reachable: bool = false) -> Dictionary:
+	if _spotting == null:
+		_spotting = get_tree().get_first_node_in_group(Spotting.SPOTTING_GROUP) as Spotting
+	if _spotting == null:
+		return _unaided_within(of, reach, reachable)
+
+	var best: Dictionary = {}
 	var closest := reach
-	for node in get_tree().get_nodes_in_group(MOUSE_GROUP):
-		var other := node as Mouse
-		if other == null or other.team == team or other.is_scruffed():
+	var book := _spotting.contacts_for(team)
+	for key: Variant in book.keys():
+		# VALIDITY BEFORE THE CAST, for the reason spotting.gd's `_forget` spells out at length:
+		# `key as Mouse` performs the cast on assignment and throws outright on a freed object, and
+		# M7 frees a mouse every time a human takes a bot's chair.
+		if key == null or not is_instance_valid(key):
+			_cleared.erase(key)
 			continue
-		if _hidden_from_me(other):
+		var other := key as Mouse
+		# A scruffed mouse is not a threat, and chasing one is the classic bot bug where it stands
+		# over a body until the respawn. The book keeps the contact -- it is still true that they
+		# were seen there -- so the filter belongs here rather than in the sweep.
+		if other == null or other.is_scruffed():
 			continue
-		var gap := of.distance_to(other.global_position)
+		var entry: Dictionary = book[key]
+		var live := bool(entry.get("live", false))
+		# SEEING THEM AGAIN UN-STRIKES THEM. A ghost this bot walked through is struck off until the
+		# crew actually lays eyes on that mouse, at which point the contact is news again -- so
+		# hiding, being found, and hiding again works as many times as you can manage it.
+		if live:
+			_cleared.erase(key)
+		elif _cleared.has(key):
+			continue
+		if fresh and not live:
+			continue
+		if reachable and int(entry.get("plane", 0)) != get_plane():
+			continue
+		var at: Vector3 = entry.get("at", other.global_position)
+		var gap := of.distance_to(at)
 		if gap <= closest:
 			closest = gap
-			best = other
+			best = {
+				"mouse": other,
+				"at": at,
+				"plane": int(entry.get("plane", 0)),
+				"live": live,
+			}
 	return best
 
 
-## Too well concealed for this bot to be steering at, on the same 0..1 scale the minimap uses.
+## A contact that went stale standing on a shaft mouth climbed into it. Returns where to go and
+## look, or an empty dictionary.
 ##
-## Asked of spotting.gd rather than answered here, so there is exactly one threshold in the game
-## for "I have not resolved that shape". A second copy would drift, and the day it drifted the
-## grass would conceal you from the map and not from the bots -- which is worse than not
-## concealing you at all, because it would still LOOK like it was working.
+## THE ONLY WAY A BOT FINDS A TUNNEL BY ITSELF, and it is narrow on purpose. Earth hides you (GDD
+## section 3) and spotting.gd holds that line absolutely -- an enemy a metre below your feet is not
+## spotted, and match_audit asserts exactly that. Until M8 the bots quietly disagreed: rule 4 read
+## the scene tree and ignored planes entirely, so a defender had X-ray vision through the ground and
+## an Engineer's raid could never work against one. The audit had been passing on the strength of
+## that private model rather than of the rule.
 ##
-## Fails open. No spotting node means no concealment model at all, and a defender that ignores
-## every intruder is a far louder bug than one that sees too well.
-func _hidden_from_me(other: Mouse) -> bool:
-	if _spotting == null:
-		_spotting = get_tree().get_first_node_in_group(Spotting.SPOTTING_GROUP) as Spotting
-	return _spotting != null and _spotting.hidden(other)
+## So a bot may not notice a CORRIDOR. It may only notice a MOUSE -- on the lawn, in the open,
+## disappearing into a hole -- which is a thing you can genuinely watch happen. That is why this is
+## asked of the contact's own last-seen point and not of the network: consulting the mouth list to
+## find somewhere an enemy might be would be a bot reading a map of tunnels its crew never cut,
+## which is the leak route_planner.gd is separately being fixed for. Here the mouth is only ever
+## confirmation of something a crew mate saw.
+##
+## `[LATER]` The real counterplay to a raid is the Sneak's sonar, which is a WATCH and is precisely
+## what the defending Sneak seat exists for (see MatchDirector.SEATS) -- and nothing in the game has
+## ever fired it. When bots gain ability inputs, a defending Sneak should sound the layer below its
+## own banner on a timer and act on the cant mark. A passive "hears an enemy one layer down" on the
+## Sneak is worth weighing at the same time, as a class ability rather than as a fact about earth.
+## This rule is what a bot can manage until then, not a substitute for either.
+func _went_to_ground(at: Vector3) -> Dictionary:
+	if _network == null:
+		return {}
+	var graph := _network.graph()
+	if graph == null:
+		return {}
+	for cell: Vector2i in graph.mouths():
+		var mouth := _network.cell_to_world(0, cell)
+		if Vector2(at.x - mouth.x, at.z - mouth.z).length() > mouth_slack:
+			continue
+		# The mouth is on the lawn; what is under it is the first place worth looking. A shaft with
+		# nothing at the bottom is a hole somebody filled in behind them.
+		if not graph.has(1, cell):
+			continue
+		return {"at": _network.cell_to_world(1, cell), "plane": 1}
+	return {}
 
 
-## Nearest enemy still standing. A scruffed mouse is not a threat and chasing one is the
-## classic bot bug where it stands over a body until the respawn.
-func _nearest_enemy() -> Mouse:
-	var best: Mouse = null
-	var closest := INF
+## What a bot sees on a map with no spotting node: everything within reach, as it used to.
+##
+## FAILS OPEN, DELIBERATELY, which is the same bargain the old concealment gate struck. A map
+## without a concealment model is one where a defender that ignored every intruder would be a far
+## louder bug than one that sees too well -- and it is exactly what the headless audits build,
+## where the grass, the camera and the HUD are stripped out and the rules are all that is left.
+##
+## Shaped like a contact so the callers cannot tell the difference, and reported `live`, because
+## with nothing modelling memory there is no such thing as a stale one.
+func _unaided_within(of: Vector3, reach: float, reachable: bool) -> Dictionary:
+	var best: Dictionary = {}
+	var closest := reach
 	for node in get_tree().get_nodes_in_group(MOUSE_GROUP):
 		var other := node as Mouse
 		if other == null or other == self or other.team == team or other.is_scruffed():
 			continue
-		if other.get_plane() != get_plane():
+		if reachable and other.get_plane() != get_plane():
 			continue
-		var gap := global_position.distance_to(other.global_position)
-		if gap < closest:
+		var gap := of.distance_to(other.global_position)
+		if gap <= closest:
 			closest = gap
-			best = other
+			best = {
+				"mouse": other,
+				"at": other.global_position,
+				"plane": other.get_plane(),
+				"live": true,
+			}
 	return best
 
 
@@ -495,8 +799,10 @@ func _drive(delta: float) -> void:
 ## somebody used to be. It also means a tunnel dug across a bot's route is noticed within a third
 ## of a second, with no invalidation machinery at all.
 func _plan() -> void:
+	# THE CREW IS PASSED, and it is what stops a bot routing through the enemy's holes. See
+	# RoutePlanner._ends -- until M8 a plan was built from every mouth on the map.
 	_route = RoutePlanner.plan(
-		_network, global_position, get_plane(), _goal, _goal_plane, tunnel_bias
+		_network, global_position, get_plane(), _goal, _goal_plane, tunnel_bias, team
 	)
 	_aim()
 

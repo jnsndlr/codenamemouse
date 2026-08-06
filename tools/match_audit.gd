@@ -35,6 +35,23 @@ extends SceneTree
 ##                   anyone contests, it is a place the AI cannot reach. Checked end to end --
 ##                   decision, route, walk, transit -- because every part of that chain fails the
 ##                   same way, by the bot standing on the lawn looking fine.
+##   BOT_BLIND       Concealment works on the AI too. A bot does not face, chase or hit an enemy
+##                   its crew cannot see -- which through M7 it did, because bot.gd scanned the
+##                   scene tree instead of reading the contact book. This is the failure GDD
+##                   section 8 is written to prevent and the one the player FEELS: you do
+##                   everything the grass asks, go still, and get walked at anyway.
+##   BOT_ROUTES      A crew's routes are built only from entrances that crew knows about. A bot
+##                   walking into an enemy shaft it has never seen is acting on hidden information
+##                   as surely as one reading their minimap, and it is the same leak wearing
+##                   walking boots.
+##   BOT_CHEESE      Bots play the economy on purpose: a poor crew sends raiders to fetch wedges,
+##                   and a wedge in the paws gets banked rather than carried around the match. The
+##                   refill decision LATCHES, so a crew commits to regrouping instead of flipping
+##                   every time a wedge lands.
+##   GEARS           The speed ladder belongs to every mouse, not just a driven one. Sprint burns
+##                   a tank and is refused on fumes; Slow is free and beats Sprint. A bot climbs
+##                   the same ladder a player does -- until M8 it had one gear, so a human could
+##                   outrun any defender forever and hide from an AI that could not hide back.
 ##   SPOTTING        What the minimap is allowed to show. An enemy your crew can see appears;
 ##                   one behind a prop, one on another plane, and one nobody has laid eyes on do
 ##                   not. A contact goes stale where it was last seen and is forgotten on time.
@@ -58,6 +75,27 @@ const STRIP: Array[String] = [
 	"CameraRig", "HUD", "LookPanel", "Surface/Rocks", "Surface/Grass", "FallGuard"
 ]
 
+## A stand-in for grass_camouflage.gd that reports exactly the opacity a check tells it to.
+##
+## The grass is stripped from every arena here, so the real one has nothing to read and answers
+## "fully visible" for everybody. Dictating the number instead is what lets `bot_blind` change one
+## thing and nothing else -- see the argument there.
+const FAKE_CAMOUFLAGE: String = """
+extends Node
+
+## mouse -> how visible it is. Anyone not in it is in the open.
+var opacity: Dictionary = {}
+## How much concealment the ground offers, everywhere at once. The real one reads a noise field;
+## a check that had to hunt for a dense patch would be testing where the noise happened to be thick.
+var cover: float = 0.0
+
+func opacity_of(mouse: Node) -> float:
+	return opacity.get(mouse, 1.0)
+
+func cover_at(_at: Vector3) -> float:
+	return cover
+"""
+
 var _scene: Node
 var _director: MatchDirector
 var _findings: Array[String] = []
@@ -78,6 +116,10 @@ func _initialize() -> void:
 		["bots_move", _check_bots_move],
 		["spotting", _check_spotting],
 		["bots_follow", _check_bots_follow],
+		["bot_blind", _check_bot_blind],
+		["bot_routes", _check_bot_routes],
+		["bot_cheese", _check_bot_cheese],
+		["gears", _check_gears],
 		["classes", _check_classes],
 		["cave_in", _check_cave_in],
 		["stomp", _check_stomp],
@@ -1563,6 +1605,20 @@ func _check_classes() -> void:
 ## The intruder is a puppet rather than a driven mouse: it has to STAY in the tunnel for the
 ## thing being measured to mean anything, and a bot that wandered off would turn a failed follow
 ## into a passed one.
+##
+## `[REVISED at M8]` THE INTRUDER IS NOW SEEN GOING DOWN, and it took a regression to notice that
+## it had to be. This check used to drop the puppet straight into the corridor, having never been
+## on the lawn at all -- and it passed, because bot.gd scanned the scene tree for enemies and
+## ignored planes while doing it. The defender was not following anybody; it had X-ray vision
+## through a metre of earth, which is the one thing `_check_spotting` asserts is impossible and the
+## one thing the tunnel layer exists to prevent. Two milestones' invariants had been contradicting
+## each other in the dark, and the bot's private perception model was what kept the argument quiet.
+##
+## So the puppet stands at the mouth in the open first, gets spotted like anything else, and then
+## climbs in. What is asserted afterwards is unchanged -- the defender goes down and reaches them --
+## but the knowledge now arrives by a route the game actually permits, which means this check can
+## fail for the right reason. Verified by making the intruder skip the surface step and watching it
+## go red.
 func _check_bots_follow() -> void:
 	await _arena(2)
 	var network := _scene.get_node("Tunnels") as TunnelNetwork
@@ -1579,11 +1635,27 @@ func _check_bots_follow() -> void:
 	)
 	_expect(hole < 9.0, "the test's entrance is inside the defender's patch (%.1fm out)" % hole)
 
-	# A blue mouse standing in that corridor, under the red crew's noses.
-	var intruder := _puppet(Team.BLUE, network.cell_to_world(1, Vector2i(18, 20)) + Vector3.UP * 0.05)
+	# A blue mouse ON THE LAWN, standing on the entrance, in the open and in plain view of the red
+	# crew. This is the part that makes the follow legal: somebody has to watch them do it.
+	var intruder := _puppet(Team.BLUE, network.cell_to_world(0, mouth))
+	await _advance(0.5)
+	_expect(
+		_scene.get_node("Spotting").contacts_for(Team.RED).has(intruder),
+		"the red crew sees the intruder before they go under"
+	)
+
+	# And down they go. The contact freezes on the mouth and starts ageing from there, which is
+	# the whole of what the defender has to work with.
+	intruder.global_position = network.cell_to_world(1, Vector2i(18, 20)) + Vector3.UP * 0.05
 	intruder.set_plane(1)
 	await _advance(0.3)
 	_expect(intruder.get_plane() == 1, "the intruder is underground to begin with")
+	_expect(
+		not bool(
+			_scene.get_node("Spotting").contacts_for(Team.RED).get(intruder, {}).get("live", false)
+		),
+		"and is no longer visible once they are"
+	)
 
 	var defender := _bot(Team.RED, Bot.DEFENDER)
 	if defender == null:
@@ -1623,6 +1695,382 @@ func _check_bots_follow() -> void:
 		"a carrier is refused the shaft"
 	)
 	_expect(carrier.get_plane() == 0, "and is still on the surface afterwards")
+
+
+## Does the grass work on the AI? (M8)
+##
+## THE ONE THE PLAYER FEELS. Every other hidden-information check here is about a marker on a map;
+## this is about being crouched in cover, doing everything the mechanic asks, and watching a
+## defender turn round, walk over and hit you anyway. Through M7 that is exactly what happened:
+## `_pick_quarry` scanned the scene tree with no concealment test of any kind, because the gate had
+## been written once for the rule that produces a destination and never for the rule that produces
+## a fight.
+##
+## STUBBED AT `opacity_of`, WHICH IS THE RIGHT SEAM. The arena's grass is stripped here (63000
+## blades per scenario) and hunting for a patch dense enough to hide in would make this a test of
+## where the noise field happens to be thick. What is under test is the BOT, given concealment --
+## so concealment is dictated, and the grass's own job of turning stillness into opacity is left to
+## grass_hiding_probe.gd where it can be looked at.
+##
+## SHOWN A CASE THE OTHER RULES WOULD HAVE PERMITTED, per the standing rule for anything that
+## filters. The same puppet, in the same spot, on the same plane, in the open, with clear line of
+## sight, is asserted to be engaged FIRST. Only opacity changes between the two halves, so a bot
+## that had simply stopped noticing enemies -- or a check aimed at an empty patch of lawn -- cannot
+## pass this.
+func _check_bot_blind() -> void:
+	await _arena(2)
+	var eyes := _scene.get_node("Spotting") as Spotting
+	eyes.interval = 0.05
+
+	var veil := Node.new()
+	var stub := GDScript.new()
+	stub.source_code = FAKE_CAMOUFLAGE
+	stub.reload()
+	veil.set_script(stub)
+	veil.name = "FakeCamouflage"
+	_scene.add_child(veil)
+	# The sweep resolves its camouflage once, in `_ready`, and this arena had none to resolve.
+	eyes.set("_camouflage", veil)
+
+	var defender := _bot(Team.RED, Bot.DEFENDER)
+	if defender == null:
+		_expect(false, "the red crew fielded a defender at all")
+		return
+	# Let it walk out to its post and settle, so the intruder is placed relative to where the bot
+	# actually ends up rather than to where it spawned.
+	await _advance(2.0)
+
+	# SWINGS ARE COUNTED RATHER THAN HEALTH SAMPLED, and the difference is not pedantry. A swing
+	# lands knockback, so a puppet that gets hit is a puppet that slides out of reach -- sampling
+	# health at the end would show it stop dropping for the most ordinary reason in the world and
+	# call that concealment. The signal fires wherever the mouse ends up.
+	# IN AN ARRAY BECAUSE GDSCRIPT LAMBDAS CAPTURE LOCALS BY VALUE. A bare `int` incremented in
+	# here counts perfectly, into a copy nobody reads, and the check reports zero swings forever --
+	# which looks exactly like the bot correctly declining to swing.
+	var swings := [0]
+	defender.swung.connect(func(_who: Mouse) -> void: swings[0] += 1)
+
+	# Right under its nose: inside the nest patch, inside STRIKE range, in the open.
+	var seen := _puppet(Team.BLUE, defender.global_position + defender.get_facing_direction() * 0.45)
+	await _held_in_reach(defender, seen, 1.2)
+	_expect(
+		eyes.contacts_for(Team.RED).has(seen),
+		"the crew sees an intruder standing in the open"
+	)
+	_expect(defender.get("_quarry") == seen, "and the defender squares up to them")
+	_expect(swings[0] > 0, "and actually swings at them (%d)" % swings[0])
+
+	# Now the only thing that changes. Deep cover, perfectly still: a tenth of an opacity, well
+	# under spotting.gd's `reveal_opacity`.
+	#
+	# HELD IN REACH FOR THIS HALF TOO. A bot that stopped hitting a mouse it can no longer reach
+	# would prove nothing at all. Same offset, same plane, same clear line of sight -- opacity is
+	# the only difference between the two halves.
+	veil.set("opacity", {seen: 0.1})
+	swings[0] = 0
+	await _held_in_reach(defender, seen, 1.5)
+
+	_expect(
+		not bool(eyes.contacts_for(Team.RED).get(seen, {}).get("live", true)),
+		"a concealed intruder stops being a live contact"
+	)
+	_expect(defender.get("_quarry") == null, "the defender stops squaring up to them")
+	# THE ONE A PLAYER WOULD RECOGNISE. Everything above it is bookkeeping; this is whether you get
+	# hit while you are hiding.
+	_expect(swings[0] == 0, "and stops swinging at them (%d swings while concealed)" % swings[0])
+
+
+## Can every mouse change gear? (M8)
+##
+## THE LADDER MOVED, AND THAT IS THE WHOLE OF THIS CHECK. Sprint and Slow lived on `Player`, so
+## three quarters of the mice in any match ran at one fixed speed -- a human could outrun a
+## defender indefinitely, and could crouch past an AI that had no concept of crouching. Asserted on
+## a plain `Mouse` rather than through a bot's ranking, because what must hold is that the ladder is
+## a property of a mouse; which rule climbs it is bot.gd's business and changes with tuning.
+##
+## THE REFUSAL IS THE PART WORTH ASSERTING. A sprint that never runs out is a different game, and
+## an empty tank that still grants one is invisible from inside a match -- you would simply never
+## notice you were not slowing down.
+func _check_gears() -> void:
+	await _arena(1)
+	var mouse := _puppet(Team.BLUE, Vector3(0.0, 0.2, 0.0))
+	mouse.set_class(MouseClass.GENERALIST)
+	var walk := mouse.move_speed()
+
+	mouse.request_sprint(true)
+	_expect(mouse.is_sprinting(), "a mouse with a full tank may sprint")
+	_expect(mouse.move_speed() > walk, "and sprinting is faster than walking")
+
+	# SLOW BEATS SPRINT. You cannot be quiet and fast -- the tier says so, and grass_camouflage.gd
+	# reads the resulting speed to decide how visible you are, so a mouse that could hold both would
+	# be sprinting at a tenth opacity.
+	mouse.set_creeping(true)
+	_expect(mouse.move_speed() < walk, "slow beats sprint while both are set")
+	mouse.set_creeping(false)
+
+	# Run the tank dry. `_tick_stamina` is driven by the physics tick, so this is real seconds of
+	# sprinting rather than a number poked into a field.
+	var ran := 0.0
+	for i in range(1200):
+		mouse.request_sprint(true)
+		await physics_frame
+		ran += get_root().get_process_delta_time()
+		if not mouse.is_sprinting():
+			break
+	_expect(not mouse.is_sprinting(), "a sprint ends when the tank runs out (after %.1fs)" % ran)
+	_expect(
+		mouse.get_stamina_ratio() < 0.01,
+		"and the tank really is empty (%.2f)" % mouse.get_stamina_ratio()
+	)
+
+	# THE REFUSAL. Asking again on fumes must not grant it, or a mouse stutter-sprints forever.
+	mouse.request_sprint(true)
+	_expect(not mouse.is_sprinting(), "and asking again on an empty tank is refused")
+	_expect(is_equal_approx(mouse.move_speed(), walk), "so it is back to a walk")
+
+	# And it comes back after a quiet spell, or the mechanic is one-shot.
+	for i in range(600):
+		await physics_frame
+		if mouse.get_stamina_ratio() > 0.5:
+			break
+	_expect(mouse.get_stamina_ratio() > 0.5, "stamina refills after a quiet spell")
+	mouse.request_sprint(true)
+	_expect(mouse.is_sprinting(), "and the mouse may sprint again")
+
+	# PER CLASS, which is the reason the dial is on the definition at all (GDD section 9): sprint
+	# SPEED is uniform and duration is what differs.
+	mouse.set_class(MouseClass.SNEAK)
+	var nimble := mouse.sprint_seconds
+	mouse.set_class(MouseClass.BRUTE)
+	_expect(
+		nimble > mouse.sprint_seconds,
+		"a Sneak sprints longer than a Brute (%.1fs vs %.1fs)" % [nimble, mouse.sprint_seconds]
+	)
+
+	# AND SOMEBODY ACTUALLY CLIMBS IT. The ladder existing on `Mouse` proves nothing on its own --
+	# what was missing was a bot that uses it, and a refactor that moved the code without wiring the
+	# rule would pass every assertion above.
+	#
+	# BOTH HALVES, because "slow" and "always slow" are very different bots and only one of them is
+	# right. Slow that buys no concealment is just slow, so a raider on bare lawn must walk normally;
+	# the same raider with cover under it must drop its pace. Only the ground changes between them.
+	await _arena(2)
+	var eyes := _scene.get_node("Spotting") as Spotting
+	var veil := Node.new()
+	var stub := GDScript.new()
+	stub.source_code = FAKE_CAMOUFLAGE
+	stub.reload()
+	veil.set_script(stub)
+	veil.name = "FakeCamouflage"
+	_scene.add_child(veil)
+	eyes.set("_camouflage", veil)
+
+	var raider := _bot(Team.RED, Bot.RAIDER)
+	if raider == null:
+		_expect(false, "the red crew fielded a raider at all")
+		return
+	raider.think_seconds = 0.05
+
+	veil.set("cover", 0.0)
+	await _advance(0.5)
+	_expect(not raider.is_creeping(), "a raider on open lawn walks at its normal pace")
+
+	veil.set("cover", 1.0)
+	await _advance(0.5)
+	_expect(raider.is_creeping(), "and goes quiet once there is cover worth using")
+
+
+## Do bots play the cheese economy on purpose? (M8)
+##
+## THEY DID NOT, AND IT WAS A REAL GAP RATHER THAN A MISSING FLOURISH. Cheese is the crew's lives
+## (GDD section 2) and the whole of it is a walk: take a wedge, carry it home, put it in the pile.
+## Bots picked wedges up by treading on them and never went to get any, never banked the ones they
+## had, and dropped them again on the next scruffing -- so an AI crew played the economy entirely by
+## accident, and a bot crew facing a human one was playing a different game with the same rules.
+##
+## THREE SEPARATE CLAIMS, because they fail separately: it FETCHES, it BANKS, and the decision
+## LATCHES. The last is the one nothing else would catch -- a bot that re-reads a bare threshold
+## banks one wedge, decides the crisis is over, walks off, and leaves the crew exactly where it
+## started. It is the same jitter that killed the first dynamic class rule, and the only visible
+## symptom is a crew that never quite recovers.
+func _check_bot_cheese() -> void:
+	await _arena(2)
+	var raider := _bot(Team.RED, Bot.RAIDER)
+	if raider == null:
+		_expect(false, "the red crew fielded a raider at all")
+		return
+	raider.think_seconds = 0.05
+
+	# The only pile on the map is the one this check places. The arena authors six of its own and a
+	# bot walking to the nearest of THOSE would pass a check that had asserted nothing.
+	for node in get_nodes_in_group(CheeseCache.GROUP):
+		node.free()
+	await _advance(0.1)
+
+	# A crew that is not poor does not shop. Asserted FIRST, because every claim below is about a
+	# bot leaving its errand, and one that had simply abandoned raiding would satisfy them all.
+	await _advance(0.3)
+	_expect(
+		raider.get_intent() != "fetching cheese",
+		"a crew with a full pile stays on the banner (%s)" % raider.get_intent()
+	)
+
+	# Now make it poor. The dial moves rather than the pile, so nothing has to reach inside the
+	# director's ledger to set up the case.
+	raider.forage_below = _director.cheese_of(Team.RED) + 5
+	raider.forage_until = raider.forage_below + 10
+
+	var pile := CheeseCache.new()
+	pile.wedges = 4
+	pile.position = raider.global_position + Vector3(3.0, 0.0, 0.0)
+	_scene.add_child(pile)
+	await _advance(0.3)
+	_expect(raider.get_intent() == "fetching cheese", "a poor crew sends a raider shopping")
+
+	# It gets there and picks one up.
+	var fetched := false
+	for i in range(600):
+		await physics_frame
+		if raider.get_carried_cheese() > 0:
+			fetched = true
+			break
+	_expect(fetched, "and the raider reaches the pile and takes a wedge")
+
+	# Lift the crew clear of the trigger while the wedge is still in its paws, so the two claims
+	# below are made against a crew that a bare threshold would call recovered.
+	_director.gain_cheese(Team.RED, 6)
+	_expect(
+		_director.cheese_of(Team.RED) > raider.forage_below,
+		"the test really did lift the crew past the trigger"
+	)
+
+	# THE RANKING'S ORDER, not hysteresis: banking sits above shopping, so a full-pawed bot converts
+	# what it has before starting anything else.
+	await _advance(0.3)
+	_expect(
+		raider.get_intent() == "banking a wedge",
+		"a raider holding a wedge banks it before anything else (%s)" % raider.get_intent()
+	)
+
+	# And the wedge actually lands in the pile, which is the only thing about any of this that
+	# changes the score.
+	var before := _director.cheese_of(Team.RED)
+	var banked := false
+	for i in range(900):
+		await physics_frame
+		if _director.cheese_of(Team.RED) > before:
+			banked = true
+			break
+	_expect(banked, "and the wedge reaches the crew's stores")
+
+	# HYSTERESIS, AND THIS IS THE ONLY PLACE THE TWO IMPLEMENTATIONS DISAGREE. Empty-pawed again,
+	# with the crew now sitting ABOVE `forage_below` and still short of `forage_until`: a bot that
+	# re-reads the threshold raw declares the crisis over and walks back to the banner, and a
+	# latching one goes and gets another wedge.
+	#
+	# It has to be asserted here rather than while the bot was carrying, because banking outranks
+	# shopping -- the earlier version of this check made the claim one rule too early and passed
+	# against both implementations, which is the failure this file keeps naming.
+	_expect(
+		_director.cheese_of(Team.RED) > raider.forage_below,
+		"the crew is past the trigger once the wedge is banked"
+	)
+	_expect(
+		_director.cheese_of(Team.RED) < raider.forage_until,
+		"and not yet at the point it is shopping toward"
+	)
+	# EITHER CHEESE INTENT COUNTS, because the pile is three metres away and a bot that kept going
+	# may already be carrying the next wedge by the time this is read. Both mean "still on the
+	# refill"; the implementation being ruled out says "going for their banner", which is neither.
+	await _advance(0.4)
+	var errand := raider.get_intent()
+	_expect(
+		errand == "fetching cheese" or errand == "banking a wedge",
+		"a crew mid-refill keeps going rather than stopping at the first wedge (%s)" % errand
+	)
+
+
+## Whose holes may a crew's route use? (M8)
+##
+## THE SAME LEAK AS EVERY OTHER ONE IN THIS FILE, wearing walking boots. M5 spent a milestone
+## making sure a crew's minimap, cutaway and sonar only ever show tunnels that crew has earned --
+## and route_planner.gd was quietly building plans out of `graph.mouths()`, which is every entrance
+## on the map. A bot could not SEE the enemy's shaft, and would walk into it anyway.
+##
+## SHOWN A CASE THE OTHER RULES WOULD HAVE PERMITTED, per the standing rule. The enemy shaft here
+## is not merely unknown -- it is dug, open, connected, on the right plane, and lands the bot far
+## nearer its errand than the surface walk does. Every reason to take it is present except the one
+## that matters, so a planner that had simply stopped finding routes cannot pass: the crew's OWN
+## mouth, set up identically, is asserted to be used.
+##
+## ASKED OF THE PLANNER RATHER THAN WATCHED IN A SOAK, deliberately. A bot declining to use a hole
+## is indistinguishable from a bot that happened to prefer the grass that minute, and a leak that
+## only shows up on the runs where the geometry lines up is one that passes review forever.
+func _check_bot_routes() -> void:
+	await _arena(2)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+
+	# A corridor RED cut, running most of the way across the yard. Nothing blue did or saw.
+	var theirs := Vector2i(6, 6)
+	network.dig_shaft_down(0, theirs, Team.RED)
+	for step in range(1, 14):
+		network.dig(1, theirs + Vector2i(step, 0), Team.RED)
+	network.dig_shaft_up(1, theirs + Vector2i(13, 0), Team.RED)
+	await _advance(0.2)
+
+	_expect(
+		not network.known_shaft_cells(0, Team.BLUE).has(theirs),
+		"the blue crew does not know about the red entrance"
+	)
+	_expect(
+		network.known_shaft_cells(0, Team.RED).has(theirs),
+		"and the red crew does"
+	)
+
+	var from := network.cell_to_world(0, theirs)
+	var to := network.cell_to_world(0, theirs + Vector2i(13, 0))
+
+	# The route red would take, and the same route asked for on blue's behalf.
+	var red_plan := RoutePlanner.plan(network, from, 0, to, 0, 0.7, Team.RED)
+	var blue_plan := RoutePlanner.plan(network, from, 0, to, 0, 0.7, Team.BLUE)
+
+	_expect(not red_plan.is_empty(), "the crew that dug it routes through its own tunnel")
+	_expect(
+		blue_plan.is_empty(),
+		"the other crew does not (got %d waypoints)" % blue_plan.size()
+	)
+
+	# AND THE MOMENT BLUE GENUINELY FINDS IT, IT MAY USE IT -- by the real mechanism, a mouse
+	# walking within sight of the hole, not by a flag set in the test. Knowledge is the only thing
+	# standing between the two answers above, so this check is worth nothing unless knowledge can
+	# actually arrive: a filter that never opens is indistinguishable from routing being broken.
+	var sight := _scene.get_node("TunnelSight") as TunnelSight
+	sight.interval = 0.05
+	var scout := _puppet(Team.BLUE, from + Vector3(2.0, 0.0, 0.0))
+	await _advance(0.5)
+	_expect(
+		sight.seen_mouths(Team.BLUE).has(theirs),
+		"a blue mouse standing next to the hole notices it"
+	)
+	_expect(
+		not RoutePlanner.plan(network, from, 0, to, 0, 0.7, Team.BLUE).is_empty(),
+		"and the crew may route through it once they have"
+	)
+	_expect(scout.get_plane() == 0, "the scout stayed on the lawn")
+
+
+## Hold a puppet at arm's length in front of a bot, so what `bot_blind` measures is the swing GATE
+## and never the geometry.
+##
+## A mouse that stands its ground next to a bot settles just OUTSIDE `strike_radius` -- 0.78m
+## against a reach of 0.75 -- because the walker stops an `arrival_slack` short of its goal and the
+## two collision capsules hold the rest. That is true of the real game and has nothing to do with
+## concealment, but left alone it makes both halves of the check read "no swings" and pass for a
+## reason the check is not about: the textbook version of an assertion that cannot fail.
+func _held_in_reach(bot: Bot, puppet: Mouse, seconds: float) -> void:
+	for i in range(maxi(1, int(ceilf(seconds * 60.0)))):
+		puppet.global_position = bot.global_position + bot.get_facing_direction() * 0.45
+		await physics_frame
 
 
 ## Distance between two mice ignoring height, so a mouse one plane below another reads as being

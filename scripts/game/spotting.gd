@@ -86,6 +86,23 @@ func hidden(mouse: Mouse) -> bool:
 	return _opacity_of(mouse) < reveal_opacity
 
 
+## Is there anything at this spot worth being quiet in? 0..1, the grass's own scale.
+##
+## PUBLIC FOR THE SAME REASON `hidden` IS: a bot choosing its pace has to be asking the question the
+## concealment model answers, not a second copy of it. The two are deliberately different questions
+## -- `hidden` is about a MOUSE and its speed, this is about the GROUND -- and a bot needs this one,
+## because one asking `hidden` about itself would read back the concealment its own slow walk had
+## just bought and never speed up again.
+##
+## Fails closed at zero: with no camouflage model there is nothing to hide in, so nobody slows down
+## for it. The opposite of `hidden`'s fail-open, and for the same reason in both cases -- the safe
+## answer is the one that does not silently change what a bot does.
+func cover_at(at: Vector3) -> float:
+	if _camouflage == null or not _camouflage.has_method("cover_at"):
+		return 0.0
+	return _camouflage.call("cover_at", at)
+
+
 ## 1 while a contact is fresh, falling to 0 as it is forgotten. The marker's alpha, and the
 ## honest answer to "how much should I trust this".
 func confidence(entry: Dictionary) -> float:
