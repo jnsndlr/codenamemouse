@@ -141,7 +141,7 @@ func _on_shaft_opened(plane: int, cell: Vector2i) -> void:
 	_join(plane, cell, plane + 1, cell)
 
 
-## A cell came down (the Engineer's cave-in). `AStar3D.remove_point` takes its edges with it, so
+## A cell came down (the Brute's cave-in). `AStar3D.remove_point` takes its edges with it, so
 ## there is nothing else to unpick -- which is the whole reason the graph is an AStar3D and not
 ## an adjacency list somebody maintains by hand.
 ##

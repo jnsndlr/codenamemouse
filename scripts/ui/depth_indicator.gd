@@ -65,11 +65,16 @@ func _process(delta: float) -> void:
 		else "aim + hold RMB: dig a tile     F: shaft down     R: shaft up"
 			+ "\narrows: turn view     double-tap W: sprint     shift: slow"
 	)
+	# The class line, and the Brute's is the only one that changes with where it is standing --
+	# because its ability does. Q on the lawn is a stomp and Q in a corridor is a cave-in, and a
+	# binding whose meaning moves under you has to say which one it currently means.
 	var kind: int = int(_player.get("mouse_class"))
 	if kind == MouseClass.SNEAK:
 		hint += "\nQ: sound below / erase enemy cant"
 	elif kind == MouseClass.ENGINEER and plane > 0:
-		hint += "\nQ: cave in     X: barricade"
+		hint += "\nX: barricade"
+	elif kind == MouseClass.BRUTE:
+		hint += "\nQ: stomp the ground" if plane <= 0 else "\nQ: cave in the tunnel beside you"
 	var blocked := "\n\nBLOCKED: %s" % _refusal if _refusal_left > 0.0 else ""
 	text = "%s\n%s\n\n%s%s" % [
 		NAMES[clampi(plane, 0, NAMES.size() - 1)], " ".join(counts), hint, blocked

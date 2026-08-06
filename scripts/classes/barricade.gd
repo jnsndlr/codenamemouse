@@ -1,16 +1,23 @@
 class_name Barricade
 extends MouseControl
-## The Engineer's other half: put a boulder in the way (GDD section 4).
+## The Engineer's capability: put a boulder in the way (GDD section 4).
 ##
 ## ONE PER MOUSE SINCE M7, not one per arena. See [MouseControl] -- and this is the ability that
 ## most obviously wanted it already: `max_standing` is *this Engineer's* budget, and a single node
 ## per arena could only ever hold one Engineer's worth.
 ##
-## THE PAIR TO THE CAVE-IN, and the two are deliberately different tools rather than one tool with
-## a flag. A cave-in is permanent, instant, kills the corridor and can scruff whoever is standing
+## `[REVISED]` THE ONLY ONE NOW, and that is what section 4 always named as the fallback. This was
+## the Engineer's second ability while [CaveIn] was its first; un-digging has gone to the Brute, so
+## this is the whole of the class's Pillar 4 and it has to carry it alone. It can: a barricade is
+## the one object in the game one class builds and another removes, which is a longer-lived
+## relationship than a hole in the ground has with anybody.
+##
+## THE OPPOSITE NUMBER TO THE CAVE-IN, and the two are deliberately different tools rather than one
+## tool with a flag -- they just belong to opposite crews' answers now rather than to one class's
+## hands. A cave-in is permanent, instant, kills the corridor and can scruff whoever is standing
 ## there; a barricade is a delay -- the corridor still exists, you can see down it, and the other
 ## crew gets it back by fielding the class that shifts rock. One is denial, the other is tempo.
-## Section 4's Engineer is "map control, route creation, fortification"; the cave-in is the first
+## Section 4's Engineer is "map control, route creation, fortification": the dig speed is the first
 ## two and this is the third.
 ##
 ## NO CHEESE COST, unlike the two-cheese price GDD section 2 pencilled in. The economy does not
@@ -24,7 +31,7 @@ extends MouseControl
 ## Engineer working against a Brute has a live budget rather than an ammunition count -- which is
 ## what makes the two classes an argument instead of a countdown.
 ##
-## AIMED, like everything else this class does. Same reasoning as the cave-in: the cursor is the
+## AIMED, like the dig it is placed alongside. Same reasoning as the cave-in: the cursor is the
 ## steering wheel (section 9), so choosing the cell means turning to look at it and therefore not
 ## running for a moment.
 

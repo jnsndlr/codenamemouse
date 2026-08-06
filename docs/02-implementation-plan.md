@@ -554,8 +554,11 @@ what a class is. Swap point at your own nest, **C**, cycling.
   exclusivity, recorded there. Exclusivity makes one seat a *requirement* — lose your Engineer
   and the crew is locked out of three planes until it respawns. Speed carries the identity
   instead, and the Engineer's Pillar-4 exclusive moves to **un**-digging: caving in behind you,
-  and barricades. That collides with the Brute's Collapse and the split is written up as a
-  `[DECIDE]` in §4 rather than quietly resolved here.
+  and barricades. ~~That collides with the Brute's Collapse and the split is written up as a
+  `[DECIDE]` in §4 rather than quietly resolved here.~~ **Resolved in M8a, the Brute's way** —
+  un-digging is entirely the Brute's now and the Engineer keeps *Barricade* alone. Leaving the
+  collision open through three milestones was right: it cost nothing while the second class did
+  not exist, and the answer was obvious the moment it did.
 - ~~**`tunnel_speed` is where the classes first feel different.**~~ **Reverted later in M4, and
   the Brute is why.** The theory was that size should matter underground (§3) and that a slow
   Brute would read as a cork rather than as lag, because it applied only below the surface. It
@@ -572,6 +575,8 @@ what a class is. Swap point at your own nest, **C**, cycling.
   tile in the time an Engineer does, and must open it eventually.
 
 **The Engineer's capability landed too: the cave-in** (`scripts/classes/cave_in.gd`, `Q`).
+**`[REVISED]` It belongs to the Brute now** — see M8a. Everything below it survived the move
+without an edit, which is the useful part: the reasoning was about the verb, not the class.
 `TunnelNetwork.collapse` is the first and only operation that makes the network *smaller*, which
 matters more than it sounds — the routing graph, the dug mask, the wall mesh and the lamps are
 all caches over the cell dictionary, and every one of them had been written assuming growth.
@@ -2042,6 +2047,58 @@ Three experiments, added **separately** so you can tell which did what:
 Does the Engineer actually start digging deeper in response? That behavioral change is
 the proof the web works.
 
+#### Un-digging came to the Brute whole, rather than being built twice
+
+**Collapse is in** (`scripts/classes/cave_in.gd`), and it arrived as a **transfer rather than a
+new file**. The plan sketched a `collapse.gd` alongside M4's `cave_in.gd`: two abilities, one per
+class, split by where you were standing. Writing the second one made it plain there was only one.
+The Engineer's version and the Brute's were the same call into `TunnelNetwork.collapse` with the
+same reach test, the same burial and the same shaft refusal, differing in a plane check and a
+comment — so the file changed owner and grew a second form instead.
+
+- **`owner_class` was already an export, and that is the whole of the transfer.** M4 wrote it as
+  one "because 'who owns this capability' is a design question and the answer has already moved
+  once". It has now moved twice, and the code change was a default. Worth noting as the cheapest
+  refactor in the project: the design decision that looked expensive cost one enum.
+- **Two forms, one key, and the plane picks.** Underground, `Q` is M4's aimed single cell,
+  unchanged. On the lawn, `Q` is a **stomp** centred on the Brute's own feet — a plus-shape on
+  plane 1, one cell on plane 2, nothing on plane 3. The taper is feel; the plane-3 floor is a
+  separate dial (`stomp_max_plane`) because it is the number GDD §5's web rests on, and widening
+  the patch must not quietly hand the Brute the layer that is supposed to be the answer to it.
+- **The stomp is unaimed on purpose, and that is a web decision rather than an ability one.** You
+  cannot see through the lawn, so aiming would be pointing at grass. Centring it on the Brute
+  means the answer to *where do I stomp* is a **cant mark** — sonar has been leaving them since M5
+  with nothing in the game able to act on one. That arrow is the first time one class's
+  information is another class's action.
+- **An empty stomp still fires and still pays, and this is the M5 invariant of the change.** A
+  stomp that refused when it found nothing would answer "is there a tunnel under me?" for free,
+  anywhere, on demand — a Brute could pace the yard tapping `Q` and read the enemy's network off
+  which presses bounced. That is a hidden-information leak of exactly the shape the plan warns
+  about: invisible from inside a match, and only findable by an assertion. `match_audit.gd`'s new
+  `stomp` check asserts the cooldown is spent over bare ground, and it was verified by putting the
+  guard clause back and watching it go red.
+- **The plane-3 assertion passed for the wrong reason first.** At the shipped radius the taper
+  runs out before plane 3 anyway, so the check could not have caught a broken cap — the project's
+  recurring failure, a check that cannot fail, in its fifth costume. It now widens the radius to
+  4.0 and asserts the cap holds regardless, which is a different assertion about a different
+  number.
+- **Paving stops a stomp**, and it is the one refusal here that leaks nothing: a slab is authored,
+  visible, and standing in front of everybody. It also hands `NoSurfaceZone` a second job — the
+  earth under the patio is the only earth a Brute cannot reach from above, so a no-surface zone
+  becomes something the Engineer routes *toward*.
+- **Nothing was needed on the wire.** The stomp is `TunnelNetwork.collapse` in a loop, and
+  collapse has replicated since M7; `replication_audit` passes untouched. The one genuinely new
+  net-facing rule is the puppet path, which is M4's unchanged: run the cooldown, move no earth.
+
+**What the Engineer lost, said plainly:** its escape button. A corridor it dug is no longer one it
+can close behind itself. That is the open question this creates and it is a playtest question — if
+the Engineer proves uncatchable without it, the fix is a barricade that buys longer, not the
+cave-in coming back.
+
+**Still to build in 8a:** *Slam*, and a verdict on corking (which is geometry rather than code —
+a one-cell corridor plus body-blocking — so it is a playtest, not a feature). Brute bots stay
+Generalists until Slam exists.
+
 **8b — The world:** the Cat first, on a fixed schedule. Then the Crow. Does the match
 get better when they show up — as threat *and* as respite?
 
@@ -2184,8 +2241,8 @@ wired at M7 step 5).
 ## Where this is
 
 **M0–M6.5 are closed.** A full match exists and runs as a distributable build: two crews of five,
-banners, melee, scruffing, respawns, a clock; four classes with the Engineer's cave-in and
-barricade; four planes of tunnels dug by shaft with per-plane rock, no-surface zones and breakable
+banners, melee, scruffing, respawns, a clock; four classes with the Engineer's barricade and the
+Brute's cave-in; four planes of tunnels dug by shaft with per-plane rock, no-surface zones and breakable
 boulders; per-crew knowledge of earth, veins and cant with lamplight, line of sight and fog; a
 cheese economy whose dropped piles never rot and so grow objectives nobody placed; a title screen,
 pause menu, controls sheet, screenshot key and a universal ad-hoc-signed `.app` that runs on a
@@ -2209,3 +2266,12 @@ fair. Mac only; web stays an M9 rendering decision.
 
 Then **M8**, which is three separate experiments (Brute, the PvE faction, binary water) added one
 at a time so each has its own verdict.
+
+**8a has started, out of order and deliberately so.** Un-digging has moved from the Engineer to
+the Brute and grown its surface form — the **stomp** — which closes the `[DECIDE]` GDD §4 has
+carried since M4 and makes §5's counterplay web a loop for the first time: a Sneak's cant mark is
+now something another class can act on. `match_audit` is 21 checks; the new `stomp` check is the
+one that matters, because the rule it guards (a stomp over nothing still costs the cooldown) is a
+hidden-information leak that no playtest could see. **Slam and the corking verdict are what is
+left of 8a**, and the map verdict above is what 8a's real question — *does the Engineer start
+digging deeper?* — is still waiting on.

@@ -158,7 +158,7 @@ everything the client legitimately learnt in that last second a cell nobody said
 Thirteen of them, named by coordinate, looking exactly like a leak. The invariant is only asked
 where the two logs overlap now.
 
-**And a client can dig.** The dig controller, both Engineer abilities, the sonar and the swap point
+**And a client can dig.** The dig controller, the cave-in, the barricade, the sonar and the swap point
 were arena-level singletons wired to `../Player` — *the* player, from when there was one — so a
 remote human's dig reached a server with nothing to consume it. They're children of a mouse now
 ([`MouseControl`](scripts/actors/mouse_control.gd)), so every seat a person drives carries its own
@@ -411,11 +411,23 @@ dig, and the Engineer is about three times faster at it** — a deliberate revis
 "nobody else alters terrain", because exclusivity turns one seat into a requirement and locks a
 crew out of three planes the moment its Engineer goes down.
 
-**And the Engineer can bring a tunnel down.** `Q`, on the cell you're pointing at, one at a
-time, at arm's length — sealing a corridor behind you as you go. It's aimed rather than
-automatic on purpose: the cursor is the steering wheel, so looking at what you're sealing means
-not running for a moment. Anyone standing in the cell is scruffed. Shaft cells are refused —
-either end of a ladder would be left starting in solid earth.
+**And the Brute can bring a tunnel down.** `Q`, on the cell you're pointing at, one at a
+time, at arm's length. It's aimed rather than automatic on purpose: the cursor is the steering
+wheel, so looking at what you're sealing means not running for a moment. Anyone standing in the
+cell is scruffed. Shaft cells are refused — either end of a ladder would be left starting in
+solid earth. This was the Engineer's until the Brute needed a reason to exist and it turned out
+the two classes had been handed the same verb twice; the Engineer keeps the barricade.
+
+**And the Brute can stomp.** The same key on the lawn, where there is nothing to point at: a foot
+through the roof of whatever is beneath you — a small plus-shaped patch of the layer below, the
+single cell directly under you on the layer beneath that, and **nothing on plane 3**, which is why
+"dig deeper" is a real answer rather than a stalling tactic. It has **no cursor and it never
+refuses for finding nothing**: a stomp that only fired over a tunnel would let a Brute pace the
+yard tapping `Q` and read the enemy's whole network off which presses bounced, which is the
+hidden-information pillar handed away by a guard clause. Ten seconds is what that knowledge costs
+a crew with no Sneak to tell them where to stand — and a Sneak's cant mark is now the first piece
+of information in the game that another class can act on directly. **Paving stops it**, so the
+earth under the patio is the one earth a Brute can't reach from above.
 
 **And the earth has rock in it.** Seeded seams on every plane, with a **different layout on each**
 — getting past one may mean going down a layer, round, and back up, which is what turns digging
@@ -597,7 +609,7 @@ Open the project in Godot 4.7+ and press F5, or:
 | **E** | Take the shaft under or over you |
 | **F / R** | Sink a shaft down / break one up |
 | **C** | Change class — **only while standing in your own nest**, selector slides up |
-| **Q** | **Cave-in** (Engineer) — bring down the tunnel cell you are pointing at. The cell is boxed while you aim, warm when it will fire and cold while it cools. |
+| **Q** | **Cave-in** (Brute, underground) — bring down the tunnel cell you are pointing at. The cell is boxed while you aim, warm when it will fire and cold while it cools. **Stomp** (Brute, on the lawn) — put a foot through whatever is beneath you: a small patch of the layer below, one cell of the layer under that, and nothing deeper. It has no cursor and it always goes off, even over bare ground. |
 | **X** | **Barricade** (Engineer) — wedge a boulder into the open cell you are pointing at |
 | **Arrows** | Turn the view a quarter at a time |
 | **Escape** | Pause — freezes the match, not just the view |
@@ -753,8 +765,10 @@ seal that refuses everything and a seal that refuses nothing each pass half thes
 The second plays out the flag rules — steal, capture, drop, return, respawn, the flag
 underground, who a swing may hit — checks the bots can path between the nests at all, checks a
 **defender actually goes down a shaft after an intruder**, checks the class spread reaches the
-mouse and the swap point has a place and a price, checks **only the Engineer can cave a tunnel
-in** (and on whom, and how often), checks a **barricade blocks the routing graph and only a Brute
+mouse and the swap point has a place and a price, checks **only the Brute can cave a tunnel
+in** (and on whom, and how often), checks a **stomp takes a tapering patch, never reaches plane 3,
+and still spends its cooldown over bare ground** — that last one because a stomp that refused
+would be a free sonar sweep of the whole yard — checks a **barricade blocks the routing graph and only a Brute
 shifts it** (and the supply, and the cooldown, and that the cell comes back afterwards), checks a
 **Sneak sounds exactly one layer down, leaves crew-readable cant, and a rival Sneak can erase it**,
 checks tunnel cells and mouths never leak from one crew's map to the other's, checks that

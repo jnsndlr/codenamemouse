@@ -399,12 +399,47 @@ without these.
 |---|---|
 | Fantasy | The big one who says "not through here" |
 | Stats | High health, slow, heavy damage |
-| **Unique capability** | **Collapses tunnels** from the surface (planes 1–2) |
-| Ability | *Slam* — short-range knockback; **makes carriers drop the flag** |
+| **Unique capability** | **Brings tunnels down.** `[REVISED]` **Built** — the whole of un-digging, in two postures: **`Q` underground** caves in the one cell you are pointing at, at arm's length; **`Q` on the lawn** is a **stomp** that drops a small patch of the layers beneath your feet (planes 1–2 only). |
+| Ability | *Slam* — short-range knockback; **makes carriers drop the flag**. Still to build. |
 | **Shifts rock** | **Built (M4)** — the only class that breaks a barricade (3 swings) or a boulder (**5 per cell**, so a four-cell rock is 20 and comes apart a quarter at a time). Anyone else may swing at one all day. |
 | Underground | Very slow, but **plugs a tunnel completely** |
 | Weakness | Cannot chase, cannot flank, exposed in open ground |
 | Role | Nest defense, chokepoints, tunnel denial, sabotage |
+
+> `[REVISED]` **The cave-in moved here from the Engineer, and that closes the `[DECIDE]` this
+> section has carried since M4.** The two classes were written with the same verb pointed at each
+> other — the Engineer sealing from inside as an escape, the Brute collapsing from the surface as
+> denial — on the theory that *where you are standing* was difference enough to make them separate
+> capabilities. It is not. They are one mechanic in two postures, and a mechanic split across two
+> classes is a mechanic neither of them owns, which is the exact opposite of what Pillar 4 asks
+> for. So the Brute takes all of it, and **both postures survive as the two forms of one key** —
+> which is the better outcome anyway, because the split was always the interesting part of the
+> design and it turned out not to need two classes to express it.
+
+> **The stomp is not aimed, and that is what makes the Sneak worth fielding.** The cave-in is
+> aimed because you can see the corridor you are sealing. On the lawn you can see nothing, so
+> aiming would be pointing at grass and hoping — the stomp is centred on the Brute's own feet
+> instead. That makes the answer to *where do I stomp* a **cant mark on the minimap**: a Sneak
+> finds the tunnel, and the Brute walks over and puts a foot through it. §5's web has been a
+> diagram with a missing middle since M5; this is the link.
+
+> **A stomp over nothing still goes off, and still costs the cooldown.** A stomp that refused
+> when it found no tunnel would answer *"is there something under me?"* for free, anywhere, on
+> demand — a Brute could pace the yard tapping `Q` and read the enemy's whole network off which
+> presses bounced. That is §3's pillar leaking through a guard clause, and it would be invisible
+> from inside a match. Ten seconds is what the knowledge costs a crew that has no Sneak to tell
+> them.
+
+> **The patch tapers with depth, and the floor is a design number rather than a consequence.**
+> Full radius on the layer directly below, one cell narrower for each layer under that: five
+> cells on plane 1, one cell on plane 2, nothing on plane 3. A foot through a roof does not shake
+> the cellar evenly. And **plane 3 is out of reach no matter how the radius is tuned**, because
+> "dig deeper" is the Engineer's whole answer to a Brute and the web is only a loop while that
+> answer exists.
+
+> **Paving stops a stomp.** You cannot stamp through a slab, so the earth under the patio is the
+> one earth a Brute cannot reach from above — which quietly makes a no-surface zone (§3) a thing
+> the Engineer routes *toward* rather than only a thing that refuses it a way out.
 
 > **Breaking things is a role, not a one-off.** Barricades and boulders share one interface
 > (`scripts/classes/breakable.gd`), so the branches, sticks and other destructible clutter the
@@ -418,7 +453,7 @@ without these.
 |---|---|
 | Fantasy | The one who changes the map |
 | Stats | Low damage, medium health, medium speed |
-| **Unique capability** | **Brings tunnels down and puts barriers up.** Everyone can dig; only the Engineer can *un*-dig. `[REVISED]` **Built (M4)** — `Q`, on the cell you're pointing at. |
+| **Unique capability** | **Puts barriers up.** `[REVISED]` **Built (M4)** — the *Barricade* row below is now the whole of it. Un-digging has gone to the Brute. |
 | Digging | **~3× faster than anyone else.** Others can manage it in a pinch. `[REVISED]` |
 | Ability | *Barricade* — a boulder heaved across a tunnel. `[REVISED]` **Built (M4)** — `X`, aimed at the open cell beside you. **No cheese**: ten seconds between placements, three standing at once, and **only a Brute can shift one**. |
 | Weakness | Weakest attack in the game. Cannot win a fight, only shape one. |
@@ -433,20 +468,27 @@ without these.
 > would never *choose* to tunnel as a Generalist and fast enough that you can when it's the only
 > way through. Tuned in `resources/classes/*.tres` (`dig_speed`), not in code.
 >
-> **Pillar 4 still holds, but it now rests on the other half of the fantasy.** The Engineer's
-> one-thing-nobody-else-can-do moves from *making* tunnels to **unmaking** them — caving in a
-> corridor behind you as you flee, and barricades. That is a better unique capability anyway:
-> creation is a thing you do slowly in your own time, and denial is a thing you do *at* someone.
+> ~~**Pillar 4 still holds, but it now rests on the other half of the fantasy.** The Engineer's
+> one-thing-nobody-else-can-do moves from *making* tunnels to **unmaking** them.~~ `[RESOLVED]`
+> **The `[DECIDE]` that used to sit here is settled, and it went the Brute's way.** The collision
+> was real: §3 gave *Collapse* to the Brute as **its** unique capability, and the split being
+> worked to — the Brute from the surface as denial, the Engineer from inside as escape — was one
+> verb held by two classes. A verb two classes share is a verb neither owns, so un-digging is now
+> entirely the Brute's, in both postures, on one key. This entry's own fallback line is what
+> happened: **the Engineer's exclusive is *Barricade* alone.**
 >
-> `[DECIDE]` **This collides with the Brute, and the Engineer's half is now built, so the
-> collision is live.** §3 gives *Collapse* to the Brute as **its** unique capability. The split
-> being worked to is **where you stand and whose tunnel it is**: the Brute collapses **from the
-> surface**, on a tunnel it has located, as an act of denial against someone else's network — it
-> needs Sneak sonar and it is the counter to a dug-in Engineer. The Engineer seals **from
-> inside**, one cell, at arm's length, in the tunnel it is standing in, as an escape. Same verb,
-> opposite situations, and neither can do the other's version. Built that way (`cave_in.gd`,
-> reach one cell, plane 1+ only, refuses shafts). If it doesn't survive contact with the Brute,
-> the Engineer's exclusive falls back to *Barricade* alone.
+> **What the Engineer keeps is making and shaping, and that is a cleaner line than the one that
+> ran through the middle of a verb.** Three times the dig speed, and the one thing that can stand
+> in a corridor without destroying it. The class that **builds** the map and the class that
+> **unbuilds** it are two different people now.
+>
+> **The cost is real and is worth naming: the Engineer has lost its escape button.** A corridor
+> it dug is no longer a corridor it can close behind itself, so fleeing down your own tunnel is
+> now a matter of geometry and head start rather than a key. The barricade is a *delay* in the
+> same situation, not a seal — you buy seconds and the chaser gets them back. **This is the open
+> question the change creates**, and it is a playtest question rather than a design one: if the
+> Engineer turns out to be uncatchable without it, the answer is a barricade tuned to buy longer,
+> not the cave-in coming back.
 >
 > `[REVISED]` **Barricade costs no cheese, and the price is cooldown and supply instead.** This
 > entry, and §2's spending table, put it at 2 cheese. The economy does not exist until M6 and the
@@ -464,16 +506,19 @@ without these.
 > makes an Engineer's seal something the other crew answers with a *class choice* rather than with
 > patience. It is also the first thing in the game one class builds and another removes.
 >
-> **A barricade is not a cave-in, and the difference is the point.** A cave-in is permanent,
-> instant, kills the corridor and buries whoever is standing there. A barricade is a delay: the
-> corridor still exists, you can see down it, and it comes back. Denial and tempo, from one class,
-> on two keys.
+> **A barricade is not a cave-in, and the difference is the point** — and now the two are held by
+> opposite crews' answers rather than by one class's hands, which sharpens it. A cave-in is
+> permanent, instant, kills the corridor and buries whoever is standing there. A barricade is a
+> delay: the corridor still exists, you can see down it, and it comes back. **Denial and tempo,
+> and neither class can do the other's.**
 
-> **Aimed, not automatic, and that is the load-bearing detail.** "Cave in behind you" reads as
-> something that should happen to the cell you just left, for free, while running. It is aimed
-> with the cursor instead — which, since the cursor is the steering wheel (§9), means turning to
-> look at what you're sealing and therefore not running for a moment. That is the same trade §9
-> asks for around throwing while fleeing, and it is what stops this being a free escape button.
+> **Aimed, not automatic, and that is the load-bearing detail** — of the *underground* form,
+> wherever it lives. "Cave in behind you" reads as something that should happen to the cell you
+> just left, for free, while running. It is aimed with the cursor instead — which, since the
+> cursor is the steering wheel (§9), means turning to look at what you're sealing and therefore
+> not running for a moment. That is the same trade §9 asks for around throwing while fleeing.
+> Written for the Engineer, and it survived the move to the Brute unchanged, which is the
+> strongest evidence the reasoning was about the *verb* rather than about the class.
 
 ### Sneak — the glass cannon
 
@@ -559,6 +604,18 @@ Every class answers another, and the answers route through the dig system:
 
 No hard counters — every answer costs position, cheese, time, or exposure. Note how
 **depth is the Engineer's answer to the Brute**, paid for in dig time.
+
+> **The middle of this diagram is now built, and it is the first time the web has been a loop
+> rather than a wish.** *Sneak sonar finds it → Brute collapses it → Engineer digs deeper* was
+> three boxes with only the first one implemented: sonar has left cant marks since M5, and there
+> was nobody who could act on one. The **stomp** is the second box (§4), and the plane-3 floor is
+> what keeps the third box a real answer rather than a delaying tactic.
+>
+> Two properties of the stomp exist purely to serve this diagram, and both are worth reading as
+> web decisions rather than as ability decisions. It is **unaimed**, so a Brute needs to be told
+> where to stand — which is the arrow from sonar, and the only thing in the game that makes one
+> class's information another class's action. And it **never refuses for finding nothing**, so a
+> Brute cannot substitute for a Sneak by probing; the arrow points one way.
 
 ---
 
@@ -960,6 +1017,13 @@ All four are core, but they don't arrive at once. Recommended order:
 2. **Brute** — completes the counterplay web with collapse and corking.
 3. **Generalist** — simplest and best-understood; add once there's a flag game worth running.
 
+> **The order held, and step 2 is where the design moved.** The Engineer and Sneak went first and
+> the Brute followed, exactly as written — but building it in that order is what revealed that
+> "the Engineer un-digs" and "the Brute collapses" were the same capability described twice. That
+> is the argument for this ordering restated as evidence: the collision was invisible while only
+> one half existed, and it was obvious the moment the second class needed its own reason to exist.
+> Corking is still geometry rather than code (§4), and *Slam* is still to build.
+
 ---
 
 ## 13. Open questions, ranked by leverage
@@ -987,4 +1051,6 @@ breaching is accidental unless sonar-marked · networks interleave at junctions 
 flows from sources with current and breath · Sneak camouflages while stationary ·
 tall grass bends to movement · per-class flag carry penalties · obstructions are
 per-plane · maps are seeded from fixed anchors · shared + signature world events ·
-class switching free at own nest · zero cheese = 20s respawn · one currency
+class switching free at own nest · zero cheese = 20s respawn · one currency ·
+**un-digging is the Brute's alone, cave-in underground and stomp from the surface, and the
+Engineer's exclusive is Barricade** (§4)

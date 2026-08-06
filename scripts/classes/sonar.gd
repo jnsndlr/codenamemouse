@@ -2,7 +2,7 @@ class_name Sonar
 extends MouseControl
 ## The Sneak's class ability: sound out the layer directly below and leave thieves' cant.
 ##
-## Q has one meaning per class. For an Engineer it is CaveIn; for a Sneak it sends a short-range
+## Q has one meaning per class. For a Brute it is CaveIn; for a Sneak it sends a short-range
 ## pulse through the floor. Detected tunnel cells shimmer briefly on the ground above, then the
 ## nearest answer becomes a persistent mark shared with the crew. The mark reveals a PLACE, not
 ## the connected enemy route, preserving the hidden-information boundary M5 is built around.

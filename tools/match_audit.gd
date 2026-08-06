@@ -80,6 +80,7 @@ func _initialize() -> void:
 		["bots_follow", _check_bots_follow],
 		["classes", _check_classes],
 		["cave_in", _check_cave_in],
+		["stomp", _check_stomp],
 		["barricade", _check_barricade],
 		["sonar", _check_sonar],
 		["tunnel_sight", _check_tunnel_sight],
@@ -403,12 +404,17 @@ func _check_bots_move() -> void:
 		)
 
 
-## The Engineer's capability: who may use it, on what, and to whom. (M4)
+## The Brute's capability, aimed form: who may use it, on what, and to whom. (M4, moved M8)
 ##
 ## The geometry side of a collapse is tools/tunnel_audit.gd's; this is the ABILITY -- the class
 ## gate, the reach, the cooldown and the mouse standing in the wrong place. All four are design
 ## rather than plumbing, and the class gate especially: it is the whole of Pillar 4 for this
 ## class, and a gate that silently lets everyone through is indistinguishable from one that works.
+##
+## THE GATE IS NOW THE ENGINEER'S TOO, in the negative. Un-digging moved from the Engineer to the
+## Brute, and the class that used to own it is the single most useful thing to assert against: a
+## default left pointing at the old owner would leave both classes able to do it, and a suite that
+## only ever tried a Generalist would pass.
 func _check_cave_in() -> void:
 	await _arena(1)
 	var network := _scene.get_node("Tunnels") as TunnelNetwork
@@ -421,7 +427,7 @@ func _check_cave_in() -> void:
 		_expect(false, "the arena has a cave-in and a player")
 		return
 
-	# A corridor to stand in, and the player in the middle of it as an Engineer.
+	# A corridor to stand in, and the player in the middle of it.
 	network.dig_shaft_down(0, Vector2i(-17, -17))
 	for x in range(-17, -10):
 		network.dig(1, Vector2i(x, -17))
@@ -435,22 +441,31 @@ func _check_cave_in() -> void:
 	player.set_class(MouseClass.GENERALIST)
 	_aim(player, network.cell_to_world(1, Vector2i(-13, -17)))
 
-	# NOT THE GENERALIST. Everyone digs; only the Engineer un-digs.
+	# NOT THE GENERALIST. Everyone digs; only the Brute un-digs.
 	_fire(cave)
 	_expect(
 		network.is_dug(1, Vector2i(-13, -17)),
 		"a Generalist cannot bring a tunnel down"
 	)
 
-	# The Engineer can, and takes whoever is standing there with it (GDD section 3).
+	# NOR THE ENGINEER, ANY MORE. The class that used to own this is the one worth naming: it kept
+	# the barricade and gave up the cave-in, and a stale default would leave it holding both.
 	player.set_class(MouseClass.ENGINEER)
+	_fire(cave)
+	_expect(
+		network.is_dug(1, Vector2i(-13, -17)),
+		"an Engineer no longer brings a tunnel down -- un-digging is the Brute's"
+	)
+
+	# The Brute can, and takes whoever is standing there with it (GDD section 3).
+	player.set_class(MouseClass.BRUTE)
 	var caught := _puppet(Team.RED, network.cell_to_world(1, Vector2i(-13, -17)) + Vector3.UP * 0.05)
 	caught.set_plane(1)
 	await _advance(0.2)
 	_fire(cave)
-	_expect(not network.is_dug(1, Vector2i(-13, -17)), "an Engineer brings the cell down")
+	_expect(not network.is_dug(1, Vector2i(-13, -17)), "a Brute brings the cell down")
 	_expect(caught.is_scruffed(), "and scruffs whoever was standing in it")
-	_expect(not player.is_scruffed(), "without burying the Engineer as well")
+	_expect(not player.is_scruffed(), "without burying the Brute as well")
 
 	# And then has to wait. A second one on the same breath would make a corridor disappear
 	# faster than anyone could react to it.
@@ -473,6 +488,120 @@ func _check_cave_in() -> void:
 	_expect(cave.target() == Vector2i.MAX, "a cell three along is out of reach")
 	_fire(cave)
 	_expect(network.is_dug(1, Vector2i(-11, -17)), "and stays up")
+
+
+## The Brute's capability, surface form: the stomp, its footprint, its floor, and its silence.
+##
+## THE PATCH IS THE EASY HALF AND THE SILENCE IS THE HARD ONE. A stomp that finds nothing must
+## still go off and must still spend the cooldown, because a stomp that refused would answer "is
+## there a tunnel under me?" for nothing -- the Brute could walk the lawn tapping Q and read the
+## enemy's whole network off which presses bounced. That is M5's pillar leaking through a guard
+## clause, it is invisible from inside a match, and it is exactly the class of bug the plan says
+## belongs in tools/ rather than in a playtest. So the last block here is the important one.
+##
+## THE FLOOR IS THE OTHER DESIGN ASSERTION. Section 5's counterplay web is a loop only because the
+## Engineer's answer to a Brute is to dig BELOW it -- if a stomp reached plane 3 there would be no
+## answer, and the web would be a line ending at the Brute.
+func _check_stomp() -> void:
+	await _arena(1)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+	var player := _director.get_player()
+	var cave: CaveIn = null
+	if player != null:
+		cave = player.get_node_or_null("CaveIn") as CaveIn
+	if cave == null or player == null:
+		_expect(false, "the arena has a cave-in and a player")
+		return
+
+	# A patch under the surface, deliberately spread over three planes and out past the radius so
+	# the footprint has edges to be wrong about in every direction.
+	var here := Vector2i(-17, -17)
+	var neighbour := here + Vector2i(1, 0)
+	var diagonal := here + Vector2i(1, 1)
+	var far := here + Vector2i(3, 0)
+	for cell in [here, neighbour, diagonal, far]:
+		network.dig(1, cell)
+	network.dig(2, here)
+	network.dig(2, neighbour)
+	network.dig(3, here)
+	await _advance(0.2)
+
+	player.set_physics_process(false)
+	player.global_position = network.cell_to_world(0, here) + Vector3.UP * 0.05
+	player.set_plane(0)
+
+	# NOT THE GENERALIST, and not on the surface either -- the class gate is asked in both forms.
+	player.set_class(MouseClass.GENERALIST)
+	_fire(cave)
+	_expect(network.is_dug(1, here), "a Generalist stomping the lawn does nothing")
+
+	# A mouse in the patch goes down with it, the same as one caught by the aimed form.
+	var caught := _puppet(Team.RED, network.cell_to_world(1, neighbour) + Vector3.UP * 0.05)
+	caught.set_plane(1)
+	await _advance(0.2)
+
+	player.set_class(MouseClass.BRUTE)
+	_fire(cave)
+	_expect(not network.is_dug(1, here), "a Brute's stomp takes the cell under its feet")
+	_expect(not network.is_dug(1, neighbour), "and its neighbours on the layer below")
+	_expect(caught.is_scruffed(), "and scruffs whoever was standing in them")
+	_expect(not player.is_scruffed(), "without hurting the Brute up on the lawn")
+
+	# THE PATCH TAPERS. A plus-shape one layer down, a single cell two layers down, nothing at all
+	# on plane 3 -- which is the Engineer's answer and therefore the load-bearing one.
+	_expect(network.is_dug(1, diagonal), "the corners of the patch are out of the shock")
+	_expect(network.is_dug(1, far), "and so is a cell three along")
+	_expect(not network.is_dug(2, here), "the cell directly beneath goes two layers down")
+	_expect(network.is_dug(2, neighbour), "but the patch has narrowed to one cell by then")
+	_expect(network.is_dug(3, here), "and plane 3 is under the floor -- dig deeper is the answer")
+
+	# THE FLOOR IS THE CAP, NOT THE TAPER, and asked separately because at the shipped radius the
+	# two agree and the assertion above would pass either way -- which is this project's recurring
+	# failure (a check that cannot fail) in its most flattering disguise. Widened past where the
+	# taper would have run out, plane 3 has to stay out of reach on the strength of `stomp_max_plane`
+	# alone, because that is the number section 5's counterplay web actually rests on.
+	var wide := cave.stomp_radius_cells
+	cave.stomp_radius_cells = 4.0
+	var deepest := 0
+	for entry: Array in cave.stomp_cells(here):
+		deepest = maxi(deepest, int(entry[0]))
+	cave.stomp_radius_cells = wide
+	_expect(deepest > 0, "a widened stomp still finds ground -- the probe is looking at something")
+	_expect(deepest <= 2, "and no radius reaches plane 3, however wide the patch is set")
+
+	# And then it has to wait, like the aimed form.
+	network.dig(1, here)
+	await _advance(0.1)
+	_fire(cave)
+	_expect(network.is_dug(1, here), "a second stomp is refused while the first is on cooldown")
+
+	# THE ONE THAT MATTERS. Somewhere with nothing underneath it at all: the stomp still fires and
+	# still pays, because a refusal here would be a free sonar sweep of the entire yard.
+	cave._cooldown_left = 0.0
+	var bare := Vector2i(12, 12)
+	player.global_position = network.cell_to_world(0, bare) + Vector3.UP * 0.05
+	_expect(
+		cave.stomp_cells(bare).is_empty(),
+		"there is genuinely nothing under the bare patch"
+	)
+	_fire(cave)
+	_expect(
+		cave.cooldown_left() > 0.0,
+		"a stomp over nothing still spends the cooldown -- refusing would leak where the tunnels are"
+	)
+
+	# Paving is the one refusal, and it leaks nothing: the slab is authored, visible, and standing
+	# in front of everybody. Skipped rather than faked on a map that has no zone.
+	var zone := _scene.get_tree().get_first_node_in_group(NoSurfaceZone.GROUP) as NoSurfaceZone
+	if zone != null:
+		var paved := network.world_to_cell(zone.global_position)
+		network.dig(1, paved)
+		await _advance(0.1)
+		cave._cooldown_left = 0.0
+		player.global_position = network.cell_to_world(0, paved) + Vector3.UP * 0.05
+		_fire(cave)
+		_expect(network.is_dug(1, paved), "you cannot stamp through paving")
+		_expect(cave.cooldown_left() == 0.0, "and it costs nothing to find that out")
 
 
 ## Press the ability key, the way the game now delivers it (M7).

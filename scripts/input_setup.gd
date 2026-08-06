@@ -36,10 +36,11 @@ const KEYS: Dictionary = {
 	# nowhere near the movement keys: it is a thing you do while standing still at home, and a
 	# misfire mid-chase would be the worst possible moment to become a Brute.
 	"swap_class": [KEY_C],
-	# The primary class ability. One key, one meaning for the class you chose: the Engineer caves
-	# in an aimed cell; the Sneak sounds the layer below or erases nearby enemy cant.
+	# The primary class ability. One key, one meaning for the class you chose: the Brute caves in
+	# an aimed cell underground and stomps the ground on the surface; the Sneak sounds the layer
+	# below or erases nearby enemy cant.
 	"ability": [KEY_Q],
-	# The second Engineer ability. Section 9's table offers "Q, E, F" and E and F are both shafts,
+	# The Engineer's ability. Section 9's table offers "Q, E, F" and E and F are both shafts,
 	# so the table is out of seats -- X is the next key the left hand can reach without leaving
 	# WASD, and it is far enough from Q that the two abilities can't be fat-fingered into each
 	# other. They are opposites (one seals a corridor for good, one holds it for a while) and

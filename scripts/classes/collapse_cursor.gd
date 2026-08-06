@@ -37,7 +37,11 @@ func _ready() -> void:
 
 
 ## Show the cell the cave-in would take, or hide on Vector2i.MAX -- which is what standing on the
-## lawn, playing anything but an Engineer, or pointing at solid earth all look like.
+## lawn, playing anything but a Brute, or pointing at solid earth all look like.
+##
+## THE LAWN CASE IS A DESIGN DECISION RATHER THAN AN OMISSION. A Brute up there is not without an
+## ability -- Q is the stomp -- but the stomp has no aimed cell, and a box that lit up only when
+## there was something underneath would be a free sonar sweep. See [CaveIn].
 func show_target(network: TunnelNetwork, plane: int, cell: Vector2i, is_ready: bool) -> void:
 	if cell == Vector2i.MAX:
 		_box.visible = false

@@ -28,8 +28,9 @@ const DEFINITIONS: Array[ClassDefinition] = [
 
 ## How many the swap point walks through.
 ##
-## All four are pickable. The Engineer and Sneak now have their defining map-control abilities;
-## Second Wind and Slam remain later work for the Generalist and Brute.
+## All four are pickable. The Engineer, Sneak and Brute have their defining map-control abilities
+## -- the barricade, sonar, and the cave-in in both its forms. Second Wind, Fade and Slam remain
+## later work.
 const COUNT: int = 4
 
 
