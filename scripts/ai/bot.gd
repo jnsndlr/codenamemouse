@@ -542,6 +542,11 @@ func _in_cover() -> bool:
 		_spotting = get_tree().get_first_node_in_group(Spotting.SPOTTING_GROUP) as Spotting
 	if _spotting == null:
 		return false
+	# A TUNNEL IS NOT COVER. The concealment field is x,z only, so asking it from underground gets
+	# back whatever is growing on the ceiling -- and a bot creeping down an empty corridor because
+	# of a patch of lawn above its head is slow for nothing.
+	if get_plane() > 0:
+		return false
 	# Measured at RUNNING pace rather than at the pace it is considering, which is the only way to
 	# ask the question without it answering itself: a bot already creeping is already hidden, so
 	# reading its current opacity would latch it into a permanent crawl the moment it touched a

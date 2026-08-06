@@ -288,6 +288,14 @@ func _process(delta: float) -> void:
 		var body := node as Node3D
 		if body == null or count >= MAX_INFLUENCES:
 			continue
+		# NOBODY UNDERGROUND TOUCHES THE LAWN. The shader flattens each influence to x,z on purpose
+		# -- the push has to be sideways, or a blade leans toward a mouse's feet rather than away
+		# from them -- which also meant a mouse one plane down bent every blade over its head. That
+		# is a live read on a tunneller's position, for free, through a floor of solid earth, and
+		# the surface is only supposed to say what is under it while somebody is actively digging
+		# (GDD section 3: the dust puffs).
+		if body.has_method("get_plane") and body.call("get_plane") > 0:
+			continue
 		var at := body.global_position
 		var strength := speed_tell(body)
 		_actors[count] = Vector4(at.x, at.y, at.z, strength)

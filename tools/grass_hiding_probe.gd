@@ -70,8 +70,44 @@ func _initialize() -> void:
 	# Bare ground, the same distance out, so the only thing that changed is the cover.
 	var open := _open_near(grass, defender, nest.global_position, defender.defend_radius)
 	ok = await _trial(scene, spotting, defender, intruder, nest, open, "standing in the open", false) and ok
+	ok = await _underground(scene, spotting, intruder, scene.get_node("Tunnels"), deep) and ok
 	print("\nPASS" if ok else "\nFAIL")
 	quit()
+
+
+## The same deep cover, one plane down: does the lawn still hide a mouse who is under it?
+##
+## THE FIELD HAS NO DEPTH, which is the bug this guards. `concealment_at` takes a Vector3 and
+## throws the height away, so a tunnel running beneath a thick patch used to read as thick patch
+## -- the mouse faded to a tenth opacity in a corridor with nothing growing in it, and `hidden`
+## says the same thing to the enemy's sweep, so the one crew that could have seen them (the one
+## on that plane) could not.
+##
+## Asked WITHOUT a bot, unlike the two trials above. A defender on the lawn is supposed to miss
+## someone a plane down whatever the grass does -- spotting.gd rejects the pair on the plane test
+## before opacity is ever consulted -- so a picker that reports nothing here would prove nothing.
+## The claim is about the concealment number itself.
+func _underground(
+	scene: Node, spotting: Spotting, intruder: Mouse, tunnels: TunnelNetwork, under: Vector3
+) -> bool:
+	var at := Vector3(under.x, tunnels.plane_y(1), under.z)
+	intruder.set_plane(1)
+	for i in range(120):
+		intruder.global_position = at
+		intruder.velocity = Vector3.ZERO
+		await process_frame
+
+	var opacity: float = scene.get_node("GrassCamouflage").opacity_of(intruder)
+	var hidden := spotting.hidden(intruder)
+	print("\n-- one plane down, under that same deep grass")
+	print("   opacity %.3f, spotting.hidden = %s" % [opacity, hidden])
+	intruder.set_plane(0)
+
+	if hidden or opacity < 0.99:
+		print("   FAIL -- the lawn is hiding a mouse standing in a bare tunnel")
+		return false
+	print("   ok")
+	return true
 
 
 ## Park the intruder, let the fade settle, then ask the bot's own picker what it found.

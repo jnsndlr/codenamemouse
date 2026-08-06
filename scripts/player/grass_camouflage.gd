@@ -65,6 +65,10 @@ func opacity_of(mouse: Mouse) -> float:
 ## and a bot deciding whether to slow down cannot use it, because a bot that has already slowed
 ## down is already hidden and would latch into a permanent crawl on its own answer. This is about
 ## the grass, so it says the same thing whatever the mouse does.
+##
+## ABOUT THE LAWN, and it answers for the x,z alone -- the grass field has no depth. A caller
+## holding an underground position has to gate on the plane itself, the way `_wanted_opacity` and
+## bot.gd's `_in_cover` do; there is nothing to hide in down there.
 func cover_at(at: Vector3) -> float:
 	if _grass == null or not _grass.has_method("concealment_at"):
 		return 0.0
@@ -99,6 +103,14 @@ func _process(delta: float) -> void:
 ## patch hides you PARTLY. A yes-or-no test would make the rim of every patch a hard line to
 ## sit exactly on, and the rim is meant to be a risk, not a hiding place.
 func _wanted_opacity(mouse: Mouse) -> float:
+	# THERE IS NO GRASS UNDERGROUND. `concealment_at` is a two-dimensional field -- it answers for
+	# an x,z and has no idea what height asked -- so a mouse in a tunnel was reading the lawn's
+	# cover through a floor's worth of earth and fading out in a bare corridor. Not merely a
+	# cosmetic slip: spotting.gd gates on this same number, so a tunneller under a thick patch went
+	# unspottable by the only crew who CAN see them, the one down there with them.
+	if mouse.get_plane() > 0:
+		return 1.0
+
 	# CARRIERS ARE ALWAYS VISIBLE (GDD section 2). No hiding with the flag -- the rule exists so
 	# a steal has to be run home rather than parked in a bush until the coast clears, and it is
 	# the same rule that floats the banner above the carrier's head where everyone can see it.
