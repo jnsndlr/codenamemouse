@@ -282,7 +282,15 @@ func _clear(plane: int, from: Vector2i, to: Vector2i) -> bool:
 ## A collapsed cell is forgotten by everyone at once. It is not stale information -- it is a place
 ## that no longer exists, and leaving it fading on a map would have a crew planning through rubble.
 func _on_collapsed(plane: int, cell: Vector2i) -> void:
-	if plane <= 0 or plane >= TunnelNetwork.PLANE_COUNT:
+	if plane < 0 or plane >= TunnelNetwork.PLANE_COUNT:
+		return
+	# PLANE 0 IS A MOUTH GOING, not a floor: the Brute filled an entrance in. Mouths age out of
+	# `_mouths` on their own after half a minute, which is the right rule for a hole somebody walked
+	# past and the wrong one for a hole that no longer exists -- thirty seconds of a crew routing
+	# towards a door that has been earth the whole time.
+	if plane == 0:
+		for side in [Team.BLUE, Team.RED]:
+			_mouths[side].erase(cell)
 		return
 	for side in [Team.BLUE, Team.RED]:
 		if _seen[side][plane].erase(cell):

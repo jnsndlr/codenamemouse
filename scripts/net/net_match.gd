@@ -1204,6 +1204,8 @@ func _apply_earth(bytes: PackedByteArray) -> void:
 				_tunnels.adopt_rock(plane, cell, bits)
 			TunnelView.Kind.FORGET:
 				_tunnels.forget_cell(plane, cell)
+			TunnelView.Kind.FORGET_SHAFT:
+				_tunnels.forget_shaft(plane, cell)
 		_earth_taken += 1
 
 

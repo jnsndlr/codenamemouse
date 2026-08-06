@@ -632,6 +632,27 @@ func _check_stomp() -> void:
 		_expect(network.is_dug(1, paved), "you cannot stamp through paving")
 		_expect(cave.cooldown_left() == 0.0, "and it costs nothing to find that out")
 
+	# THE ENTRANCE, WHICH IS WHAT THE ABILITY IS FOR. A stomp has no plane-0 patch of its own --
+	# there is nothing up there to collapse but grass -- so it reaches a mouth through the LANDING
+	# underneath it, which is an ordinary cell in an ordinary patch. Stand on the hole, put a foot
+	# through the cell below, and the shaft goes with it.
+	#
+	# SKIPPED RATHER THAN FAKED if the map will not give us a mouth at this spot. Nest clearance and
+	# shaft spacing are generation rules, and forcing a shaft past them would be asserting against
+	# an arena nobody plays -- the same reasoning as the paving block above.
+	cave._cooldown_left = 0.0
+	var mouth := Vector2i(-17, -10)
+	if network.dig_shaft_down(0, mouth):
+		player.global_position = network.cell_to_world(0, mouth) + Vector3.UP * 0.05
+		await _advance(0.1)
+		_fire(cave)
+		_expect(not network.has_shaft_down(0, mouth), "a Brute stomping an entrance fills it in")
+		_expect(not network.is_dug(1, mouth), "and takes the cell it landed on down with it")
+		# AND SURVIVES DOING IT, which is not a formality. A shaft collapse names both of its ends,
+		# and the upper end of an entrance is plane 0 -- the exact cell the Brute is standing on to
+		# reach it. The first build of this buried the Brute in its own stomp every single time.
+		_expect(not player.is_scruffed(), "and the Brute is not buried by the hole under its feet")
+
 
 ## Press the ability key, the way the game now delivers it (M7).
 ##

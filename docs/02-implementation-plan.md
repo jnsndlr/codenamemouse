@@ -2047,6 +2047,17 @@ Three experiments, added **separately** so you can tell which did what:
 Does the Engineer actually start digging deeper in response? That behavioral change is
 the proof the web works.
 
+> **The tremor dust fans out per cell, and that is a bill nobody has read yet.**
+> `_shake_the_earth` calls `CeilingDust.fall` once per dug cell inside the tremor disc —
+> `stomp_radius_cells` plus `tremor_extra_cells` is 4.2, so roughly fifty-five cells, each
+> building four motes with a material, a mesh and an RNG of their own. One stomp is on the order
+> of two hundred nodes and two hundred unbatched alpha-blended quads, constructed in a single
+> frame. It has not been measured, and it was **not** the cause of the slowdown it was first
+> blamed for — that was a debug export template — but it is the obvious next thing to measure,
+> and the two fixes are cheap: share the mesh and material across a burst, and cap the emitter
+> count rather than letting it grow with the disc. `StompDust` has a stated reason for per-puff
+> materials; `CeilingDust` does not.
+
 #### Un-digging came to the Brute whole, rather than being built twice
 
 **Collapse is in** (`scripts/classes/cave_in.gd`), and it arrived as a **transfer rather than a

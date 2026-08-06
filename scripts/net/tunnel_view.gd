@@ -33,6 +33,11 @@ enum Kind {
 	SHAFT,    ## A shaft descending from this plane, with its knowledge bits.
 	ROCK,     ## A seam this crew has found. The stone itself is generated, not sent.
 	FORGET,   ## A cell that has aged out of the fog and must leave the client's world.
+	## A shaft that is GONE -- the Brute filled it in. Its own kind rather than a FORGET on the
+	## cell, because a shaft is recorded at the UPPER of the two planes it joins: the FORGET
+	## entries for the two cells it came down with name planes the shaft is not stored under, and
+	## a client acting on those alone would keep drawing the ladder.
+	FORGET_SHAFT,
 }
 
 ## Plane, x, y, kind, bits. Cells are signed and can exceed a byte in a large arena.
@@ -92,16 +97,28 @@ func batch(peer: int, side: int) -> Array:
 		out.append(entry)
 		told[key] = wanted[key]
 
-	# Only cells are forgotten. A shaft your crew cut and a seam it has run into are things it
-	# KNOWS rather than things it can currently see, and neither ages.
+	# CELLS AND SHAFTS ARE FORGOTTEN; ROCK IS NOT. A seam a crew has run into is something it KNOWS
+	# rather than something it can currently see, and knowing does not age -- nor can the stone stop
+	# being there.
+	#
+	# `[REVISED]` SHAFTS USED TO BE IN THE SECOND CAMP and are not any more, because the Brute can
+	# now fill one in (see [method TunnelNetwork.collapse_shaft]). A shaft that leaves the host's
+	# world simply stops appearing in `wanted`, and without this it would sit in `told` for the rest
+	# of the match: the client would draw a ladder into solid earth, and the failure is silent on
+	# the machine that is right.
 	if out.size() < MAX_ENTRIES:
 		for key: String in told.keys():
 			if out.size() >= MAX_ENTRIES:
 				break
-			if wanted.has(key) or not key.begins_with("%d:" % Kind.CELL):
+			if wanted.has(key):
 				continue
 			var entry: Array = _unkey(key)
-			entry[0] = Kind.FORGET
+			if entry[0] == Kind.CELL:
+				entry[0] = Kind.FORGET
+			elif entry[0] == Kind.SHAFT:
+				entry[0] = Kind.FORGET_SHAFT
+			else:
+				continue
 			entry.append(0)
 			out.append(entry)
 			told.erase(key)

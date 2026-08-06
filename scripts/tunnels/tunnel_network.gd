@@ -49,6 +49,11 @@ signal shaft_opened(plane: int, cell: Vector2i)
 ## A cell was brought down. The one thing that makes the network get SMALLER, so it is the one
 ## thing every cache built on top of it has to hear about.
 signal cell_collapsed(plane: int, cell: Vector2i)
+## A shaft is gone -- filled in, both ends. Carried alongside the two `cell_collapsed` its ends
+## produce rather than instead of them: the graph and the sight only ever cared about the cells,
+## and the one thing that needs the shaft ITSELF named is the wire, which has to tell a client to
+## stop drawing a ladder that is no longer there.
+signal shaft_closed(plane: int, cell: Vector2i)
 ## A dug cell somebody cannot walk through any more, and then can again -- a barricade going up
 ## and coming down. Separate from `cell_collapsed` because the cell is still THERE: the floor, the
 ## walls, the lamps and the mask are all unchanged, and the only thing that has to hear about it
@@ -887,12 +892,25 @@ func dig(plane: int, cell: Vector2i, team: int = -1) -> bool:
 ## assumes that -- the mask, the graph, the lamps and the wall mesh are all caches over `_cells`,
 ## and all four are rebuilt from it here rather than patched.
 ##
-## WHY A SHAFT CELL IS REFUSED. A shaft is a hole in one plane's floor and in the ceiling of the
-## one below, recorded once. Collapsing either end would leave a shaft that starts or finishes in
-## solid earth -- which the audit's SHAFT_ENDS invariant catches, and which in play is a mouse
-## pressing E and arriving inside the ground. Bringing the shaft down as well is a bigger design
-## decision than this is (it would let one Engineer erase an entrance the whole crew relies on),
-## so for now the answer is simply no.
+## `[REVISED]` A SHAFT CELL IS NO LONGER REFUSED -- IT TAKES THE SHAFT WITH IT. A shaft is a hole
+## in one plane's floor and in the ceiling of the one below, recorded once, and the old answer here
+## was simply "no": collapsing one end would leave the other starting or finishing in solid earth,
+## which the audit's SHAFT_ENDS invariant catches and which in play is a mouse pressing E and
+## arriving inside the ground. That reasoning was about the GEOMETRY and it is still right; what was
+## wrong was concluding from it that the shaft has to survive. The other way out is to take both
+## ends at once, and that is what [method collapse_shaft] does.
+##
+## THE DESIGN THIS BUYS is the reason it moved. Un-digging is the Brute's whole (see [CaveIn]), and
+## a denial ability that cannot touch the one piece of the network the enemy crew actually depends
+## on is denial with the teeth filed off -- a Brute could seal ten metres of corridor and the route
+## would simply go round it. An entrance is the thing worth destroying. The old header's objection
+## ("it would let one Engineer erase an entrance the whole crew relies on") was answered by the
+## ability changing hands: erasing an entrance is exactly what the Brute is for, and it costs a walk
+## to the spot and a ten-second cooldown to do it.
+##
+## SO THIS TAKES ONE CELL OR TWO, and the caller does not get to choose which. Ask
+## [method collapse_footprint] first if you need to know -- the Brute does, because everything
+## standing in what comes down gets buried.
 ##
 ## STRANDING IS ALLOWED, and is the point. Sealing a corridor can cut off everything past it, and
 ## the REACHABLE invariant deliberately is not asserted against live play -- a pocket of tunnel
@@ -904,19 +922,97 @@ func collapse(plane: int, cell: Vector2i) -> bool:
 		return false
 	if plane <= 0 or plane >= PLANE_COUNT or not _cells[plane].has(cell):
 		return false
-	if _shafts[plane].has(cell) or has_shaft_up(plane, cell):
-		dig_refused.emit("the shaft holds this stretch open")
+	# Either end of a shaft is the same object asked from two sides, and both answers are the same
+	# operation on the plane the shaft is RECORDED at -- the upper of the two it joins.
+	if _shafts[plane].has(cell):
+		return collapse_shaft(plane, cell)
+	if has_shaft_up(plane, cell):
+		return collapse_shaft(plane - 1, cell)
+
+	_take_cell(plane, cell)
+	_rebuild_walls(plane)
+	_relight(plane)
+	tunnel_revealed.emit(plane, TEAM_BITS)
+	return true
+
+
+## Fill a shaft in: the mouth, the landing, and the hole between them.
+##
+## `plane` IS THE UPPER OF THE TWO IT JOINS, which is where a shaft is recorded (see `_shafts`).
+## Callers holding the lower end should ask with `plane - 1`; `collapse` does that for them.
+##
+## BOTH ENDS GO, ALWAYS. Half a shaft is not a state this network has a way to draw or a mouse has
+## a way to survive, so there is no flag here for taking only one -- the two `_take_cell` calls are
+## a single act. At plane 0 the upper end is the lawn, which has no cell to erase: the mouth is a
+## mark on ground that was never dug, so closing it is one grid tile going back to nothing.
+##
+## THE LANDING IS TAKEN EVEN THOUGH IT IS ORDINARY CORRIDOR, and that is the part worth being sure
+## about rather than the mouth. Leaving it would put a sealed ceiling over a room somebody is
+## standing in -- fine geometrically, and wrong for the ability, which is called a cave-in because
+## the roof arrives. It is also what makes the Brute's stomp read correctly from the lawn: you put a
+## foot through an entrance and the earth under it comes down with it.
+func collapse_shaft(plane: int, cell: Vector2i) -> bool:
+	if _puppet:
+		return false
+	if plane < 0 or plane + 1 >= PLANE_COUNT or not _shafts[plane].has(cell):
 		return false
 
+	_shafts[plane].erase(cell)
+	_shaft_known[plane].erase(cell)
+
+	if plane == 0:
+		# No cell to erase up here -- the lawn is not dug, it is walked on. What goes is the
+		# ENTRANCE tile and the point the routing graph hangs on it, which is the only reason a
+		# bot believes it can cross between navmesh and network at this spot.
+		_grids[0].set_cell_item(Vector3i(cell.x, 0, cell.y), GridMap.INVALID_CELL_ITEM)
+		cell_collapsed.emit(0, cell)
+	elif _cells[plane].has(cell):
+		_take_cell(plane, cell)
+		_rebuild_walls(plane)
+	if _cells[plane + 1].has(cell):
+		_take_cell(plane + 1, cell)
+		_rebuild_walls(plane + 1)
+
+	# Both, and unconditionally: the shaft was the light source for the pair of them, so the plane
+	# that kept its floor still has a lamp to lose.
+	_relight(plane)
+	_relight(plane + 1)
+	shaft_closed.emit(plane, cell)
+	tunnel_revealed.emit(plane, TEAM_BITS)
+	tunnel_revealed.emit(plane + 1, TEAM_BITS)
+	return true
+
+
+## Every cell a collapse aimed at `cell` would actually take, upper end first.
+##
+## PURE, AND ASKED BEFORE IT IS ACTED ON, for the same reason `stomp_cells` is: the Brute has to
+## bury everyone standing in what comes down, and after the fact there is nothing left to ask.
+## Empty means the collapse would be refused.
+##
+## TWO ENTRIES WHEN THE TARGET IS EITHER END OF A SHAFT, and one of that pair may be plane 0 -- a
+## mouth on the lawn rather than a corridor cell. It is returned because it IS part of what came
+## down and a caller counting ground taken should count it. **A caller crushing mice must not.**
+## Mice on the surface are plane 0, and the Brute filling in the entrance it is standing on is the
+## first one in the queue; see [method CaveIn._bury], which is where that is handled.
+func collapse_footprint(plane: int, cell: Vector2i) -> Array:
+	if not can_collapse(plane, cell):
+		return []
+	if _shafts[plane].has(cell):
+		return [[plane, cell], [plane + 1, cell]]
+	if has_shaft_up(plane, cell):
+		return [[plane - 1, cell], [plane, cell]]
+	return [[plane, cell]]
+
+
+## The cell erased and everything cached over it told. Shared by the plain collapse and by the
+## shaft one, which does this twice -- deliberately WITHOUT the wall rebuild and the relight, since
+## those are per-plane and doing them per-cell would rebuild the same mesh twice for one shaft.
+func _take_cell(plane: int, cell: Vector2i) -> void:
 	_cells[plane].erase(cell)
 	_tunnel_known[plane].erase(cell)
 	_grids[plane].set_cell_item(Vector3i(cell.x, 0, cell.y), GridMap.INVALID_CELL_ITEM)
 	_mark_mask(plane, cell, false)
-	_rebuild_walls(plane)
-	_relight(plane)
 	cell_collapsed.emit(plane, cell)
-	tunnel_revealed.emit(plane, TEAM_BITS)
-	return true
 
 
 # ------------------------------------------------------------------- what the wire is allowed to say
@@ -1010,12 +1106,42 @@ func forget_cell(plane: int, cell: Vector2i) -> bool:
 	return true
 
 
+## A shaft this crew is no longer allowed to know about, or that no longer exists.
+##
+## THE CLIENT HALF OF [method collapse_shaft], and separate from `forget_cell` for the same reason
+## that one is separate from `collapse`: a shaft is recorded at the UPPER of the two planes it
+## joins, so forgetting the landing cell -- which is what the host's FORGET entries name -- never
+## reaches the record. Both ends arrive as their own entries and each does its own half.
+##
+## Nothing here decides anything. A shaft leaves a client's world when the server says so, and the
+## two reasons it might (somebody filled it in, or this crew stopped being allowed to see it) are
+## the same fact from here.
+func forget_shaft(plane: int, cell: Vector2i) -> bool:
+	if plane < 0 or plane + 1 >= PLANE_COUNT or not _shafts[plane].has(cell):
+		return false
+	_shafts[plane].erase(cell)
+	_shaft_known[plane].erase(cell)
+	if plane == 0:
+		_grids[0].set_cell_item(Vector3i(cell.x, 0, cell.y), GridMap.INVALID_CELL_ITEM)
+		cell_collapsed.emit(0, cell)
+	else:
+		_refresh_cell(plane, cell)
+	_refresh_cell(plane + 1, cell)
+	_relight(plane)
+	_relight(plane + 1)
+	shaft_closed.emit(plane, cell)
+	return true
+
+
 ## Whether this cell could be brought down, without doing it. For a UI that has to say so before
 ## the player commits, and for the ability's own reach test.
+##
+## `[REVISED]` A SHAFT CELL PASSES NOW. This used to carry the shaft exclusion as a second clause
+## and it was the reason the Brute's stomp quietly skipped every ladder inside its patch -- the
+## patch was filtered through here. Whether the collapse takes one cell or two is
+## [method collapse_footprint]'s question, not this one's.
 func can_collapse(plane: int, cell: Vector2i) -> bool:
-	if plane <= 0 or plane >= PLANE_COUNT or not _cells[plane].has(cell):
-		return false
-	return not _shafts[plane].has(cell) and not has_shaft_up(plane, cell)
+	return plane > 0 and plane < PLANE_COUNT and _cells[plane].has(cell)
 
 
 ## ASKING BEFORE ACTING, for anything that would rather try somewhere else than be told no.

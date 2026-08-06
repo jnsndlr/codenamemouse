@@ -47,6 +47,12 @@ extends Node3D
 var _motes: Array[Dictionary] = []
 var _age: float = 0.0
 var _longest: float = 0.0
+## ONE MATERIAL AND ONE MESH FOR THE WHOLE CELL, which is only possible because nothing fades on
+## this material any more. A mote leaves by shrinking, so its clock lives on its transform, and a
+## transform is per instance for free. The earlier version gave every mote its own
+## [StandardMaterial3D] so each could fade on its own alpha -- four materials a cell, fifty-odd
+## cells a stomp, two hundred unbatchable draws for an effect that is meant to be grit.
+var _material: StandardMaterial3D
 
 
 ## Trickle dust into one cell. `at` is the floor of the cell; `height` is the plane spacing, which
@@ -70,19 +76,25 @@ func _build(height: float, seed_value: int) -> void:
 	quad.size = Vector2.ONE
 	var half := TunnelNetwork.CELL * 0.34
 
-	for index in range(maxi(motes, 0)):
-		var material := StandardMaterial3D.new()
-		material.albedo_color = dust_color
-		material.albedo_texture = StompDust.puff_texture()
-		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-		material.cull_mode = BaseMaterial3D.CULL_DISABLED
-		material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	# BLENDED, NOT DITHERED, AND THAT WAS TRIED THE OTHER WAY ROUND. `ALPHA_HASH` would put this in
+	# the opaque pass and cost nothing to sort, but it draws roughly `dust_color.a` of the pixels
+	# and throws the rest away -- and at a mote a tenth of a metre across there are not enough
+	# pixels for that to read as haze. It came back as speckle. Dust this fine needs a real blend,
+	# so the transparent queue is a cost this effect actually buys something with; the savings come
+	# from there being one material and a capped number of cells instead.
+	_material = StandardMaterial3D.new()
+	_material.albedo_color = dust_color
+	_material.albedo_texture = StompDust.puff_texture()
+	_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 
+	for index in range(maxi(motes, 0)):
 		var piece := MeshInstance3D.new()
 		piece.mesh = quad
-		piece.material_override = material
+		piece.material_override = _material
 		piece.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		# Scattered across the cell rather than centred, so a corridor of these reads as earth
 		# shedding along its whole length instead of as one dot per tile.
@@ -97,7 +109,9 @@ func _build(height: float, seed_value: int) -> void:
 
 		_motes.append({
 			"node": piece,
-			"material": material,
+			# Kept so the shrink-out has something to shrink FROM. It was implicit when the fade
+			# lived on alpha and the scale never moved.
+			"size": size,
 			"fall": rng.randf_range(fall_speed.x, fall_speed.y),
 			"life": rng.randf_range(seconds.x, seconds.y),
 			# Staggered starts, so the cell trickles for its whole life rather than dropping
@@ -129,8 +143,11 @@ func _process(delta: float) -> void:
 		var through := clampf(float(mote["age"]) / maxf(float(mote["life"]), 0.01), 0.0, 1.0)
 		# Accelerating, because it is falling. Constant-speed dust reads as being lowered.
 		node.position.y -= float(mote["fall"]) * delta * (0.4 + through)
-		var material: StandardMaterial3D = mote["material"]
-		material.albedo_color.a = dust_color.a * (1.0 - smoothstep(0.4, 1.0, through))
+		# LEAVES BY SHRINKING, on the same curve the alpha used to follow, because the material is
+		# shared now and an alpha written here would fade every mote in the cell at once. A mote
+		# going to nothing reads as grit dispersing either way; what it buys is one material.
+		var left := 1.0 - smoothstep(0.4, 1.0, through)
+		node.scale = Vector3.ONE * float(mote["size"]) * left
 
 	if _age >= _longest + 0.1:
 		queue_free()

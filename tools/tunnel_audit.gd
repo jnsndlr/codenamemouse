@@ -595,18 +595,43 @@ func _check_collapse() -> void:
 	if _network.collapse(1, Vector2i(0, 4)):
 		_fail("COLLAPSE", "collapsing the same cell twice reported success")
 
-	# A SHAFT HOLDS ITS STRETCH OPEN. Either end of a shaft is refused, or the audit's own
-	# SHAFT_ENDS invariant would start failing the moment anyone used the ability near a ladder --
-	# and in play it is a mouse pressing E and arriving inside solid ground.
-	if _network.collapse(1, Vector2i(0, 0)):
-		_fail("COLLAPSE", "the cell under an entrance came down")
+	# A SHAFT COMES DOWN WHOLE, FROM EITHER END. This used to be a pair of refusals; it is now the
+	# ability's headline (see [method TunnelNetwork.collapse_shaft]). What the old refusals were
+	# protecting -- SHAFT_ENDS, which is a mouse pressing E and arriving inside solid ground -- is
+	# protected instead by taking both ends at once, and that is what these check. The invariant
+	# itself runs after every scenario and would catch a half-shaft anyway; these say WHICH call
+	# left one, which is the difference between a two-minute fix and an afternoon.
 	_descend(1, Vector2i(0, 6))
-	if _network.collapse(1, Vector2i(0, 6)):
-		_fail("COLLAPSE", "a cell with a shaft leading down came down")
-	if _network.collapse(2, Vector2i(0, 6)):
-		_fail("COLLAPSE", "the cell a shaft lands on came down")
+	if _network.collapse_footprint(1, Vector2i(0, 6)).size() != 2:
+		_fail("COLLAPSE", "a cell with a shaft leading down claimed a one-cell footprint")
+	if not _network.collapse(1, Vector2i(0, 6)):
+		_fail("COLLAPSE", "a cell with a shaft leading down refused")
+	if _network.has_shaft_down(1, Vector2i(0, 6)):
+		_fail("COLLAPSE", "the shaft is still recorded after its cell came down")
+	if _network.is_dug(2, Vector2i(0, 6)):
+		_fail("COLLAPSE", "the landing a plane below stayed open")
+	if graph.has(2, Vector2i(0, 6)):
+		_fail("COLLAPSE", "the routing graph kept the landing of a filled shaft")
 
-	# The surface is not diggable and not collapsible either.
+	# Now the other direction, and the one the Brute is actually for: an ENTRANCE, taken from its
+	# landing on plane 1, closing the mouth on the lawn. Plane 0 is the only place a collapse
+	# reaches a cell that was never dug, so it is the only place the tile and the graph point are
+	# removed without a `_cells` entry to drive it.
+	if _network.collapse_footprint(1, Vector2i(0, 0)).size() != 2:
+		_fail("COLLAPSE", "the cell under an entrance claimed a one-cell footprint")
+	if not _network.collapse(1, Vector2i(0, 0)):
+		_fail("COLLAPSE", "the cell under an entrance refused to come down")
+	if _network.has_shaft_down(0, Vector2i(0, 0)):
+		_fail("COLLAPSE", "the entrance is still recorded after being filled in")
+	if _network.is_dug(1, Vector2i(0, 0)):
+		_fail("COLLAPSE", "the cell under the entrance stayed open")
+	if graph.has(0, Vector2i(0, 0)):
+		_fail("COLLAPSE", "the routing graph still offers a way down at a filled entrance")
+	if not graph.mouths().is_empty():
+		_fail("COLLAPSE", "a filled entrance is still listed as a mouth")
+
+	# The surface is not diggable, and not collapsible on its own either: the lawn only comes down
+	# as the upper half of a shaft, never as a cell somebody aimed at.
 	if _network.collapse(0, Vector2i(0, 0)):
 		_fail("COLLAPSE", "a piece of the lawn came down")
 

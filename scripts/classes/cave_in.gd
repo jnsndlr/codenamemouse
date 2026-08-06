@@ -32,6 +32,18 @@ extends MouseControl
 ## "where do I stomp" is a cant mark on the minimap -- a Sneak found the tunnel and the Brute walks
 ## to it. That is section 5's counterplay web with the middle link finally built.
 ##
+## `[REVISED]` A SHAFT IS NOW SOMETHING IT CAN TAKE, and it takes both ends. Either form may aim at
+## a ladder: underground you point at the cell the shaft passes through, and from the lawn the
+## stomp's patch reaches an entrance through its LANDING one plane down. Filling one end and not
+## the other is not a state the world can hold, so a collapse on a shaft cell always costs two
+## cells -- the mouth and what it lands on.
+##
+## THAT MAKES THE ENTRANCE THE PRIZE, and it is the reason the ability is worth its cooldown. A
+## sealed corridor is a detour; a filled entrance is a crew that has to dig a new way in. It is also
+## the point at which the Sneak's cant mark pays for itself twice over (GDD section 5): the mark
+## names a cell, the Brute walks the lawn above it, and what a guess used to buy -- a room of
+## corridor -- can now be the enemy's front door.
+##
 ## MICE CAUGHT INSIDE ARE SCRUFFED (GDD section 3). Not killed -- nothing in this game is --
 ## and, notably, this is the only way to scruff somebody that has no facing check and no arc.
 ## Standing in the wrong cell is the whole counterplay, which is why the reach is one tile and
@@ -85,6 +97,10 @@ signal refused(reason: String)
 ## Kept as its own dial rather than left to fall out of the taper below, because it is a DESIGN
 ## rule and the taper is a feel one. Widening the patch should not quietly hand the Brute plane 3.
 @export var stomp_max_plane: int = 2
+## Most cells that may trickle ceiling dust for one tremor, whatever the radius works out to. A
+## DRAW BUDGET, not a design rule: the tell is *many cells shedding at once* and twenty carries that
+## as well as fifty-five does, at a third of the nodes. See [method _thin_to_budget].
+@export var tremor_dust_cells: int = 20
 ## Camera trauma at the Brute's own feet, 0..1. See [method CameraRig.shake].
 @export_range(0.0, 1.0, 0.05) var stomp_shake: float = 0.85
 ## How far away the thump is still felt at all, in metres. Roughly two zoomed-out screen heights:
@@ -278,13 +294,24 @@ func _cave_in() -> void:
 		return
 
 	var plane := _player.get_plane()
+	# ASKED BEFORE IT HAPPENS, because afterwards there is nothing left to ask. A shaft cell takes
+	# its other end down with it (see [method TunnelNetwork.collapse_shaft]), and everyone standing
+	# in either one is buried -- burying only the cell that was aimed at would leave a mouse alive
+	# inside a tile that no longer exists.
+	var footprint := _network.collapse_footprint(plane, cell)
 	if not _network.collapse(plane, cell):
 		return
 
-	_bury(plane, cell)
-	# Reach zero: this form takes exactly the cell it aimed at, so the tremor is `tremor_extra_cells`
-	# and nothing more. A cave-in should be felt by the corridor next door, not by the whole level.
-	_shake_the_earth([[plane, cell, 0.0]])
+	for down: Array in footprint:
+		_bury(down[0], down[1])
+	# Reach zero on each: this form takes the cells it aimed at and no ring around them, so the
+	# tremor is `tremor_extra_cells` and nothing more. A cave-in should be felt by the corridor next
+	# door, not by the whole level.
+	var seeds: Array = []
+	for down: Array in footprint:
+		if int(down[0]) > 0:  # The lawn end of a shaft sheds no ceiling; the layer under it does.
+			seeds.append([down[0], down[1], 0.0])
+	_shake_the_earth(seeds)
 	_cooldown_left = cooldown
 	collapsed.emit(plane, cell)
 
@@ -355,10 +382,18 @@ func _stomp() -> void:
 	for entry: Array in reached:
 		var plane: int = entry[0]
 		var cell: Vector2i = entry[1]
+		# A SHAFT INSIDE THE PATCH COMES DOWN WHOLE, which is how a stomp reaches the surface. The
+		# patch itself never touches plane 0 -- there is nothing up there to collapse but grass --
+		# so an entrance is taken through its LANDING: the plane-1 cell is in the patch like any
+		# other, and filling it fills the mouth on the lawn with it. That also means one entry here
+		# can take a cell another entry was going to; the second attempt finds it gone and the
+		# `continue` below is the whole of the handling that needs.
+		var footprint := _network.collapse_footprint(plane, cell)
 		if not _network.collapse(plane, cell):
 			continue
-		_bury(plane, cell)
-		taken += 1
+		for down: Array in footprint:
+			_bury(down[0], down[1])
+		taken += footprint.size()
 
 	_cooldown_left = stomp_cooldown
 	stomped.emit(taken)
@@ -482,6 +517,7 @@ func _shake_the_earth(seeds: Array) -> void:
 			continue
 
 		var span := ceili(radius)
+		var eligible: Array[Vector2i] = []
 		for dx in range(-span, span + 1):
 			for dy in range(-span, span + 1):
 				var cell := centre + Vector2i(dx, dy)
@@ -490,12 +526,15 @@ func _shake_the_earth(seeds: Array) -> void:
 					continue
 				if sight != null and not sight.knows(watcher.team, watching, cell):
 					continue
-				CeilingDust.fall(
-					_network,
-					_network.cell_to_world(watching, cell),
-					TunnelNetwork.SPACING,
-					cell.x * 73856093 ^ cell.y ^ watching
-				)
+				eligible.append(cell)
+
+		for cell in _thin_to_budget(eligible):
+			CeilingDust.fall(
+				_network,
+				_network.cell_to_world(watching, cell),
+				TunnelNetwork.SPACING,
+				cell.x * 73856093 ^ cell.y ^ watching
+			)
 		strongest = maxf(
 			strongest, 1.0 - clampf(Vector2(here - centre).length() / radius, 0.0, 1.0)
 		)
@@ -505,6 +544,28 @@ func _shake_the_earth(seeds: Array) -> void:
 	var rig := get_tree().get_first_node_in_group(CameraRig.RIG_GROUP) as CameraRig
 	if rig != null:
 		rig.shake(tremor_shake * strongest * strongest)
+
+
+## Spread `cells` down to at most `tremor_dust_cells`, keeping the spread rather than the nearest.
+##
+## THE COST OF THIS EFFECT IS CELLS, AND CELLS GROW AS THE SQUARE OF THE RADIUS. At 4.2 the disc is
+## about fifty-five of them, four motes each -- two hundred nodes built in one frame for a tell that
+## reads perfectly well at a fifth of that. Widening the stomp by one cell would have added another
+## thirty, silently, because nothing in the ability's own numbers looks like a draw budget.
+##
+## STRIDED, NOT NEAREST. Taking the closest cells packs every mote into a blob around the collapse,
+## which is exactly the direction-and-distance the effect refuses to give away (see the class note
+## on [CeilingDust]). Row-major order strided by a constant scatters the survivors across the whole
+## disc, so what thins out is the density and not the reach.
+func _thin_to_budget(cells: Array[Vector2i]) -> Array[Vector2i]:
+	var budget := maxi(tremor_dust_cells, 1)
+	if cells.size() <= budget:
+		return cells
+	var kept: Array[Vector2i] = []
+	var stride := float(cells.size()) / float(budget)
+	for index in range(budget):
+		kept.append(cells[mini(int(float(index) * stride), cells.size() - 1)])
+	return kept
 
 
 ## Everyone standing in the cell as it comes down (GDD section 3).
@@ -517,7 +578,14 @@ func _shake_the_earth(seeds: Array) -> void:
 ## earth arrived where you were standing. The blunt damage is still what does it underneath, and
 ## still deliberately enormous rather than exact: this is a roof, and a Brute surviving one on high
 ## health would read as the mechanic being broken rather than as the Brute being tough.
+## NOT ON THE LAWN, and this guard is load-bearing rather than defensive. A shaft collapse names
+## both of its ends, and the upper end of an entrance is plane 0 -- so without this, the very first
+## thing a Brute does when it stomps the mouth it is standing on is bury ITSELF. There is nothing
+## above the surface to arrive on top of you; a mouth closing under your feet is ground filling in,
+## not a roof coming down.
 func _bury(plane: int, cell: Vector2i) -> void:
+	if plane <= 0:
+		return
 	for node in get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
 		var mouse := node as Mouse
 		if mouse == null or mouse.is_scruffed() or mouse.get_plane() != plane:
