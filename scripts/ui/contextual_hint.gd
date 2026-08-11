@@ -85,7 +85,13 @@ func _process(delta: float) -> void:
 	# Sized to the text before it is placed, because the position is derived from the width --
 	# left at the node's authored rect it would be centred on the label, not on the mouse.
 	reset_size()
-	var anchor := camera.unproject_position(_player.global_position + Vector3.UP * HEAD)
+	# Scaled by the body under it where there is one to ask: `HEAD` was measured against a mouse
+	# that was the same size for everybody, and on a Brute the flat figure sits inside its head.
+	# `_player` is a plain Node3D here on purpose -- this panel is wired by path and an authored
+	# map may point it at something that is not a Mouse at all.
+	var mouse := _player as Mouse
+	var lift := HEAD * (mouse.height_ratio() if mouse != null else 1.0)
+	var anchor := camera.unproject_position(_player.global_position + Vector3.UP * lift)
 	var edge := get_viewport_rect().size - size - Vector2(margin, margin)
 	position = (anchor - Vector2(size.x * 0.5, size.y + screen_lift)).clamp(
 		Vector2(margin, margin), Vector2(maxf(edge.x, margin), maxf(edge.y, margin))

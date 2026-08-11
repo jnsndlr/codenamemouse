@@ -83,12 +83,27 @@ func _process(delta: float) -> void:
 	# because its ability does. Q on the lawn is a stomp and Q in a corridor is a cave-in, and a
 	# binding whose meaning moves under you has to say which one it currently means.
 	var kind: int = int(_player.get("mouse_class"))
-	if kind == MouseClass.SNEAK:
+	if kind == MouseClass.GENERALIST:
+		hint += "\nQ: second wind"
+		# Only while you have something to throw. The Generalist's two keys are unlike the Brute's:
+		# Q is always available and V is meaningless nine tenths of the match, so a permanent line
+		# for it would be teaching a binding at every moment except the one where it matters.
+		if bool(_player.call("is_carrying")):
+			hint += "     V: throw the banner"
+	elif kind == MouseClass.SNEAK:
 		hint += "\nQ: sound below / erase enemy cant"
 	elif kind == MouseClass.ENGINEER and plane > 0:
-		hint += "\nX: barricade"
+		# BOTH KEYS, and the Q line is new: until the shoring landed the Engineer was the one class
+		# whose ability key did nothing, and this line said so by being absent. Ordered ability-key
+		# first, like every other class, so the four hints line up rather than the Engineer's
+		# reading as the odd one out for a second reason.
+		hint += "\nQ: hold to shore this tunnel     X: barricade"
 	elif kind == MouseClass.BRUTE:
 		hint += "\nQ: stomp the ground" if plane <= 0 else "\nQ: cave in the tunnel beside you"
+		# Slam does NOT move with the plane, and saying so on the same line as the one that does is
+		# most of the point: the Brute's two keys differ in exactly one respect and a player
+		# learning the class should be able to see which one it is.
+		hint += "     V: slam"
 	var blocked := ""
 	if _refusal_left > 0.0:
 		blocked = "\n\nBLOCKED: %s" % _refusal if _refusal_blocked else "\n\n%s" % _refusal

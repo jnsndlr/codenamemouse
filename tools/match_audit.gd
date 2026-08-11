@@ -57,6 +57,9 @@ extends SceneTree
 ##                   not. A contact goes stale where it was last seen and is forgotten on time.
 ##                   This is hidden information (GDD section 3) and every failure of it leaks
 ##                   the wrong way -- silently, and in the direction of knowing too much.
+##   SECOND_WIND     The Generalist heals through being hit, and only the Generalist. The passive
+##                   regeneration looks exactly like the ability from the outside, so the trial
+##                   stops the clock that drives it and takes every reading inside the regen delay.
 ##   SONAR           A crew maps only the cells and mouths it cut. A Sneak sounds exactly one
 ##                   layer below, leaves one shared cant mark, and only an enemy Sneak can see
 ##                   and erase it.
@@ -123,8 +126,13 @@ func _initialize() -> void:
 		["classes", _check_classes],
 		["cave_in", _check_cave_in],
 		["stomp", _check_stomp],
+		["slam", _check_slam],
+		["second_wind", _check_second_wind],
+		["cork", _check_cork],
 		["tremor", _check_tremor],
 		["barricade", _check_barricade],
+		["shore_up", _check_shore_up],
+		["banner_toss", _check_banner_toss],
 		["sonar", _check_sonar],
 		["tunnel_sight", _check_tunnel_sight],
 		["engineer_bot", _check_engineer_bot],
@@ -232,7 +240,15 @@ func _check_capture() -> void:
 	_expect(theirs.state == Banner.AT_NEST, "the captured banner goes back to its own nest")
 
 
-## Dropped where they fell, which is the whole point of the rule.
+## Dropped where they fell -- give or take the skid, which is the whole point of the rule.
+##
+## `[REVISED]` THE TOLERANCE IS THE ASSERTION NOW. This used to demand the banner land within a
+## metre of the fallen carrier, which was a fine way of saying "it did not go home" back when a
+## drop was exact. A scruffed carrier's banner now skids up to `banner_scatter`, so the invariant
+## has to be stated as the band it was always really about: **near where they fell, and nowhere
+## else.** Both halves matter and the old check only tested one of them -- a banner that quietly
+## returned to its nest and a banner flung across the yard would both have failed it, and a banner
+## that stopped skidding at all would now pass it silently, which is why the lower bound is here.
 func _check_scruff_drops() -> void:
 	await _arena(1)
 	var theirs := _director.banner_of(Team.RED)
@@ -248,10 +264,16 @@ func _check_scruff_drops() -> void:
 	_expect(runner.is_scruffed(), "a big enough hit scruffs")
 	_expect(not runner.is_carrying(), "a scruffed mouse is not carrying anything")
 	_expect(theirs.state == Banner.DROPPED, "the banner is dropped, not returned")
+	var skid := Vector2(
+		theirs.global_position.x - where.x, theirs.global_position.z - where.z
+	).length()
 	_expect(
-		Vector2(theirs.global_position.x - where.x, theirs.global_position.z - where.z).length()
-			< 1.0,
-		"the banner lands where the carrier fell"
+		skid <= _director.banner_scatter + 0.01,
+		"the banner lands within a skid of where the carrier fell (%.2fm)" % skid
+	)
+	_expect(
+		theirs.global_position.distance_to(theirs.get_home()) > 1.0,
+		"and did not simply go home"
 	)
 
 
@@ -712,6 +734,428 @@ func _fire(cave: CaveIn) -> void:
 	cave._physics_process(0.0)
 
 
+## The same, for the Brute's other key.
+func _fire_slam(slam: Slam) -> void:
+	_intend(slam.get("_player"), InputFrame.Action.SLAM)
+	slam._physics_process(0.0)
+
+
+## And for the Generalist's Q, which shares the key with the cave-in and the sonar.
+func _fire_wind(wind: SecondWind) -> void:
+	_intend(wind.get("_player"), InputFrame.Action.ABILITY)
+	wind._physics_process(0.0)
+
+
+## The cork, and the collision rule underneath it. (M8)
+##
+## THIS IS A GEOMETRY CHECK AND IT HAD TO BE, because the claim it tests was made in prose and was
+## false for five milestones. The GDD retired the Brute's underground speed penalty on the grounds
+## that "the cork survives, as geometry rather than as speed -- a corridor is one cell wide and
+## mice body-block". Both halves were wrong at the time: allies did not collide at all, and every
+## class was a 0.16 capsule in a 1.0 corridor, which two mice clear with 2cm to spare. Nothing
+## failed, nothing errored, and a documented capability simply did not exist.
+##
+## SO IT IS ASKED BY WALKING INTO IT. A mouse is driven at a corridor with somebody standing in
+## the middle, for a second and a half, and the question is whether it got past -- not whether a
+## number in a resource is what it should be. A cork that a physics quirk lets people through is
+## exactly as broken as one that was never built, and only one of those two is visible in the
+## arithmetic.
+##
+## AND THE CONTROL IS THE SAME TRIAL AGAINST A SNEAK, because a corridor that nobody can pass is
+## not a cork either -- it is a corridor that does not work. Pillar 4 says the Brute has one thing
+## no other class can do at all, and half of that sentence is about the other three.
+func _check_cork() -> void:
+	await _arena(1)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+	# A straight run, one cell wide, well clear of the patio and both nests.
+	var row := -17
+	for x in range(-17, -9):
+		network.dig(1, Vector2i(x, row))
+	await _advance(0.2)
+
+	# Standing in the middle of the corridor, and in the middle of its WIDTH -- the seal band is
+	# +/-12cm of the centre line and a plug parked against a wall is meant to be beatable.
+	var plug := _puppet(Team.BLUE, network.cell_to_world(1, Vector2i(-13, row)) + Vector3.UP * 0.05)
+	plug.set_plane(1)
+
+	# DOES IT FIT? Asked before anything else, because a Brute that seals a corridor by being
+	# jammed in it is not a cork, it is a stuck mouse -- and the two are indistinguishable from
+	# every other assertion in this check. The first wide Brute was built on a capsule, whose
+	# height Godot clamps to twice its radius: 0.60 of mouse under 0.53 of headroom, wedged into
+	# the floor and the ceiling at once, unable to move in any direction. Everything below passed.
+	plug.set_class(MouseClass.BRUTE)
+	await _advance(0.2)
+	for slot: Node in plug.find_children("*", "CollisionShape3D", true, false):
+		var shape: Shape3D = (slot as CollisionShape3D).shape
+		var tall := float(shape.get("height")) if shape.get("height") != null else 0.0
+		_expect(
+			tall > 0.0 and tall <= TunnelChunks.PLANE_SPACING - TunnelChunks.FLOOR_THICKNESS,
+			"a Brute fits under a plane's floor (%.2f tall, %.2f of headroom)" % [
+				tall, TunnelChunks.PLANE_SPACING - TunnelChunks.FLOOR_THICKNESS
+			]
+		)
+		# AND IS AS WIDE AS IT ASKED TO BE, which is the same bug seen from the other side. A
+		# capsule refuses to be both 0.30 wide and 0.40 tall, and which of the two it throws away
+		# depends only on the order the two lines happen to be written in: set the radius last and
+		# the body grows too tall for the corridor, set the height last and the radius is quietly
+		# clamped to 0.20 -- still sealing, so every other assertion here passes, and the Brute is
+		# a third narrower than the resource says. One of these two lines fires for either mistake.
+		var wide := float(shape.get("radius")) if shape.get("radius") != null else 0.0
+		_expect(
+			is_equal_approx(wide, plug.body_radius),
+			"and is as wide as its class asked for (%.2f, wanted %.2f)" % [wide, plug.body_radius]
+		)
+
+	# And it can actually walk down the corridor it fits in. Driven along its own axis, away from
+	# anything to bump into -- a mouse that is stuck reports zero here whatever the reason.
+	plug.set_physics_process(false)
+	var from := plug.global_position
+	for i in range(45):
+		plug.velocity = Vector3(2.4, 0.0, 0.0)
+		plug.move_and_slide()
+		await physics_frame
+	_expect(
+		plug.global_position.distance_to(from) > 1.0,
+		"and can move along it (travelled %.2fm in 0.75s)" % plug.global_position.distance_to(from)
+	)
+	plug.set_physics_process(true)
+
+	for kind: int in [MouseClass.SNEAK, MouseClass.BRUTE]:
+		plug.set_class(kind)
+		await _advance(0.2)
+		plug.global_position = network.cell_to_world(1, Vector2i(-13, row)) + Vector3.UP * 0.05
+		plug.velocity = Vector3.ZERO
+
+		# A runner three cells back and OFF THE CENTRE LINE, which is the only version of this
+		# trial that means anything. Driven straight at the plug it stops dead against anybody --
+		# what a player actually does is come down one side, and against a mouse its own size that
+		# works: the probe measured a 0.16 plug passed by 1.7m at every lane but the head-on one.
+		# A check that walked into the middle would report SEALED for all four classes and call
+		# the cork built.
+		var runner := _puppet(
+			Team.BLUE,
+			network.cell_to_world(1, Vector2i(-16, row)) + Vector3(0.0, 0.05, 0.18)
+		)
+		runner.set_plane(1)
+		runner.set_class(MouseClass.GENERALIST)
+		await _advance(0.2)
+
+		# ON THE BODY, NOT THROUGH `_wish`. `Mouse._physics_process` clears `_wish` at the top of
+		# every tick and fills it from `_control`, which a bare fixture does not implement -- so a
+		# wish poked in from here is gone before anything reads it, and the first build of this
+		# check watched a runner stand perfectly still for a second and a half and recorded that
+		# as a corking. Driving the body is also the honest question: this is about whether one
+		# capsule fits past another, not about the movement controller.
+		runner.set_physics_process(false)
+		for i in range(90):
+			runner.velocity = Vector3(2.4, 0.0, 0.0)
+			runner.move_and_slide()
+			plug.global_position = (
+				network.cell_to_world(1, Vector2i(-13, row)) + Vector3.UP * 0.05
+			)
+			plug.velocity = Vector3.ZERO
+			await physics_frame
+
+		var past := runner.global_position.x > plug.global_position.x + 0.2
+		if kind == MouseClass.BRUTE:
+			_expect(not past, "a Brute plugs a one-cell corridor -- nobody walks past it")
+			_expect(
+				runner.global_position.x < plug.global_position.x,
+				"and the runner is stopped SHORT of it rather than squeezed through"
+			)
+		else:
+			_expect(past, "a Sneak does not plug it -- a corridor you cannot pass is not a cork")
+		runner.queue_free()
+		await _advance(0.1)
+
+	# The two widths, stated so a failure above says which half moved. MEASURED RATHER THAN
+	# DERIVED: the arithmetic puts the seal floor at 0.18 for a centred plug, and driving mice at
+	# each other agrees exactly -- 0.16 is passed, 0.18 is not. The standard mouse is therefore
+	# sitting 2cm from being a cork itself, which is worth an assertion rather than a comment: a
+	# tuning pass that nudged it to 0.18 would take the Brute's whole capability away by giving it
+	# to everybody, and nothing else in the project would notice.
+	plug.set_class(MouseClass.BRUTE)
+	_expect(
+		plug.body_radius >= 0.24,
+		"the Brute is wide enough to seal with margin, not on the boundary (%.2f)" % plug.body_radius
+	)
+	plug.set_class(MouseClass.SNEAK)
+	_expect(
+		plug.body_radius <= 0.16,
+		"and the other three stay narrow enough to pass each other (%.2f)" % plug.body_radius
+	)
+
+
+## The Brute's second key: a shove with no damage in it, and what it does to a carrier. (M8)
+##
+## THE ASSERTION THAT MATTERS IS THE LAST ONE, and it is about a number rather than a rule. A
+## dropped banner has no grace period -- `_check_pickup` hands it to whoever is nearest, at
+## `pickup_radius` -- so a Slam that pushes a carrier less than 0.85m drops the banner INTO THEIR
+## OWN HANDS on the next tick, and every rule above it still passes. It looks exactly like a
+## working ability from inside the code and like a key that does nothing from outside, which is
+## this project's most-repeated bug wearing its newest costume. So the check does not merely watch
+## the banner leave; it waits half a second and asks whether it came back.
+##
+## THE CIRCLE IS THE OTHER HALF. Slam is the only attack in the game with no arc, because the
+## situation it exists for -- somebody already past you -- is behind you by definition. A cone
+## would pass every other check here, so the mouse standing at the Brute's back is the one that
+## proves the shape.
+func _check_slam() -> void:
+	await _arena(1)
+	var player := _director.get_player()
+	var slam: Slam = null
+	if player != null:
+		slam = player.get_node_or_null("Slam") as Slam
+	if slam == null or player == null:
+		_expect(false, "the arena has a slam and a player")
+		return
+
+	# Off physics so the Brute stays where it is put -- it recomputes aim and heading every tick
+	# otherwise, the same reason the cave-in check does this.
+	player.set_physics_process(false)
+	player.revive_at(Vector3.ZERO, 0.0)
+
+	# Spread around the Brute rather than in front of it, because the shape is the point. The two
+	# that get shoved are on the z axis and the out-of-range one is off to the side: a shove is
+	# 2.5m and a mouse parked in the flight path is a wall, which is how the first run of this
+	# check measured a quarter of a metre and blamed the ability.
+	var ahead := _puppet(Team.RED, Vector3(0.0, 0.2, -0.9))
+	var behind := _puppet(Team.RED, Vector3(0.0, 0.2, 1.1))
+	var away := _puppet(Team.RED, Vector3(2.9, 0.2, 0.0))
+	var friend := _puppet(Team.BLUE, Vector3(0.9, 0.2, 0.4))
+	var below := _puppet(Team.RED, Vector3(-0.9, 0.2, 0.3))
+	below.set_plane(1)
+	await _advance(0.2)
+
+	# NOT EVERY CLASS. A gate that silently lets everyone through is indistinguishable from one
+	# that works, so the negative is asked first and of the class most likely to be handed it.
+	player.set_class(MouseClass.GENERALIST)
+	var was := ahead.global_position
+	_fire_slam(slam)
+	await _advance(0.4)
+	_expect(
+		ahead.global_position.distance_to(was) < 0.3,
+		"a Generalist cannot slam -- it is the Brute's"
+	)
+
+	player.set_class(MouseClass.BRUTE)
+	var before: Dictionary = {}
+	for mouse: Mouse in [ahead, behind, away, friend, below]:
+		before[mouse] = mouse.global_position
+	_fire_slam(slam)
+	await _advance(0.5)
+
+	# WELL PAST A SWING'S 0.75m, which is the number this has to beat rather than zero. A threshold
+	# of "it moved at all" would pass on the knockback a punch already had and prove nothing about
+	# the ability -- and it is the distance, not the shove, that the banner rule below depends on.
+	_expect(
+		ahead.global_position.distance_to(before[ahead]) > 1.5,
+		"an enemy in front is shoved clear (moved %.2fm)" % (
+			ahead.global_position.distance_to(before[ahead])
+		)
+	)
+	_expect(
+		behind.global_position.distance_to(before[behind]) > 1.5,
+		"an enemy BEHIND you is shoved too -- the slam is a circle, not a cone (moved %.2fm)" % (
+			behind.global_position.distance_to(before[behind])
+		)
+	)
+	_expect(
+		away.global_position.distance_to(before[away]) < 0.3,
+		"an enemy out of reach is left alone"
+	)
+	_expect(
+		friend.global_position.distance_to(before[friend]) < 0.3,
+		"your own crew is never shoved"
+	)
+	_expect(
+		below.global_position.distance_to(before[below]) < 0.3,
+		"nobody on another plane is shoved -- not through a floor"
+	)
+
+	# NO DAMAGE AT ALL, which is the whole of what makes this ability what it is (GDD section 6).
+	_expect(
+		ahead.get_health_ratio() >= 1.0 and behind.get_health_ratio() >= 1.0,
+		"a slam takes no health off anybody -- it is displacement, not damage"
+	)
+
+	# The cooldown, asked the way the stomp's is: fire again at once and watch nothing happen.
+	var settled := ahead.global_position
+	_fire_slam(slam)
+	await _advance(0.4)
+	_expect(
+		ahead.global_position.distance_to(settled) < 0.3,
+		"a second slam is refused while the first is on cooldown"
+	)
+
+	# ---- the carrier, and the number the whole ability is set against.
+	await _arena(1)
+	player = _director.get_player()
+	slam = player.get_node_or_null("Slam") as Slam
+	if slam == null:
+		_expect(false, "the arena has a slam")
+		return
+	player.set_physics_process(false)
+	player.set_class(MouseClass.BRUTE)
+
+	var ours := _director.banner_of(Team.BLUE)
+	var thief := _puppet(Team.RED, ours.global_position)
+	await _advance(0.3)
+	if not thief.is_carrying():
+		_expect(false, "the trial needs a carrier to slam")
+		return
+
+	# CARRIED OUT TO OPEN GROUND FIRST, and staging it anywhere else silently tests nothing. Run
+	# at the nest where the steal happens, the banner is dropped onto its own home tile -- so the
+	# other half of `_check_pickup` sends it straight back where it belongs, which clears the
+	# fumble and leaves it AT_NEST for the same thief to steal a second time. Every assertion below
+	# then reads exactly as it would if the recovery rule did not exist. Two frames of banner state
+	# machine, both correct, adding up to a check that cannot fail.
+	thief.global_position = Vector3(6.0, 0.2, 6.0)
+	await _advance(0.2)
+
+	# AT ARM'S LENGTH RATHER THAN ON TOP OF THEM, and the distance is chosen against a rule in the
+	# director rather than for comfort: a BLUE mouse within `pickup_radius` of its OWN banner sends
+	# it straight home. Standing closer than 0.85m, this Brute would collect the banner it had just
+	# knocked loose and the final assertion would pass because the flag had gone home -- which is
+	# not the thing being tested, and would keep passing with the knockback set to nothing.
+	player.revive_at(thief.global_position + Vector3(1.4, 0.0, 0.0), 0.0)
+	await _advance(0.1)
+	_fire_slam(slam)
+	_expect(not thief.is_carrying(), "a slam makes a carrier drop the banner")
+	_expect(ours.state == Banner.DROPPED, "the banner is on the floor where they were standing")
+
+	# AND IT STAYS DOWN. Without enough knockback to clear `pickup_radius`, the same mouse takes it
+	# straight back and every assertion above this line still passes.
+	await _advance(0.5)
+	_expect(
+		not thief.is_carrying(),
+		"the shove clears the pickup radius -- they do not simply pick it up again"
+	)
+
+
+## The Generalist's Q: the only health in the game you can collect while somebody is hitting you.
+##
+## THE CHECK IS BUILT AROUND ONE PROBLEM -- THE PASSIVE LOOKS EXACTLY LIKE THE ABILITY. Every mouse
+## regenerates 18 a second after five seconds of quiet, which is very close to what [SecondWind]
+## hands over and arrives through the same field. A check that pressed Q and watched health rise
+## would pass with the ability deleted, and it would keep passing for as long as nobody thought to
+## ask why. So the trial takes the passive off the table twice over: the player's own physics is
+## stopped, which is what ticks `_since_damage` and therefore the regeneration, AND every reading is
+## taken inside five seconds of a blow. Any health that appears here can only have come from the Q.
+##
+## AND THE BLOW IN THE MIDDLE IS THE POINT OF THE ABILITY, not staging. Damage resets the regen
+## clock, so a heal that flinched at being interrupted would be a heal you may only use when nothing
+## is happening -- which is the exact situation the free passive already covers. The mouse is hit
+## while the wind is running, and the wind is expected not to care.
+func _check_second_wind() -> void:
+	await _arena(1)
+	var player := _director.get_player()
+	var wind: SecondWind = null
+	if player != null:
+		wind = player.get_node_or_null("SecondWind") as SecondWind
+	if wind == null or player == null:
+		_expect(false, "the arena has a second wind and a player")
+		return
+
+	# Off physics so the mouse stays put and, more importantly, stops regenerating -- see above.
+	player.set_physics_process(false)
+	player.revive_at(Vector3.ZERO, 0.0)
+	await _advance(0.1)
+
+	# NOT EVERY CLASS, asked first and of a class that has no Q of its own, so a gate that silently
+	# lets everyone through cannot hide behind another ability firing instead.
+	player.set_class(MouseClass.ENGINEER)
+	player.take_hit(50.0, Vector3(0.0, 0.0, -1.0), 0.0)
+	var hurt := player.get_health_ratio()
+	_fire_wind(wind)
+	await _advance(0.6)
+	_expect(
+		is_equal_approx(player.get_health_ratio(), hurt),
+		"an Engineer gets no second wind -- it is the Generalist's"
+	)
+	_expect(wind.cooldown_left() <= 0.0, "and a refused wind costs no cooldown")
+
+	# ---- the wind itself, taken while being hit.
+	player.set_class(MouseClass.GENERALIST)
+	player.revive_at(Vector3.ZERO, 0.0)
+	player.set("_stamina", 0.0)
+	player.take_hit(70.0, Vector3(0.0, 0.0, -1.0), 0.0)
+	var floor_health := player.get_health_ratio()
+	_fire_wind(wind)
+
+	# THE LEGS ARRIVE AT ONCE, which is the half of the ability the name comes from (GDD section 2)
+	# and the half a health bar cannot show.
+	_expect(
+		player.get_stamina_ratio() > 0.99,
+		"the wind refills the sprint tank on the keypress, not over the two seconds"
+	)
+	_expect(wind.wind_left() > 0.0, "and the healing is still to come")
+
+	await _advance(0.4)
+	var partway := player.get_health_ratio()
+	_expect(
+		partway > floor_health,
+		"health is coming back before the wind has finished -- it is not a lump sum at the end"
+	)
+
+	# HIT MID-WIND. Nothing about the ability is allowed to notice.
+	player.take_hit(10.0, Vector3(0.0, 0.0, -1.0), 0.0)
+	await _advance(2.0)
+	_expect(wind.wind_left() <= 0.0, "the wind runs out on its own clock")
+	# 30 health at the start, 45 back, 10 taken off in the middle: 65 out of a hundred, and the
+	# threshold is set below that rather than at it so a tuning change to `heal_amount` does not fail
+	# a check about a rule. What it must beat is the 30 it would be if the blow had cancelled it.
+	_expect(
+		player.get_health_ratio() > 0.55,
+		"you heal through being hit, which no other health in this game does (ended at %d%%)" % (
+			roundi(player.get_health_ratio() * 100.0)
+		)
+	)
+	_expect(
+		player.get_health_ratio() < 1.0,
+		"and it is a heal rather than a revive -- a wind does not make you whole"
+	)
+
+	# ---- the cooldown, asked the way the slam's is: press again at once and watch nothing happen.
+	var settled := player.get_health_ratio()
+	player.take_hit(10.0, Vector3(0.0, 0.0, -1.0), 0.0)
+	var after_blow := player.get_health_ratio()
+	_expect(after_blow < settled, "the trial's second blow landed")
+	_fire_wind(wind)
+	await _advance(0.6)
+	_expect(
+		is_equal_approx(player.get_health_ratio(), after_blow),
+		"a second wind is refused while the first is on cooldown"
+	)
+
+	# ---- nothing to give back. The narrow rule: whole AND rested, not merely whole.
+	wind.set("_cooldown_left", 0.0)
+	player.revive_at(Vector3.ZERO, 0.0)
+	player.refill_stamina()
+	_expect(not wind.take_breath(), "a whole, rested mouse is refused")
+	_expect(wind.cooldown_left() <= 0.0, "and that refusal costs no cooldown either")
+	player.set("_stamina", 0.0)
+	_expect(
+		wind.take_breath(),
+		"but a whole mouse with an empty tank may still take one -- the legs are half the ability"
+	)
+
+	# ---- going down ends it. The one thing that does.
+	wind.set("_cooldown_left", 0.0)
+	player.revive_at(Vector3.ZERO, 0.0)
+	player.take_hit(60.0, Vector3(0.0, 0.0, -1.0), 0.0)
+	_fire_wind(wind)
+	await _advance(0.2)
+	_expect(wind.wind_left() > 0.0, "the trial has a wind running to interrupt")
+	player.take_hit(999.0, Vector3(0.0, 0.0, -1.0), 0.0)
+	await _advance(0.1)
+	_expect(
+		wind.wind_left() <= 0.0,
+		"being scruffed ends the wind -- it does not keep healing a mouse on the floor"
+	)
+
+
 ## Point a mouse's aim at a world position.
 ##
 ## AS AN INTENT, not by poking `_aim_point`. Aim travels in the [InputFrame] now, and a frame
@@ -827,6 +1271,215 @@ func _with_last_byte(bytes: PackedByteArray, value: int) -> PackedByteArray:
 ## barricade that fails to leave the graph produces a bot walking into a rock forever, which reads
 ## as broken AI -- and neither is the CLASS GATE on clearing it, which is the whole reason the
 ## Brute wants to be underground at all.
+## Shore Up: the Engineer's Q, and the counterplay web's missing return edge (GDD sections 4, 5).
+##
+## THE ABILITY IS A TRADE OF TIME FOR ONE COLLAPSE, and every assertion here is about one side of
+## that trade being real. The network's own rules -- absorbs exactly one, does not block, does not
+## stack -- are asserted in `tools/tunnel_audit.gd` against the earth itself. What is checked here
+## is that the ABILITY reaches them: the right class, the full three seconds, standing still, and
+## the cell under your own feet rather than the one you are looking at.
+##
+## THE CANCEL IS THE ONE WORTH HAVING. Without it the three seconds are a formality you spend
+## walking backwards out of a fight, which is the difference between a builder's ability and a
+## retreat button -- and it is exactly the kind of rule that would be quietly lost to a refactor,
+## because everything still *works* when a cast cannot be interrupted.
+func _check_shore_up() -> void:
+	await _arena(1)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+	var player := _director.get_player()
+	var shore: ShoreUp = null
+	if player != null:
+		shore = player.get_node_or_null("ShoreUp") as ShoreUp
+	if shore == null or player == null:
+		_expect(false, "the arena has a shore-up ability and a player")
+		return
+
+	var cell := Vector2i(-20, -20)
+	network.dig_shaft_down(0, Vector2i(-22, -20))
+	for x in range(-22, -17):
+		network.dig(1, Vector2i(x, -20))
+	await _advance(0.2)
+
+	player.set_physics_process(false)
+	var here := network.cell_to_world(1, cell) + Vector3.UP * 0.05
+	player.global_position = here
+	player.set_plane(1)
+
+	# NOT EVERY CLASS, and asked of the Brute -- whose Q is the thing this ability exists to answer.
+	# A gate that let everyone through would hand the counterplay to the class it counters.
+	player.set_class(MouseClass.BRUTE)
+	_hold_shore(shore, 3.5)
+	_expect(not network.is_shored(1, cell), "a Brute cannot shore a tunnel")
+
+	# NOT ON THE LAWN either. There is no roof up there to hold up.
+	player.set_class(MouseClass.ENGINEER)
+	player.global_position = Vector3(0.0, 0.05, 0.0)
+	player.set_plane(0)
+	_hold_shore(shore, 3.5)
+	_expect(not network.is_shored(1, cell), "an Engineer on the surface shores nothing")
+
+	# ---- the hold itself.
+	player.global_position = here
+	player.set_plane(1)
+	_hold_shore(shore, 1.5)
+	_expect(
+		not network.is_shored(1, cell),
+		"half the hold puts no timbers in -- the three seconds are the whole cost"
+	)
+	_expect(shore.progress() > 0.3, "but it is visibly under way")
+
+	# LETTING GO ABANDONS IT, and starting again starts from nothing rather than from where the
+	# last attempt got to. Otherwise the cast is three seconds of *total* attention rather than
+	# three seconds of standing still, which is a different and much cheaper ability.
+	_release(player)
+	shore._physics_process(1.0 / 60.0)
+	_expect(shore.progress() <= 0.0, "letting go abandons the hold")
+	_hold_shore(shore, 1.5)
+	_expect(not network.is_shored(1, cell), "and the next attempt does not resume it")
+
+	# MOVING CANCELS IT. Driven by actually walking the mouse out of where it started, which is the
+	# only version of this worth asserting -- a check that poked `_anchor` would pass against a
+	# cancel rule that had been deleted.
+	_release(player)
+	shore._physics_process(1.0 / 60.0)
+	for i in range(90):
+		_intend(player, InputFrame.Action.ABILITY)
+		player.global_position += Vector3(0.02, 0.0, 0.0)
+		shore._physics_process(1.0 / 60.0)
+	_expect(not network.is_shored(1, cell), "walking away cancels the cast")
+
+	# ---- and the whole thing, done properly.
+	player.global_position = here
+	_hold_shore(shore, 3.2)
+	_expect(network.is_shored(1, cell), "an Engineer standing still for three seconds shores it")
+	_expect(
+		Shoring.at(network, 1, cell) != null,
+		"and the timbers are actually in the world, not merely in the book"
+	)
+
+	# NO COOLDOWN. The time IS the cost, so the next cell may be started the moment you reach it --
+	# this is the one ability in the game with nothing to recharge, and a cooldown quietly added
+	# later would price the same act twice.
+	var next_cell := cell + Vector2i(1, 0)
+	player.global_position = network.cell_to_world(1, next_cell) + Vector3.UP * 0.05
+	_hold_shore(shore, 3.2)
+	_expect(network.is_shored(1, next_cell), "and may start the next cell with no cooldown at all")
+
+	# THE CELL YOU STAND IN, NOT THE ONE YOU AIM AT -- the deliberate difference from every other
+	# aimed ability (see the header of `shore_up.gd`).
+	var looked_at := cell + Vector2i(-2, 0)
+	_aim(player, network.cell_to_world(1, looked_at))
+	player.global_position = network.cell_to_world(1, cell + Vector2i(2, 0)) + Vector3.UP * 0.05
+	_hold_shore(shore, 3.2)
+	_expect(not network.is_shored(1, looked_at), "aiming elsewhere does not shore the cell you look at")
+	_expect(network.is_shored(1, cell + Vector2i(2, 0)), "it shores the one under your feet")
+
+	# ---- and the Brute spends a cooldown getting through it.
+	var cave := player.get_node_or_null("CaveIn") as CaveIn
+	if cave == null:
+		_expect(false, "the arena has a cave-in")
+		return
+	player.set_class(MouseClass.BRUTE)
+	player.global_position = network.cell_to_world(1, cell + Vector2i(1, 0)) + Vector3.UP * 0.05
+	_aim(player, network.cell_to_world(1, cell))
+	_fire(cave)
+	_expect(network.is_dug(1, cell), "a cave-in on shored timbers takes no cell")
+	_expect(not network.is_shored(1, cell), "but it does break the timbers")
+	_expect(cave.cooldown_left() > 0.0, "and it still costs the Brute the cooldown")
+	_expect(
+		Shoring.at(network, 1, cell) == null,
+		"and the timbers come out of the world with the book"
+	)
+
+
+## The Generalist's banner toss: the first answer in the game to a Brute already in the doorway
+## (GDD sections 4 and 5).
+##
+## THE ASSERTION THAT MATTERS IS THAT IT IS A PASS AND NOT A LEAP. Range and cooldown are numbers
+## and will be tuned; the rule that keeps this from being a self-teleport for the banner is that
+## nobody -- including the thrower -- may take it out of the air. Delete that and the ability is
+## still a throw, still on ten seconds, still four cells, and quietly a completely different design.
+func _check_banner_toss() -> void:
+	await _arena(1)
+	var player := _director.get_player()
+	var throw: BannerToss = null
+	if player != null:
+		throw = player.get_node_or_null("BannerToss") as BannerToss
+	if throw == null or player == null:
+		_expect(false, "the arena has a banner toss and a player")
+		return
+
+	var theirs := _director.banner_of(Team.RED)
+	player.set_physics_process(false)
+	player.global_position = Vector3(0.0, 0.05, 0.0)
+	player.set_plane(0)
+	await _advance(0.1)
+
+	# NOTHING IN YOUR PAWS. A key that fires on empty air would drop the banner's own state machine
+	# into a throw from wherever the banner happened to be.
+	player.set_class(MouseClass.GENERALIST)
+	var was := theirs.global_position
+	_toss(throw)
+	_expect(theirs.global_position.is_equal_approx(was), "an empty-pawed toss moves nothing")
+	_expect(throw.cooldown_left() <= 0.0, "and costs no cooldown")
+
+	# NOT EVERY CLASS. Asked of the Brute, because V is the Brute's Slam key -- a gate that let it
+	# through would mean every Brute shove also threw the banner it was carrying.
+	theirs.take(player)
+	player.set_class(MouseClass.BRUTE)
+	var held_at := theirs.global_position
+	_toss(throw)
+	_expect(player.is_carrying(), "a Brute pressing V keeps hold of the banner")
+	_expect(theirs.global_position.is_equal_approx(held_at), "and throws it nowhere")
+
+	# ---- the throw.
+	player.set_class(MouseClass.GENERALIST)
+	_aim(player, player.global_position + Vector3(2.0, 0.0, 0.0))
+	var from := player.global_position
+	_toss(throw)
+	_expect(not player.is_carrying(), "the throw takes the banner out of your paws")
+	_expect(theirs.state == Banner.DROPPED, "and the banner is loose rather than in a fourth state")
+	_expect(throw.cooldown_left() > 0.0, "and it costs the cooldown")
+
+	# NOBODY CATCHES IT MID-AIR -- not the thrower, and not the Brute standing under it.
+	_expect(theirs.is_airborne(), "it is in the air on the tick it was thrown")
+	_expect(not theirs.may_take(player), "the thrower may not take it back out of the air")
+	var waiting := _puppet(Team.BLUE, theirs.global_position)
+	_expect(not theirs.may_take(waiting), "and neither may anybody else")
+
+	await _advance(1.0)
+	_expect(not theirs.is_airborne(), "it lands")
+	_expect(theirs.may_take(waiting), "and is anybody's once it does")
+
+	# SHORT OF THE CURSOR LANDS UNDER IT. Two metres asked for, two metres travelled.
+	var flat := Vector2(theirs.global_position.x - from.x, theirs.global_position.z - from.z)
+	_expect(
+		absf(flat.length() - 2.0) < 0.3,
+		"a throw inside the range lands under the cursor (%.2fm)" % flat.length()
+	)
+
+	# AND PAST IT IS CLAMPED RATHER THAN REFUSED, because a throw that failed for being aimed too
+	# far would fail at exactly the moment somebody is panicking.
+	theirs.take(player)
+	throw.set("_cooldown_left", 0.0)
+	_aim(player, player.global_position + Vector3(40.0, 0.0, 0.0))
+	from = player.global_position
+	_toss(throw)
+	await _advance(1.0)
+	flat = Vector2(theirs.global_position.x - from.x, theirs.global_position.z - from.z)
+	_expect(
+		absf(flat.length() - throw.range_cells * TunnelNetwork.CELL) < 0.3,
+		"a throw aimed past the range goes as far as it goes (%.2fm)" % flat.length()
+	)
+
+	# THE COOLDOWN IS REAL, asked after a throw rather than by reading the field back.
+	theirs.take(player)
+	var parked := theirs.global_position
+	_toss(throw)
+	_expect(player.is_carrying(), "a second throw on cooldown is refused")
+	_expect(theirs.global_position.is_equal_approx(parked), "and the banner has not moved")
+
+
 func _check_barricade() -> void:
 	await _arena(1)
 	var network := _scene.get_node("Tunnels") as TunnelNetwork
@@ -1483,6 +2136,38 @@ func _widest_boulder() -> Boulder:
 func _place(wall: Barricade) -> void:
 	_intend(wall.get("_player"), InputFrame.Action.BARRICADE)
 	wall._physics_process(0.0)
+
+
+## Hold Q for `seconds` of the ability's own clock. The one control in the game that reads a HELD
+## bit rather than a pressed one, so it needs its own driver: `_fire` hands over a single tick, and
+## a single tick of a three-second cast does nothing at all.
+##
+## TICKED IN SIXTIETHS AND NOT IN ONE LUMP, because the cancel rules are what this is really for --
+## a cast fed its whole duration in a single call would never be given a chance to notice that the
+## mouse moved.
+func _hold_shore(shore: ShoreUp, seconds: float) -> void:
+	var ticks := maxi(1, roundi(seconds * 60.0))
+	for i in range(ticks):
+		_intend(shore.get("_player"), InputFrame.Action.ABILITY)
+		shore._physics_process(1.0 / 60.0)
+
+
+## Let go of everything for one tick.
+##
+## AN EMPTY FRAME, NOT AN ABSENT ONE, and that distinction is what this helper exists to make. An
+## [InputFrame] is state: it sits on the mouse until something replaces it, so simply *not* calling
+## `_intend` leaves the last tick's keys still down. Every other ability in this file resolves on a
+## pressed bit and never noticed; the shore-up hold reads a HELD bit, and a check that meant "the
+## player let go" while handing it a frame with Q still down was asserting nothing.
+func _release(who: Node) -> void:
+	var frame := InputFrame.new()
+	frame.aim_point = who.get("_aim_point")
+	who.call("drive", frame)
+
+
+func _toss(throw: BannerToss) -> void:
+	_intend(throw.get("_player"), InputFrame.Action.TOSS)
+	throw._physics_process(0.0)
 
 
 func _standing_at(plane: int, cell: Vector2i) -> BarricadeRock:

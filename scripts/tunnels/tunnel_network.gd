@@ -61,6 +61,12 @@ signal shaft_closed(plane: int, cell: Vector2i)
 ## every time a boulder moved.
 signal cell_blocked(plane: int, cell: Vector2i)
 signal cell_unblocked(plane: int, cell: Vector2i)
+## Timbers went into a cell, or the timbers were spent stopping a collapse. Two signals rather
+## than one with a flag because the two are not opposites in the way `cell_blocked` and
+## `cell_unblocked` are: one is an Engineer finishing three seconds of work, the other is a Brute's
+## cooldown arriving and being eaten. The props listen to both; the audits listen to the second.
+signal cell_shored(plane: int, cell: Vector2i)
+signal shoring_broke(plane: int, cell: Vector2i)
 ## A crew found out where some rock is, or a boulder stopped being rock. Carries the teams affected
 ## as a bit mask rather than the cells, because both things that listen -- the caps drawn in the
 ## world and the minimap -- redraw a whole plane anyway, and a per-cell signal would have them
@@ -244,6 +250,21 @@ var _glimpsed: Array[Dictionary] = []
 ## plane -> {cell: true}: dug cells something is standing in the way of. Today that is a
 ## barricade; a cave-in makes a cell stop existing, which is a different thing entirely.
 var _obstructed: Array[Dictionary] = []
+## plane -> {cell: true}: dug cells an Engineer has put timbers into (GDD section 4).
+##
+## A THIRD KIND OF PROPERTY ON A CELL, and it is worth saying what makes it its own book rather
+## than a flag on one of the other two. Rock is earth that will never open. An obstruction is
+## something standing in a cell you could otherwise walk through. Shoring changes NEITHER: the cell
+## is dug, walkable, routable and drawn exactly as it was, and the single thing that is different
+## about it is what happens the next time somebody tries to bring it down. Nothing that moves a
+## mouse or plans a route has any business reading this.
+##
+## A BOOLEAN AND NOT A COUNT, which is the balance the design asked for rather than a shortcut.
+## Shoring absorbs ONE collapse and is gone; an Engineer who wants a cell to survive twice stands
+## there for another three seconds after the Brute has spent its cooldown. Making it a depth would
+## let an Engineer with time on its paws build a route no Brute could ever answer, and GDD section
+## 5 is explicit that every answer in the web costs something and none of them is absolute.
+var _shored: Array[Dictionary] = []
 var _grids: Array[GridMap] = []
 var _walls: Array[MeshInstance3D] = []
 ## The faces of the wall that turned out to be stone. Drawn separately from the earth walls only
@@ -271,7 +292,7 @@ var _graph: TunnelGraph
 ## A network this machine does not decide anything about (M7 step 5).
 ##
 ## THE GUARD IS HERE, ON THE THING THAT OWNS THE STATE, and that placement is the whole argument.
-## Five separate nodes cut earth -- the dig controller, the cave-in, the barricade, a bot's digger,
+## Several separate nodes cut earth -- the dig controller, the cave-in, the shoring, the barricade,
 ## and a shaft taken by anybody -- and guarding each of them is five chances to miss one and a
 ## sixth the day somebody adds a rule. Refusing at the state instead makes it structurally
 ## impossible for a client to change the world: there is no caller that can sneak past, because
@@ -301,6 +322,7 @@ func _init() -> void:
 		_shaft_known.append({})
 		_glimpsed.append({})
 		_obstructed.append({})
+		_shored.append({})
 
 
 func _ready() -> void:
@@ -698,6 +720,48 @@ func is_blocked(plane: int, cell: Vector2i) -> bool:
 	return plane >= 0 and plane < PLANE_COUNT and _obstructed[plane].has(cell)
 
 
+# ---------------------------------------------------------------------------- shoring
+
+
+## Put timbers into a dug cell: the next collapse aimed at it is spent breaking them (GDD
+## section 4). Returns false if there is nothing to shore or it is shored already.
+##
+## THE ONE THING IN THIS FILE THAT MAKES A CELL HARDER TO REMOVE, and it is the Engineer's answer
+## to having lost its escape button when un-digging went to the Brute. What it is NOT is a way to
+## make a corridor permanent -- see `_shored` for why this is a boolean.
+func shore(plane: int, cell: Vector2i) -> bool:
+	if _puppet:
+		return false
+	if not is_dug(plane, cell) or _shored[plane].has(cell):
+		return false
+	_shored[plane][cell] = true
+	cell_shored.emit(plane, cell)
+	return true
+
+
+func is_shored(plane: int, cell: Vector2i) -> bool:
+	return plane >= 0 and plane < PLANE_COUNT and _shored[plane].has(cell)
+
+
+## The timbers give, and the cell stays. Returns whether there was anything to break.
+##
+## CALLED BY `collapse` RATHER THAN BY THE BRUTE, which is the same argument `_puppet` makes two
+## hundred lines up: five things in this project bring earth down, and a shoring check written into
+## each of them is four chances to miss one. Everything that collapses a cell arrives here first.
+func break_shoring(plane: int, cell: Vector2i) -> bool:
+	if _puppet:
+		return false
+	if plane < 0 or plane >= PLANE_COUNT or not _shored[plane].has(cell):
+		return false
+	_shored[plane].erase(cell)
+	shoring_broke.emit(plane, cell)
+	return true
+
+
+func shored_cells(plane: int) -> Array:
+	return _shored[clampi(plane, 0, PLANE_COUNT - 1)].keys()
+
+
 # ------------------------------------------------------------------------- queries
 
 
@@ -922,6 +986,14 @@ func collapse(plane: int, cell: Vector2i) -> bool:
 		return false
 	if plane <= 0 or plane >= PLANE_COUNT or not _cells[plane].has(cell):
 		return false
+	# THE TIMBERS FIRST, AND ABOVE THE SHAFT REDIRECT. A shored cell answers false -- nothing came
+	# down -- and the shoring is spent doing it, which is the whole of the Engineer's answer to the
+	# Brute: the corridor survives, and the next cooldown takes it. Above the redirect because a
+	# shored shaft cell should hold as a shaft cell does not, and asking on the far side of it would
+	# let a shored mouth be filled in while the timbers stood there untouched.
+	if _shored[plane].has(cell):
+		break_shoring(plane, cell)
+		return false
 	# Either end of a shaft is the same object asked from two sides, and both answers are the same
 	# operation on the plane the shaft is RECORDED at -- the upper of the two it joins.
 	if _shafts[plane].has(cell):
@@ -955,6 +1027,16 @@ func collapse_shaft(plane: int, cell: Vector2i) -> bool:
 	if _puppet:
 		return false
 	if plane < 0 or plane + 1 >= PLANE_COUNT or not _shafts[plane].has(cell):
+		return false
+
+	# EITHER END HOLDS THE WHOLE LADDER, and both sets of timbers are spent doing it. A shaft comes
+	# down as one act (see the header), so it cannot half-survive: shoring the landing has to save
+	# the mouth as well, or an Engineer would be paying three seconds for a cell that gets taken
+	# anyway by an aim one tile off. What that costs is both ends' worth of work for one cooldown,
+	# which is the honest price of a rule that says a shaft is a single object.
+	var held := break_shoring(plane, cell)
+	held = break_shoring(plane + 1, cell) or held
+	if held:
 		return false
 
 	_shafts[plane].erase(cell)
@@ -998,9 +1080,20 @@ func collapse_footprint(plane: int, cell: Vector2i) -> Array:
 	if not can_collapse(plane, cell):
 		return []
 	if _shafts[plane].has(cell):
+		if is_shored(plane, cell) or is_shored(plane + 1, cell):
+			return []
 		return [[plane, cell], [plane + 1, cell]]
 	if has_shaft_up(plane, cell):
+		if is_shored(plane, cell) or is_shored(plane - 1, cell):
+			return []
 		return [[plane - 1, cell], [plane, cell]]
+	# EMPTY BECAUSE NOTHING COMES DOWN, and this is the line that keeps a shored cell from burying
+	# the mouse standing in it. `collapse` refuses a shored cell and spends the timbers instead, so
+	# a footprint that still named this cell would have the Brute crushing somebody in a corridor
+	# that is visibly still there -- the worst kind of disagreement, because the geometry is right
+	# and only the casualty is wrong. Asked and answered in the same place as the refusal.
+	if is_shored(plane, cell):
+		return []
 	return [[plane, cell]]
 
 
@@ -1010,6 +1103,11 @@ func collapse_footprint(plane: int, cell: Vector2i) -> Array:
 func _take_cell(plane: int, cell: Vector2i) -> void:
 	_cells[plane].erase(cell)
 	_tunnel_known[plane].erase(cell)
+	# Belt and braces: `collapse` refuses a shored cell before it ever reaches here, so this only
+	# fires for a cell taken as the far end of something else -- a shaft's landing, say. Timbers
+	# recorded against earth that no longer exists would be timbers an Engineer could never spend
+	# and a Brute could never break, and the cell might be dug again later.
+	_shored[plane].erase(cell)
 	_grids[plane].set_cell_item(Vector3i(cell.x, 0, cell.y), GridMap.INVALID_CELL_ITEM)
 	_mark_mask(plane, cell, false)
 	cell_collapsed.emit(plane, cell)
@@ -1082,6 +1180,35 @@ func adopt_rock(plane: int, cell: Vector2i, bits: int) -> bool:
 	return true
 
 
+## Timbers the server says are there. The client end of [method shore].
+##
+## THE WIRE, NOT A CALLER, which is why there is no `_puppet` guard and no check that the ability
+## was legal: it already happened on the machine that was allowed to decide it. What this DOES
+## still insist on is that the cell exists locally, because a client is only told about earth its
+## crew has earned -- shoring on a corridor this client has never heard of is a fact about a place
+## it does not have, and recording it would leave an entry no `forget_shoring` ever names.
+func adopt_shoring(plane: int, cell: Vector2i) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT or not _cells[plane].has(cell):
+		return false
+	if _shored[plane].has(cell):
+		return false
+	_shored[plane][cell] = true
+	cell_shored.emit(plane, cell)
+	return true
+
+
+## Timbers the server says are gone -- broken by a collapse, or aged out of this crew's fog with
+## the cell they were in. The same signal either way, for the same reason [method forget_cell]
+## reuses `cell_collapsed`: a client's map is its world, and the prop has to come down regardless
+## of which of the two happened.
+func forget_shoring(plane: int, cell: Vector2i) -> bool:
+	if plane < 0 or plane >= PLANE_COUNT or not _shored[plane].has(cell):
+		return false
+	_shored[plane].erase(cell)
+	shoring_broke.emit(plane, cell)
+	return true
+
+
 ## A cell this crew is no longer allowed to know: a glimpse that has aged out of the fog.
 ##
 ## THE SAME MACHINERY AS A COLLAPSE AND DELIBERATELY THE SAME SIGNAL, because on a client "gone
@@ -1098,6 +1225,7 @@ func forget_cell(plane: int, cell: Vector2i) -> bool:
 	_tunnel_known[plane].erase(cell)
 	_shafts[plane].erase(cell)
 	_shaft_known[plane].erase(cell)
+	forget_shoring(plane, cell)
 	_grids[plane].set_cell_item(Vector3i(cell.x, 0, cell.y), GridMap.INVALID_CELL_ITEM)
 	_mark_mask(plane, cell, false)
 	_rebuild_walls(plane)

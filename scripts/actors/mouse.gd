@@ -105,6 +105,20 @@ const MOUSE_GROUP: StringName = &"mouse"
 ## PER-CLASS -- Generalist -10%, Sneak -40% -- and the whole handoff play falls out of the
 ## spread. One number until classes land at M4, but it is already the right shape.
 @export_range(0.0, 0.8, 0.01) var carry_penalty: float = 0.25
+## How many wedges of cheese fit in these paws. Copied off the class (GDD section 2); the default
+## is the Generalist's, so a mouse built by hand with no class still hauls sensibly.
+@export_range(1, 8, 1) var carry_capacity: int = 3
+## Seconds between picking up one wedge and being able to pick up the next.
+##
+## THE PACING DIAL, and it is what stops capacity from being a free upgrade. Without it a Brute
+## walks through a cache and leaves with five wedges in the same instant, which makes a cache a
+## button rather than a place -- and makes the biggest number simply the best number. Five seconds
+## for five wedges is twenty seconds standing in one spot on the lawn, in the open, with nothing
+## to show for it if somebody arrives at second nineteen.
+##
+## PER MOUSE AND NOT PER CACHE, so it cannot be dodged by walking between two piles -- the limit is
+## how fast a mouse can stow cheese, which is a fact about the mouse.
+@export var wedge_cooldown: float = 5.0
 
 @export_group("Scurry")
 ## The burst, in seconds. Short on purpose (GDD section 2: "~2s"): what a cheese buys is a
@@ -154,6 +168,41 @@ const MOUSE_GROUP: StringName = &"mouse"
 ## Seconds you cannot steer after being hit. Short: long stuns are miserable and this is a
 ## game about scraps, not stunlocks.
 @export var stun_seconds: float = 0.18
+
+@export_group("Body")
+## Half the width of this mouse, in metres, copied off its [ClassDefinition] -- which is where
+## the long note about what this number decides lives. Everybody is 0.16 except the Brute.
+##
+## READ RATHER THAN ASSUMED, by everything that measures against a body. Two places used to
+## hard-code 0.16 as "the other mouse's radius" when adding a little slack to a reach, and both
+## quietly under-reached against anything wider the moment a class stopped being one size.
+@export var body_radius: float = 0.16
+## How wide this mouse is DRAWN, which is allowed to differ from how wide it is.
+##
+## THE BRUTE IS A LITTLE SLIMMER THAN IT COLLIDES, on purpose and after looking at it. The cork
+## needs 0.24 of capsule at the very least and 0.30 to seal with any margin (see
+## [ClassDefinition.body_radius]); a model drawn at 0.30 reads less like a heavyweight mouse than
+## like a different animal. So the body is the number the corridor needs and the model is the
+## number the yard wants, and the gap between them is 6cm on one class.
+##
+## IT IS A DEBT, NOT A FREE LUNCH, and worth saying plainly: a mouse that is wider than it looks
+## can block a gap that looked open, which is the oldest complaint in every game that has ever
+## done this. 6cm at this scale is a quarter of a body width and lands inside what the eye reads
+## as "touching". Anything larger should go the other way -- make the model honest and re-tune the
+## corridor -- rather than growing this gap.
+@export var model_radius: float = 0.16
+## The base a standard mouse is authored at, in both scenes and in `_puppet` fixtures. Only ever
+## used as the denominator of a ratio -- this is not a tuning dial.
+const STANDARD_RADIUS: float = 0.16
+## How tall a mouse is, and it is the same for all four. HELD CONSTANT rather than scaled with the
+## width, because it is not a look -- it is what has to fit under the next plane's floor, and the
+## margin there is 13cm (see `_fit_body`).
+const BODY_HEIGHT: float = 0.4
+## How much of the width difference also goes into height. A Brute that grew evenly would be
+## twice as TALL as a Sneak, which is a giant rather than a heavyweight -- and this camera reads
+## width far better than it reads height anyway, because it looks down at the yard from 48
+## degrees. Broad and only a little taller is the silhouette section 4 asks for.
+const HEIGHT_SHARE: float = 0.45
 
 @export_group("Appearance")
 ## Applied over whatever the model ships with rather than baked into the mesh, so the same
@@ -216,6 +265,8 @@ var _body_material: StandardMaterial3D
 ## Wedges in the paws, 0 or 1. An int rather than a bool because section 2 leaves the door open
 ## to a class that hauls two, and every caller below already reads it as an amount.
 var _wedges: int = 0
+## Seconds left before another wedge may be stowed.
+var _wedge_wait: float = 0.0
 var _boost_left: float = 0.0
 var _boost_cooldown: float = 0.0
 var _stamina: float = 0.0
@@ -291,15 +342,72 @@ func set_class(kind: int) -> void:
 
 ## Copy a definition onto this mouse.
 func apply_class(definition: ClassDefinition) -> void:
+	body_radius = definition.body_radius
+	model_radius = definition.model_radius
+	_fit_body()
 	max_health = definition.max_health
 	speed = definition.speed
 	turn_speed = definition.turn_speed
 	attack_damage = definition.attack_damage
 	carry_penalty = definition.carry_penalty
+	# NOT CLAMPED, and the wedges are not spilled. Swapping happens at your own nest, which is the
+	# one spot on the map where anything you were carrying has already been banked -- and a Brute
+	# who somehow arrives holding four and swaps to Sneak simply cannot pick up a fifth until it
+	# has put them down. Spilling cheese on the swap disc would be inventing a punishment for the
+	# one act GDD section 4 is explicit should cost nothing but the walk home.
+	carry_capacity = definition.carry_capacity
 	sprint_seconds = definition.sprint_seconds
 	# Topped up, not scaled. Swapping class at your own nest is the one moment stamina is
 	# uninteresting -- you are standing still, at home, and about to walk somewhere.
 	_stamina = sprint_seconds
+
+
+## How much taller than a standard mouse this one is. 1.0 for three of the four.
+##
+## Public because three things are drawn ABOVE a mouse's head -- its health bar, the contextual
+## hint, and the banner on a carrier's pole -- and every one of them was a constant measured off
+## a body that was the same size for everybody. On a Brute those constants land inside the model.
+## Off the MODEL rather than the body, because everything that reads this is positioning something
+## above what a player can see -- a bar, a hint, a banner on a pole. The collision shape's own
+## height never changes at all (see `BODY_HEIGHT`).
+func height_ratio() -> float:
+	return 1.0 + (model_radius / STANDARD_RADIUS - 1.0) * HEIGHT_SHARE
+
+
+## Make the collision shape match `body_radius` and the model match `model_radius`.
+##
+## A CYLINDER RATHER THAN THE AUTHORED CAPSULE, and this is not a preference -- a capsule cannot
+## express a wide mouse at all. Godot clamps a capsule's height to at least twice its radius, so
+## asking for 0.30 silently grows a 0.40-tall body into a 0.60-tall one. A plane's headroom is
+## `PLANE_SPACING - FLOOR_THICKNESS` = **0.53**, so the Brute arrived underground 7cm too tall for
+## the corridor it was standing in, wedged between the floor and the slab above and also sunk 10cm
+## into the floor, because the shape is centred at 0.2. It could not move. The bug was invisible on
+## the lawn, where there is no ceiling, and no audit asks whether a mouse FITS.
+##
+## A cylinder holds its height whatever the radius does, which is the whole of the fix. Every
+## mouse gets one, not just the wide one: a class that slides over a lip differently from the
+## other three because of a shape quirk is exactly the sort of difference nobody would ever guess
+## at from the outside. The `.tscn` files still author a capsule -- it is the standard size,
+## written where a reader looks for it, and this replaces it before the first physics tick.
+##
+## THE SHAPE IS PER MOUSE, and skipping that would be a bug that is very hard to find: a
+## `[sub_resource]` in a `.tscn` is shared by every instance of that scene, so `bot.tscn`'s one
+## shape is the SAME object in all six bots. Building a new one here sidesteps that entirely.
+##
+## THE VISUAL IS SCALED RATHER THAN SWAPPED, because there is one mouse model and this grey box
+## has no second one -- and it is scaled to `model_radius`, which is deliberately allowed to
+## differ from the body. Height takes `HEIGHT_SHARE` of the width difference.
+func _fit_body() -> void:
+	for node in find_children("*", "CollisionShape3D", true, false):
+		var slot := node as CollisionShape3D
+		var barrel := CylinderShape3D.new()
+		barrel.radius = body_radius
+		barrel.height = BODY_HEIGHT
+		slot.shape = barrel
+
+	if _visual != null:
+		var wide := model_radius / STANDARD_RADIUS
+		_visual.scale = Vector3(wide, height_ratio(), wide)
 
 
 ## How fast this mouse opens a tile, as a multiplier on the dig controller's own timing.
@@ -351,15 +459,32 @@ func get_body_material() -> StandardMaterial3D:
 ## Which layer this mouse's geometry collides with, and who can body-block it.
 ##
 ## Two jobs in one call. The plane bit is the tunnel layer (see TunnelNetwork.plane_bit) --
-## a mouse only ever meets the geometry of the layer it is standing on. The crew bits are
-## GDD section 6's recommendation: you sit on your own crew's layer and mask the other's, so
-## an enemy is a wall and a teammate is not.
+## a mouse only ever meets the geometry of the layer it is standing on. The crew bits say who
+## is solid, and the answer is now EVERYBODY.
+##
+## `[REVISED]` ALLIES COLLIDE TOO, which closes the `[DECIDE]` GDD section 6 has carried since
+## M1. It recommended enemies-only, with a footnote that the Brute's cork "should probably block
+## allies too, or corking is meaningless" -- and having built the cork, the footnote is the whole
+## rule rather than an exception to it. A wall that your own crew walks through is not a wall; it
+## is a wall with a door in it that the enemy cannot see, and the class whose entire fantasy is
+## *not through here* would have been asking everyone to take its word for it.
+##
+## It also fixes something with nothing to do with the Brute: mice stood INSIDE one another. Four
+## bots defending a nest occupied one point of ground, a crowd read as a single mouse with extra
+## outlines, and a teammate could never be in your way -- so nothing about a corridor, a doorway
+## or a nest ever had to be shared. Being able to be blocked by your own crew is what makes any of
+## that geometry mean anything.
+##
+## A SCRUFFED MOUSE IS STILL AIR (the `collision_layer = 0` below), which matters more now than it
+## did: with everyone solid, a body on the floor of a corridor would otherwise be a cork that
+## nobody chose and nobody can move.
 func set_plane(plane: int) -> void:
 	_plane = clampi(plane, 0, TunnelNetwork.PLANE_COUNT - 1)
 	collision_layer = 0 if _scruffed else Team.layer_bit(team)
 	collision_mask = (
 		TunnelNetwork.WORLD_BIT
 		| TunnelNetwork.plane_bit(_plane)
+		| Team.layer_bit(team)
 		| Team.layer_bit(Team.other(team))
 	)
 
@@ -425,16 +550,43 @@ func get_carried_cheese() -> int:
 	return _wedges
 
 
-func has_free_paws() -> bool:
-	return _wedges <= 0 and not is_carrying()
+## How many more would fit right now, ignoring the cooldown.
+func wedge_room() -> int:
+	return maxi(0, carry_capacity - _wedges)
 
 
-## Take a wedge into your paws. One at a time (GDD section 2), and never alongside a banner --
-## the two errands are meant to compete for the same mouse, not stack on one.
+## Room for another wedge, and enough time has passed since the last one.
+##
+## `[REVISED]` THIS USED TO BE `has_free_paws`, AND USED TO MEAN SOMETHING NARROWER: one wedge,
+## and never while carrying a banner. Both halves have gone.
+##
+## The one-wedge limit became `carry_capacity`, per class -- see [ClassDefinition]. **The banner
+## exclusion went too, and that is the arguable one.** GDD section 2's instinct was that the two
+## errands should compete for the same mouse rather than stack on one, and the rule enforcing it
+## was a mouse with cheese in its paws being unable to touch a loose banner. That is the wrong
+## mouse to punish: the classes with real capacity are the ones least likely to be running a flag
+## anyway, and a Brute forced to choose between five wedges and a banner lying at its feet just
+## drops the banner -- which is not a decision, it is an inconvenience with an obvious answer. The
+## errands still compete, through the thing that was always doing the work: the walk. What you can
+## carry home in one trip has not changed; what has changed is that you no longer have to make two
+## trips through the same yard to do it.
+func has_room() -> bool:
+	return _wedges < carry_capacity and _wedge_wait <= 0.0
+
+
+## Seconds until this mouse can stow another wedge. For a HUD that wants to say why a cache is
+## being walked over rather than picked up.
+func wedge_wait() -> float:
+	return _wedge_wait
+
+
+## Take a wedge into your paws. One at a time -- capacity is how many you may END UP with, not how
+## many a cache hands over at once, and the cooldown between them is the whole pacing of hauling.
 func take_wedge() -> bool:
-	if not has_free_paws():
+	if not has_room():
 		return false
-	_wedges = 1
+	_wedges += 1
+	_wedge_wait = wedge_cooldown
 	return true
 
 
@@ -506,15 +658,83 @@ func take_hit(damage: float, from: Vector3, knockback: float, by: Mouse = null) 
 	_since_damage = 0.0
 	wounded.emit(self, damage)
 
+	shove(from, knockback)
+
+	if _health <= 0.0:
+		_scruff(by)
+
+
+## Be moved, without being hurt. The displacement half of [method take_hit], on its own.
+##
+## SPLIT OUT FOR SLAM (GDD section 4), which is a shove with no damage in it at all -- section 6
+## says displacement matters more than damage, and the Brute's ability is the one place that is
+## the whole of the design rather than a flavour note. `take_hit(0.0, ...)` would have done the
+## job and would also have reset the regen timer on its way past, which is a point of damage
+## wearing a zero: the shoved mouse heals later than it would have, for reasons nothing on screen
+## explains. The one number this ability is not allowed to have is a number.
+##
+## HOW FAR IT ACTUALLY PUSHES is `force / knock_damping`, near enough -- the impulse is damped
+## exponentially and integrated, so a force of 15 against the default damping of 6 carries a mouse
+## about two and a half metres. Worth stating because callers pick a distance, not an impulse.
+func shove(from: Vector3, force: float) -> void:
+	if _scruffed:
+		return
 	var push := global_position - from
 	push.y = 0.0
 	if push.length_squared() < 0.0001:
 		push = -get_facing_direction()
-	_knock += push.normalized() * knockback
+	var impulse := push.normalized() * force
+	_knock += impulse
+	# INTO `velocity` AS WELL, and this line is a bug fix rather than bookkeeping.
+	#
+	# `_apply_motion` separates the two every frame with `horizontal := velocity - _knock`, which
+	# is only true if `velocity` already CONTAINS the knock -- and on the tick an impulse is first
+	# applied it did not. The subtraction therefore invented an equal and opposite movement
+	# velocity out of nothing, pointed straight back at whoever hit you: the mouse was thrown out,
+	# and then, as `_knock` decayed and left the phantom behind, it slid part of the way home.
+	#
+	# NOBODY SAW IT FOR FIVE MILESTONES because a swing's 4.5 buys 0.75m and gives back a fraction
+	# of that -- inside the noise of a scrap. Slam is 15, and at 15 the rebound is a mouse visibly
+	# walking back toward the Brute that just threw it. The probe measured 1.0m out and 0.81m
+	# settled where the arithmetic says 2.5m: two thirds of every shove in the game so far has
+	# been quietly cancelled by its own separation term.
+	velocity.x += impulse.x
+	velocity.z += impulse.z
 	_stun_left = maxf(_stun_left, stun_seconds)
 
-	if _health <= 0.0:
-		_scruff(by)
+
+## Put health back on. Returns how much actually landed, which is not always what was asked for --
+## a mouse two points off full takes two.
+##
+## IT DOES NOT TOUCH `_since_damage`, and that omission is the whole reason this is a function
+## rather than a `take_hit` with a minus sign in front of it. The regen clock measures *quiet*, and
+## being healed is not a thing that happened to you in a fight -- resetting it here would mean a
+## [SecondWind] pushed your passive regeneration five seconds further away, so the ability would
+## give with one hand and take with the other in a way nothing on screen could explain.
+##
+## A PUPPET DOES NOT HEAL, for the same reason it does not regenerate: healing is a rule, its result
+## arrives with every pose, and a local top-up on top of that is a second opinion the server never
+## asked for. The rule is stated here as well as at the caller because a heal is the one kind of
+## write that looks harmless from the outside -- nobody debugging a drifting health bar would think
+## to suspect the thing making it go up.
+func heal(amount: float) -> float:
+	if _scruffed or _puppet or amount <= 0.0:
+		return 0.0
+	var landed := minf(amount, max_health - _health)
+	_health += landed
+	return maxf(landed, 0.0)
+
+
+## Fill the sprint tank, and start the refill delay over.
+##
+## TWO CALLERS AND ONE SENTENCE BEHIND BOTH. GDD section 2 says a refilled tank is what makes Scurry
+## "a second wind rather than a stat buff", and [SecondWind] is the ability that took the phrase for
+## a name -- so the two do the same thing to the same meter on purpose. What separates them is the
+## price: Scurry is speed, costs the crew a respawn and belongs to everybody; the wind is endurance,
+## costs nothing and belongs to one class.
+func refill_stamina() -> void:
+	_stamina = sprint_seconds
+	_regen_timer = 0.0
 
 
 ## The roof came in on you. A different way to go down, and it wants a different word.
@@ -582,6 +802,10 @@ func revive_at(place: Vector3, facing: float = 0.0) -> void:
 	_stun_left = 0.0
 	_health = max_health
 	_since_damage = 999.0
+	# You come back with empty paws (the director scattered what you had where you fell), so the
+	# stow clock has nothing left to ration. Leaving it running would spend the first seconds of a
+	# fresh life unable to pick up the wedges lying at the nest you respawned on.
+	_wedge_wait = 0.0
 	_scruffed = false
 	_buried = false
 	_facing = facing
@@ -608,7 +832,10 @@ func _resolve_swing() -> void:
 			continue
 		var to_them := other.global_position - global_position
 		to_them.y = 0.0
-		if to_them.length() > attack_reach + 0.16:
+		# Their radius, not a constant 0.16. Reach is measured centre to centre and a swing that
+		# visibly connects should count, so the allowance has to be the body it is landing on --
+		# which stopped being one number the moment the Brute got wider than everybody else.
+		if to_them.length() > attack_reach + other.body_radius:
 			continue
 		if to_them.length_squared() > 0.0001 and forward.angle_to(to_them.normalized()) > limit:
 			continue
@@ -809,6 +1036,11 @@ func _tick_timers(delta: float) -> void:
 	# you SPENT the cheese and not from the moment the boost ran out. The spend is the thing the
 	# cooldown is rationing.
 	_boost_cooldown = maxf(0.0, _boost_cooldown - delta)
+	# Ticks while scruffed and on a puppet alike, unlike almost everything below the guards further
+	# down. It is a clock rather than a rule -- nothing happens when it reaches zero except that a
+	# pickup the DIRECTOR decides becomes possible -- and a client that let it stall would grey out
+	# a cache its own server was perfectly willing to let it take from.
+	_wedge_wait = maxf(0.0, _wedge_wait - delta)
 
 	if _swing_left > 0.0:
 		_swing_left = maxf(0.0, _swing_left - delta)
@@ -932,8 +1164,7 @@ func _tick_stamina(delta: float) -> void:
 
 
 func _on_scurried(_mouse: Mouse) -> void:
-	_stamina = sprint_seconds
-	_regen_timer = 0.0
+	refill_stamina()
 
 
 ## Turn toward a world direction at the capped rate. The cap is where the weight comes from.

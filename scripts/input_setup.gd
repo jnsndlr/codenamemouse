@@ -46,6 +46,27 @@ const KEYS: Dictionary = {
 	# other. They are opposites (one seals a corridor for good, one holds it for a while) and
 	# misfiring either while the other was wanted is a wasted cooldown.
 	"barricade": [KEY_X],
+	# The Brute's second ability: Slam (GDD section 4). Its own action rather than a third meaning
+	# for Q, because Q already carries two -- the cave-in and the stomp, chosen by which plane you
+	# are standing on -- and a key whose meaning moves under you can afford one axis of that, not
+	# two. A Brute holding a chokepoint has to be able to shove without first checking where its
+	# feet are.
+	#
+	# V, and it is chosen the same way X was: the far side of the left hand's reach from Q, so the
+	# two things a Brute presses under pressure cannot be fat-fingered into each other. One is a
+	# cooldown you spend on a guess and the other is the answer to somebody already on top of you;
+	# misfiring either while the other was wanted is the worst moment in the class.
+	"slam": [KEY_V],
+	# The Generalist's second ability: the banner toss (GDD section 4). THE SAME KEY AS SLAM, and
+	# that is the rule rather than a collision -- V means "your class's second thing", the way Q
+	# means "your class's ability". A Brute shoves with it and a Generalist throws the banner with
+	# it, and no mouse is ever both, so no press is ever ambiguous.
+	#
+	# Two registered actions on one key rather than one action read twice, because the two
+	# abilities are not the same slot and should not have to pretend to be -- the argument is
+	# written out at `InputFrame.Action.TOSS`. Both bits go down on a V press and exactly one node
+	# is listening, since each gates on `owner_class` and silently ignores the wrong class.
+	"toss": [KEY_V],
 	# Scurry -- the cheese boost (GDD sections 2 and 9). Space, and the thumb is the right home
 	# for it: it is available to every class, it is not an ability, and it wants to be pressable
 	# without any finger leaving WASD or the mouse. It is also the only key in the game that

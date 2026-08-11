@@ -136,11 +136,14 @@ func _initialize() -> void:
 			await physics_frame
 		_audit(label)
 
-	for label: String in ["dig_flow", "routing", "collapse", "rock", "reveal", "paving"]:
+	for label: String in [
+		"dig_flow", "routing", "collapse", "shoring", "rock", "reveal", "paving"
+	]:
 		_running[label] = true
 	await _check_dig_flow()
 	await _check_routing()
 	await _check_collapse()
+	await _check_shoring()
 	await _check_rock()
 	await _check_reveal()
 	await _check_seal()
@@ -152,11 +155,11 @@ func _initialize() -> void:
 	print("")
 	print("=".repeat(78))
 	if _total_failures == 0:
-		print("ALL INVARIANTS HOLD across %d scenarios, plus dig flow, routing, collapse, rock,"
-			% scenarios.size() + " reveal and paving.")
+		print("ALL INVARIANTS HOLD across %d scenarios, plus dig flow, routing, collapse,"
+			% scenarios.size() + " shoring, rock, reveal and paving.")
 	else:
-		print("%d failures across %d scenarios plus dig flow, routing, collapse, rock, reveal"
-			% [_total_failures, scenarios.size()] + " and paving.")
+		print("%d failures across %d scenarios plus dig flow, routing, collapse, shoring, rock,"
+			% [_total_failures, scenarios.size()] + " reveal and paving.")
 	print("=".repeat(78))
 	quit(1 if _total_failures > 0 else 0)
 
@@ -638,6 +641,106 @@ func _check_collapse() -> void:
 	print("")
 	_running.erase("collapse")
 	print("-- collapse")
+	if _findings.is_empty():
+		print("   ok")
+	else:
+		for finding: String in _findings:
+			print("   FAIL %s" % finding)
+		_total_failures += _findings.size()
+
+
+## Shoring: the Engineer's timbers, and the one thing in this file that makes a cell HARDER to
+## remove (GDD section 4).
+##
+## THE INVARIANT IS "ABSORBS EXACTLY ONE", and it has two failure modes that are opposites and
+## equally invisible from inside a match. Shoring that absorbs *nothing* is three seconds an
+## Engineer spent on a placebo, and it would look exactly like the Brute being good at its job.
+## Shoring that absorbs *forever* is a corridor no Brute can ever answer -- which GDD section 5 is
+## explicit that nothing in this game may be -- and it would look exactly like the Engineer being
+## good at its job. Neither shows up as a bug; both show up as somebody complaining about balance
+## three weeks later.
+##
+## THE FOOTPRINT IS CHECKED AS CAREFULLY AS THE CELL, because that is where a shored cell can still
+## get somebody killed. `collapse` refuses and `collapse_footprint` must agree with it, or the
+## Brute buries a mouse standing in a corridor that is visibly still there.
+func _check_shoring() -> void:
+	_findings.clear()
+	if not await _fresh_network():
+		_broken("shoring", "the arena would not build")
+		return
+
+	_descend(0, Vector2i(0, 0))
+	_drive(1, Vector2i(0, 0), Vector2i(0, 1), 8)
+	var graph := _network.graph()
+	var cell := Vector2i(0, 4)
+
+	if _network.is_shored(1, cell):
+		_fail("SHORING", "a freshly dug cell is already shored")
+	if _network.shore(1, Vector2i(0, 40)):
+		_fail("SHORING", "earth that was never dug accepted timbers")
+	if not _network.shore(1, cell):
+		_fail("SHORING", "an ordinary dug cell refused to be shored")
+	if not _network.is_shored(1, cell):
+		_fail("SHORING", "the cell does not report itself as shored")
+	if _network.shore(1, cell):
+		_fail("SHORING", "shoring the same cell twice reported success -- it would stack")
+
+	# NOTHING ELSE ABOUT THE CELL CHANGED. Shoring is not an obstruction and not rock: you can
+	# still walk through it and a route still runs through it. If that ever stops being true the
+	# Engineer has accidentally been given the barricade twice.
+	if _network.is_blocked(1, cell):
+		_fail("SHORING", "shoring blocked the cell -- it is not a barricade")
+	if not graph.has(1, cell):
+		_fail("SHORING", "shoring took the cell out of the routing graph")
+
+	# THE ABSORB. The collapse reports failure -- nothing came down -- and the timbers are spent.
+	var before := _network.cell_count(1)
+	if not _network.collapse_footprint(1, cell).is_empty():
+		_fail("SHORING", "a shored cell claims a footprint -- somebody would be buried in it")
+	if _network.collapse(1, cell):
+		_fail("SHORING", "a collapse aimed at shored timbers reported that it took the cell")
+	if not _network.is_dug(1, cell):
+		_fail("SHORING", "the cell came down anyway")
+	if _network.cell_count(1) != before:
+		_fail("SHORING", "the plane lost a cell to a collapse that was supposed to be absorbed")
+	if _network.is_shored(1, cell):
+		_fail("SHORING", "the timbers survived the collapse they absorbed")
+
+	# AND EXACTLY ONE. The second collapse finds bare earth and takes it, which is what keeps this
+	# an answer to the Brute rather than an immunity from it.
+	if _network.collapse_footprint(1, cell).size() != 1:
+		_fail("SHORING", "the cell did not go back to an ordinary one-cell footprint")
+	if not _network.collapse(1, cell):
+		_fail("SHORING", "a second collapse was refused -- the shoring is not one-shot")
+	if _network.is_dug(1, cell):
+		_fail("SHORING", "the cell survived a collapse it had nothing left to absorb")
+
+	# A SHAFT HOLDS FROM EITHER END, and both sets of timbers go at once. The rule is that a shaft
+	# is a single object (see [method TunnelNetwork.collapse_shaft]), so half-protecting one is not
+	# a state the world can hold.
+	_descend(1, Vector2i(0, 6))
+	if not _network.shore(2, Vector2i(0, 6)):
+		_fail("SHORING", "the landing under a shaft refused timbers")
+	if not _network.collapse_footprint(1, Vector2i(0, 6)).is_empty():
+		_fail("SHORING", "a shaft with a shored landing still claims a footprint")
+	if _network.collapse(1, Vector2i(0, 6)):
+		_fail("SHORING", "shoring the landing did not save the shaft above it")
+	if not _network.has_shaft_down(1, Vector2i(0, 6)):
+		_fail("SHORING", "the shaft came down despite its landing being braced")
+	if _network.is_shored(2, Vector2i(0, 6)):
+		_fail("SHORING", "the landing's timbers survived holding a shaft up")
+	if not _network.collapse(1, Vector2i(0, 6)):
+		_fail("SHORING", "the shaft refused a second collapse with nothing left to absorb")
+
+	# THE BOOK DOES NOT OUTLIVE THE EARTH. A cell taken for any other reason must not leave timbers
+	# recorded against ground that no longer exists -- they could never be spent or broken, and the
+	# cell can be dug again later.
+	if _network.is_shored(2, Vector2i(0, 6)) or _network.is_shored(1, Vector2i(0, 6)):
+		_fail("SHORING", "shoring survived the cell it was in")
+
+	print("")
+	_running.erase("shoring")
+	print("-- shoring")
 	if _findings.is_empty():
 		print("   ok")
 	else:

@@ -8,15 +8,15 @@ extends RefCounted
 ## they leave. A control wired up in `arena.tscn` can only ever be fitted to the one mouse the
 ## scene already contains, which is precisely the assumption this step exists to remove.
 ##
-## NOTHING HERE IS TUNED, WHICH IS WHY THIS IS A LIST AND NOT A SCENE. Every one of the five
+## NOTHING HERE IS TUNED, WHICH IS WHY THIS IS A LIST AND NOT A SCENE. Every one of them
 ## exposes its dials -- dig time, reach, cooldown, how many boulders you may hold open -- and
-## `arena.tscn` set exactly none of them: the five nodes carried two node paths each and defaults
+## `arena.tscn` set exactly none of them: the nodes carried two node paths each and defaults
 ## for the rest. So there is no authored balance to lose. The day one of these wants a number that
 ## differs per map, it wants a resource, not a node in a scene.
 ##
 ## BOTS DO NOT GET A SET, and that is a rule rather than an oversight. A control reads the mouse's
-## [InputFrame] and a bot's is always empty -- fitting five nodes that can never fire to six of the
-## ten mice in a match would be five nodes' worth of tick for nothing. Bots reach the same rules by
+## [InputFrame] and a bot's is always empty -- fitting a set that can never fire to six of the ten
+## mice in a match would be a whole set's worth of tick for nothing. Bots reach the same rules by
 ## their own road: `bot_digger.gd` cuts earth, and a bot changes class through `ClassSwap.allowed`,
 ## which is deliberately the same predicate the C key asks and deliberately static so there is one
 ## copy of *where* a swap is legal.
@@ -28,8 +28,12 @@ const CONTROLS: Dictionary = {
 	"DigController": "res://scripts/tunnels/dig_controller.gd",
 	"ClassSwap": "res://scripts/classes/class_swap.gd",
 	"CaveIn": "res://scripts/classes/cave_in.gd",
+	"Slam": "res://scripts/classes/slam.gd",
+	"SecondWind": "res://scripts/classes/second_wind.gd",
 	"Sonar": "res://scripts/classes/sonar.gd",
 	"Barricade": "res://scripts/classes/barricade.gd",
+	"ShoreUp": "res://scripts/classes/shore_up.gd",
+	"BannerToss": "res://scripts/classes/banner_toss.gd",
 }
 
 

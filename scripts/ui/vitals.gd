@@ -7,10 +7,17 @@ extends Control
 ## screen tells you someone is nearly out of health at the exact moment you are least able to
 ## read it.
 ##
-## ONLY WHEN IT MATTERS. A bar over a mouse at full health is clutter -- eight of them turn the
-## arena into a spreadsheet -- so a bar appears when its owner has been hurt and fades out again
-## once they're whole. The player's own bar and stamina behave the same way, which means an
-## untouched field is completely clean and any bar you can see is a fight in progress.
+## ONLY WHEN IT MATTERS -- FOR HEALTH. A bar over a mouse at full health is clutter -- eight of
+## them turn the arena into a spreadsheet -- so a bar appears when its owner has been hurt and
+## fades out again once they're whole. That includes your own, which means an untouched field is
+## completely clean and any health bar you can see is a fight in progress.
+##
+## YOUR OWN STAMINA IS THE EXCEPTION, and always drawn. It hid itself whenever it was full, on
+## the same argument, and the argument does not hold for it: a full health bar is the ABSENCE of
+## news, but a full stamina bar is the answer to "can I make that run" -- which you want in the
+## second BEFORE you commit, not after, and by then the bar you needed has already appeared and
+## started draining. Its readings are also relative, so a bar you only ever see part-empty gives
+## you nothing to judge a half-full one against. One bar, four pixels tall, over your own mouse.
 ##
 ## Drawn immediately rather than built from nodes. It is a rectangle per wounded mouse, it
 ## changes every frame, and `_draw` on one Control is both less code and less garbage than a
@@ -44,12 +51,17 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	var player: Mouse = _director.get_player() if _director != null else null
 	for node in get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
 		var mouse := node as Mouse
 		if mouse == null:
 			continue
-		# Hurt, or flat on your back. Both are states somebody is about to act on.
-		if mouse.get_health_ratio() < 1.0 or mouse.is_scruffed():
+		# Hurt, or flat on your back. Both are states somebody is about to act on -- and your own
+		# row is always mounted, because the stamina bar under it is always drawn. `_draw` is what
+		# decides the health bar is still not worth showing; keeping the entry here rather than
+		# tracking your own anchor separately is what guarantees the stamina bar sits in the exact
+		# same place whether or not a health bar happens to be above it.
+		if mouse == player or mouse.get_health_ratio() < 1.0 or mouse.is_scruffed():
 			_shown[mouse] = 0.0
 		elif _shown.has(mouse):
 			_shown[mouse] = _shown[mouse] + delta
@@ -81,7 +93,9 @@ func _draw() -> void:
 			_shown.erase(key)
 			continue
 
-		var head := mouse.global_position + Vector3.UP * HEAD
+		# Scaled by the body under it: `HEAD` was measured against a mouse that was the same size
+		# for everybody, and on a Brute the unscaled figure puts the bar inside its own head.
+		var head := mouse.global_position + Vector3.UP * HEAD * mouse.height_ratio()
 		# Behind the camera projects to a point that is still on screen, mirrored. Without this
 		# a mouse at your back draws a bar floating over the far side of the arena.
 		if camera.is_position_behind(head):
@@ -94,18 +108,23 @@ func _draw() -> void:
 			continue
 
 		var at := camera.unproject_position(head) - Vector2(bar_size.x * ui * 0.5, screen_lift * ui)
-		_bar(at, mouse.get_health_ratio(), Team.color_of(mouse.team), fade, ui)
+		var mine := mouse == player
+		# Your own entry stays in `_shown` for the stamina bar's sake, so the health bar has to ask
+		# the question again for itself -- unhurt, it is the clutter the linger rule exists to
+		# stop, and no more worth drawing over your own head than over anybody else's.
+		if not mine or mouse.get_health_ratio() < 1.0 or mouse.is_scruffed():
+			_bar(at, mouse.get_health_ratio(), Team.color_of(mouse.team), fade, ui)
 
 		# Stamina under your own bar, and only yours -- it is personal and never shown for
 		# anyone else (GDD section 9).
-		if mouse == player and mouse.has_method("get_stamina_ratio"):
-			var stamina: float = mouse.call("get_stamina_ratio")
-			if stamina < 1.0:
-				_bar(
-					at + Vector2(0.0, (bar_size.y + 2.0) * ui), stamina,
-					Color(0.85, 0.82, 0.55), fade * 0.9, ui, bar_size.y * 0.6
-				)
+		if mine and mouse.has_method("get_stamina_ratio"):
+			_bar(
+				at + Vector2(0.0, (bar_size.y + 2.0) * ui), mouse.call("get_stamina_ratio"),
+				Color(0.85, 0.82, 0.55), fade * 0.9, ui, bar_size.y * 0.6
+			)
 			_scurry_pip(mouse, at, fade, ui)
+			_wedge_count(mouse, at, fade, ui)
+			_cast_bar(mouse, at, fade, ui)
 
 
 ## Whether your Scurry is off cooldown, as a wedge beside your own bars.
@@ -132,6 +151,89 @@ func _scurry_pip(mouse: Mouse, at: Vector2, alpha: float, ui: float) -> void:
 	HudSkin.cheese(self, spot, size, alpha * 0.22)
 	if left > 0.0:
 		HudSkin.cheese(self, spot, size * left, alpha * 0.5)
+
+
+## The shore-up hold, filling, above your own bars.
+##
+## TWO READINGS OF ONE CAST, ON PURPOSE, AND THE OTHER ONE IS THE PRIMARY. `ShoreUp._show` lights
+## the cell itself with the dig cursor, which is the right instrument and answers the question this
+## bar cannot: **which cell**. That one is not in trouble -- a screenshot said it was faint, the
+## screenshot turned out to be of a cast that had already been abandoned by a harness bug, and the
+## real thing floods a whole cubic metre of corridor in gold.
+##
+## What this adds is the number. A wireframe filling with light is unmistakable and imprecise, and
+## three seconds is long enough to want to know whether you are at a third or nearly there -- the
+## same reason the dig has a cursor AND digging has a feel. It is four pixels tall and it goes where
+## this file's header says everything about one mouse right now goes: above that mouse.
+##
+## ABOVE THE BARS RATHER THAN BELOW, unlike the wedge count. Health and stamina are *states* and
+## stack downward from the anchor; this is an *action in progress*, it exists for three seconds and
+## then never again until you press the key, and putting it on top keeps it from shoving the
+## permanent readings around every time it appears.
+##
+## YOURS ONLY, for now, and that is a hidden-information decision rather than a HUD one: an enemy
+## Engineer's cast bar visible across a corridor would be a free tell that somebody is fortifying,
+## which is exactly the sort of thing §3 wants you to have to go and look at.
+func _cast_bar(mouse: Mouse, at: Vector2, alpha: float, ui: float) -> void:
+	var shore := mouse.get_node_or_null("ShoreUp")
+	if shore == null:
+		return
+	var done: float = shore.call("progress")
+	if done <= 0.0:
+		return
+	_bar(
+		at - Vector2(0.0, (bar_size.y + 3.0) * ui), done,
+		Color(0.98, 0.74, 0.24), alpha, ui, bar_size.y * 0.8
+	)
+
+
+## What you are hauling, as a wedge and a number, under your own bars.
+##
+## YOURS ONLY, AND THAT IS THE WHOLE SPECIFICATION FOR NOW. What an enemy is carrying is worth
+## knowing -- it is the difference between a mouse worth chasing and one worth ignoring -- and
+## putting it over their head is a decision about hidden information (GDD section 3) rather than a
+## HUD decision, so it is deliberately not made here. A wedge on a mouse is also a thing that could
+## be shown in the WORLD, on the mouse, which is a better answer than a number and is somebody
+## else's afternoon.
+##
+## HIDDEN AT ZERO, unlike the stamina bar beside it. The two are asked at different moments:
+## stamina answers *can I make that run* before you commit, so it must be readable when full,
+## whereas this answers *have I got anything to lose*, and the answer when you are carrying nothing
+## is the absence of the icon. That is the same argument the health bar's linger rule makes.
+##
+## THE COOLDOWN IS DRAWN AS A DIM EXTRA WEDGE rather than as a bar or a number of seconds. It is
+## the answer to *why did walking over that cache do nothing*, which is a question you ask for
+## about a second and never want a readout for -- and the ghost wedge filling in says both what is
+## happening and what you get at the end of it.
+func _wedge_count(mouse: Mouse, at: Vector2, alpha: float, ui: float) -> void:
+	if not mouse.has_method("get_carried_cheese"):
+		return
+	var held: int = mouse.get_carried_cheese()
+	var waiting: float = mouse.wedge_wait() if mouse.has_method("wedge_wait") else 0.0
+	if held <= 0 and waiting <= 0.0:
+		return
+
+	var size := bar_size.y * 1.6 * ui
+	# Under the stamina bar, left-aligned with both bars above it, so the three readings that
+	# belong to you and nobody else stack in one column.
+	var spot := at + Vector2(0.0, (bar_size.y * 1.6 + 5.0) * ui)
+	HudSkin.cheese(self, spot, size, alpha)
+
+	if held > 0:
+		HudSkin.text(
+			self, Rect2(spot + Vector2(size * 1.7, -size * 0.15), Vector2(size * 3.0, size * 1.3)),
+			"%d/%d" % [held, mouse.carry_capacity], maxi(9, roundi(size * 0.95)),
+			Color(1.0, 0.96, 0.82, alpha)
+		)
+
+	if waiting <= 0.0 or mouse.wedge_room() <= 0:
+		return
+	# The next one, arriving: an empty ghost that fills as the stow clock runs down.
+	var ghost := spot + Vector2(size * (3.0 if held > 0 else 1.7), 0.0)
+	var ready: float = 1.0 - clampf(waiting / maxf(mouse.wedge_cooldown, 0.001), 0.0, 1.0)
+	HudSkin.cheese(self, ghost, size, alpha * 0.20)
+	if ready > 0.0:
+		HudSkin.cheese(self, ghost, size * ready, alpha * 0.5)
 
 
 func _bar(

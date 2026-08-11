@@ -63,11 +63,40 @@ Deliberately unmodified playground CTF (Pillar 1):
 - Every respawn costs **1 cheese** from the team pool `[ASSUMED]`.
 - At **zero cheese, respawns take 20s instead of 6s** `[ASSUMED]`. Not a death sentence,
   but a team at zero gets overrun fast.
-- Cheese is gathered from **caches** on the map, carried home one wedge at a time.
-- Scruffed mice **drop carried cheese** where they fall.
+- Cheese is gathered from **caches** on the map and carried home. `[REVISED]` **How much you can
+  carry is a class stat** — Sneak 1, Engineer 2, Generalist 3, **Brute 5** — and there are
+  **five seconds between wedges**, so filling up is a commitment rather than a walk-over.
+- Scruffed mice **drop carried cheese** where they fall. `[REVISED]` A full load **scatters** over a
+  couple of metres rather than landing as one parcel, and **a scruffed carrier's banner skids** up
+  to 1.4m.
 - **The world takes cheese too** — crows raid your stores, ants haul caches away (§7).
 - Enemy stores are **raidable**.
 
+> `[ADDED]` **Capacity is what stops hauling being a job any mouse does equally well.** While
+> everybody carried exactly one wedge, cheese was a walk, the walk was the whole mechanic, and the
+> only question was who happened to be nearest. The spread makes the crew's respawn supply **the
+> Brute's errand** — and it is an errand the Brute is bad at in every other respect: slowest in the
+> game, worst turn rate, and the one class an ambush is guaranteed to catch. A Sneak carries one
+> wedge and should be doing something else.
+>
+> **It does not cost speed, and the pacing lives in the cooldown instead.** Cheese has no carry
+> penalty; the banner does. Two stacking speed taxes would be a second tuning axis on a speed ladder
+> §13 already calls an open question. **Five seconds between wedges** is the dial that was actually
+> wanted: twenty seconds to fill a Brute, standing in the open, with nothing to show for it if
+> somebody arrives at second nineteen. Without it, capacity is a free upgrade and a cache is a
+> button rather than a place.
+>
+> **And it gives the drop something to scatter.** A mouse going down with five wedges is a real loss
+> and a real prize, which is what makes escorting a hauler worth doing — and why the load comes
+> apart on the ground instead of changing owner intact.
+>
+> `[REVISED]` **Cheese and the banner now stack in the same paws.** The original instinct was that
+> the two errands should compete for one mouse, enforced by refusing a loose banner to anybody
+> holding cheese. That punishes the wrong mouse: the classes with real capacity are the ones least
+> likely to be running a flag anyway, and a Brute made to choose between five wedges and a banner at
+> its feet just leaves the banner — which is not a decision, it is an inconvenience with an obvious
+> answer. The errands still compete through the thing that was always doing the work: **the walk.**
+>
 > **The bankruptcy play (intended, not incidental).** Because zero cheese is survivable,
 > a team that's ahead on captures can deliberately **trade score for economy** — concede
 > a capture, pull everyone off defense, and go raid cheese to refill the pool. This is a
@@ -95,7 +124,8 @@ knows who pressed it.
   Scurrying Generalist. The handoff play survives contact with the boost button. This is
   the important constraint on Scurry; don't relax it.
 - **Refills sprint stamina** on use, which is what makes it feel like a second wind rather
-  than a stat buff.
+  than a stat buff. The ability that took the phrase for a name does the same thing to the
+  same meter, deliberately — see the Generalist in §4 for what separates the two.
 - `[DECIDE]` The name. "Scurry" is the working title; "Super Scurry" also on the table.
 
 > `[DECIDE]` **Second currency?** Recommend **no**. Cheese-as-lives works *because*
@@ -384,8 +414,53 @@ without these.
 | Fantasy | The reliable one. The one who actually scores. |
 | Stats | Balanced — medium health, medium speed, medium damage |
 | **Unique capability** | **Carries the flag at near-full speed** (-10% vs -25/30/40%) |
-| Ability | *Second Wind* — brief self-heal, long cooldown |
+| Ability | *Second Wind* — brief self-heal, long cooldown. `[REVISED]` **Built** — `Q`, **45 health over two seconds** on a **40s** cooldown, and it **refills your sprint stamina** on the keypress. Nothing interrupts it except being scruffed. |
+| Ability | *Banner Toss* `[ADDED]` — **Built** — `V`, throws the banner **four cells** toward the cursor on a **10s** cooldown. Nobody may take it out of the air, including you. |
+| Carries | **3 wedges** of cheese `[ADDED]` |
 | Role | Primary flag runner, on-ramp class |
+
+> `[ADDED]` **The Toss exists because the cork had no answer.** §5's web ends *"Brute corks the
+> tunnel → Generalist takes the surface route with the flag"*, and on the lawn the same body does
+> the same job: a Brute in a gateway is a wall the runner cannot fight, cannot flank, and is
+> carrying the one object that makes standing there worth its while. Every other class answers a
+> Brute by removing it or going around it. **The runner answers by not being the one who has to get
+> past.**
+>
+> **It is a pass, not a leap, and every number is there to keep it one.** The banner cannot be
+> caught in the air, and the thrower is bound by the same three-quarter-second fumble clock a Slam
+> uses — so throwing it forward and running under it buys you a banner you may not touch, in the
+> open, having just announced exactly where it is. Thrown to a team mate it is instant and free.
+> **The ability is worth having precisely to the extent that somebody else is there**, which is the
+> first thing in this game that is true of anything.
+>
+> **Four cells clears the thing in your way and not the mouse behind it.** Ten seconds is the other
+> half: long enough that a Generalist cannot hop the banner across the yard one throw at a time,
+> short enough to be there for the one gate that decides a run.
+>
+> **It shares `V` with the Brute's Slam**, the way `Q` is shared by four abilities — one key
+> meaning *your class's second thing*. No mouse is ever both classes, so no press is ambiguous.
+
+> `[REVISED]` **What makes the heal an ability rather than a number.** Every mouse already
+> regenerates — 18 a second, after five seconds of quiet (§6) — so a self-heal that only adds health
+> gives you early what you were getting anyway. The one thing no mouse in this game can do is heal
+> **while being hit**: the regen clock is reset by every point of damage, so the passive is only
+> ever collected by somebody who has already broken off. Second Wind ignores that clock and is not
+> interrupted by a blow, and that single difference is the whole ability.
+>
+> **Which is why it belongs to the runner.** The Generalist's job is to be carrying the banner while
+> the other crew tries to take it off them — a job made entirely of being caught up with and not
+> stopping. A burst heal for a duel would be the Brute's ability on the wrong class.
+>
+> **It is spread over two seconds on purpose.** An instant 45 happens between two frames and the
+> mouse chasing you has no move to make about it. Over two seconds it is a window: press harder and
+> you can still out-damage it, back off and you have lost the runner. It is also visible to
+> everybody — pale gold rings around the mouse for exactly as long as the heal lasts — because a
+> heal only the healer can see silently breaks the other crew's read of the fight.
+>
+> **And it refills the sprint tank,** which is the name rather than a bonus: §2 defines the phrase
+> in this game when it says a refilled tank is what makes Scurry "a second wind rather than a stat
+> buff". It does not overlap Scurry — that is speed, costs the crew a respawn, and belongs to
+> everybody; this is endurance, costs nothing, and belongs to one class.
 
 > **The Generalist problem, and the fix.** "Balanced" classes usually feel bad, because
 > average-at-everything means never-the-right-answer. The fix is to give the Generalist
@@ -400,9 +475,10 @@ without these.
 | Fantasy | The big one who says "not through here" |
 | Stats | High health, slow, heavy damage |
 | **Unique capability** | **Brings tunnels down.** `[REVISED]` **Built** — the whole of un-digging, in two postures: **`Q` underground** caves in the one cell you are pointing at, at arm's length; **`Q` on the lawn** is a **stomp** that drops a patch of the layers beneath your feet (planes 1–2 only) — thirteen cells one layer down, five the layer under that. Anyone caught is **buried** (§6). |
-| Ability | *Slam* — short-range knockback; **makes carriers drop the flag**. Still to build. |
+| Ability | *Slam* — short-range knockback; **makes carriers drop the flag**. `[REVISED]` **Built** — `V`, a 2.5m shove in a circle around you on an 8s cooldown. The only attack in the game that does no damage at all. |
 | **Shifts rock** | **Built (M4)** — the only class that breaks a barricade (3 swings) or a boulder (**5 per cell**, so a four-cell rock is 20 and comes apart a quarter at a time). Anyone else may swing at one all day. |
 | Underground | Very slow, but **plugs a tunnel completely** |
+| Carries | **5 wedges** of cheese `[ADDED]` — the most in the game |
 | Weakness | Cannot chase, cannot flank, exposed in open ground |
 | Role | Nest defense, chokepoints, tunnel denial, sabotage |
 
@@ -480,8 +556,51 @@ without these.
 | **Unique capability** | **Puts barriers up.** `[REVISED]` **Built (M4)** — the *Barricade* row below is now the whole of it. Un-digging has gone to the Brute. |
 | Digging | **~3× faster than anyone else.** Others can manage it in a pinch. `[REVISED]` |
 | Ability | *Barricade* — a boulder heaved across a tunnel. `[REVISED]` **Built (M4)** — `X`, aimed at the open cell beside you. **No cheese**: ten seconds between placements, three standing at once, and **only a Brute can shift one**. |
+| Ability | *Shore Up* `[ADDED]` — **Built** — `Q`, **three seconds standing still** in a dug cell puts timbers in. **No cooldown at all.** The next collapse aimed at that cell is spent breaking them; the corridor survives, once. |
+| Carries | **2 wedges** of cheese `[ADDED]` |
 | Weakness | Weakest attack in the game. Cannot win a fight, only shape one. |
 | Role | Map control, route creation, fortification |
+
+> `[ADDED]` **Shore Up is the answer to the open question this section left standing**, and it is
+> worth naming that this is what it is. The Engineer entry above says out loud that moving
+> un-digging to the Brute cost the class its escape button, and leaves the question open on the
+> explicit condition that *"if the Engineer turns out to be uncatchable without it, the answer is a
+> barricade tuned to buy longer, not the cave-in coming back."* This is a third answer, and it
+> points the other way: **you cannot close a corridor behind you, but you can decide beforehand
+> which corridor is worth keeping.** Fleeing is still geometry and a head start. What is restored
+> is the Engineer's say over the map, which is the part that was actually missing.
+>
+> **The cost is time and only time — there is no cooldown.** An Engineer may shore every cell it
+> owns, one after another, for as long as nobody comes. Three seconds standing still, underground,
+> doing nothing else is the whole price, and it is a real one: three seconds of not digging, not
+> running, and not being anywhere else, in the one place on the map where being caught standing
+> still is worst. A cooldown on top would price the same act twice and turn a builder into somebody
+> watching a meter. **Moving cancels it**, which is what stops the three seconds being a formality
+> you spend backing out of a fight — and makes a Sneak finding an Engineer mid-shore a good moment
+> for both of them.
+>
+> **It absorbs exactly one collapse and it is a boolean, not a depth.** Timbers take a cave-in and
+> are gone; an Engineer who wants a cell to survive twice comes back and stands there again after
+> the Brute has spent its cooldown. Making it stack would let an Engineer with time on its paws
+> build a route no Brute could ever answer, and §5 is explicit that no answer in the web is
+> absolute.
+>
+> **It is not a barricade and the difference is deliberate.** The cell is still dug, still walkable,
+> still routable, and still drawn exactly as it was — you can walk straight through shored ground.
+> The single thing that is different about it is what happens the next time somebody tries to bring
+> it down. One class now *builds through* a corridor and *builds across* one, with two keys that do
+> not resemble each other.
+>
+> **The cell you stand in, not the one you aim at** — the one place this parts company with the
+> barricade and the cave-in, both of which are aimed on the argument that aiming stops "seal behind
+> you while running" being free. Holding still for three seconds already forbids running, so aiming
+> would be a second demand on an act whose whole shape is *commit to this spot*. A mouse bracing a
+> roof is under the roof.
+>
+> **What the Brute gets back is information.** A stomp over shored ground reports timber cracking
+> rather than solid earth — because there *is* something down there, it held, and a Brute that
+> walked away believing the mark was wrong would be walking away from the one cell an Engineer
+> thought worth three seconds.
 
 > **`[REVISED]` Everyone digs; the Engineer is simply good at it.** This entry used to read
 > *"Digs tunnels and builds ramps. Nobody else alters terrain."* Exclusivity turned out to be
@@ -552,6 +671,7 @@ without these.
 | Stats | **Lowest health**, fastest, **highest burst damage** |
 | **Unique capability** | **Sonar** — briefly sounds one layer below and leaves contestable thieves' cant for the team. `[REVISED]` **Built (M5), extended (M8a)** — the echo and the mark now name **whose corridor** was found, not merely that one is there. |
 | Ability | *Fade* — hard to see while moving slowly; broken by attacking or sprinting. Still to build. |
+| Carries | **1 wedge** of cheese `[ADDED]` |
 | Weakness | Dies to anything that touches them. Loses every fair fight. |
 | Role | Scouting, assassin, counter-Engineer, cache raider |
 
@@ -656,16 +776,39 @@ Every class answers another, and the answers route through the dig system:
         │                              │
         ▼                              ▼
   Engineer digs deeper (plane 3)  Mice inside scruffed
+        │                              ▲
+        │                              │
+  Engineer shores a cell ──────────────┘ (absorbs one, costs the Brute a cooldown)
         │
         ▼
   Brute corks the tunnel ◀──── Sneak can't get past
         │
         ▼
   Generalist takes the surface route with the flag
+        │
+        ▼
+  Generalist tosses the banner past the cork ──▶ a team mate carries it on
 ```
 
 No hard counters — every answer costs position, cheese, time, or exposure. Note how
 **depth is the Engineer's answer to the Brute**, paid for in dig time.
+
+> `[ADDED]` **The web now has two edges that point back up it, and both were dead ends before.**
+> Every arrow in the original diagram ran one way: each class answered the one below it and the
+> bottom of the page was a Generalist hoping. The two additions are the classes at the ends of that
+> chain getting a reply.
+>
+> **Shoring is the Engineer answering the Brute without digging away from it.** Depth was the only
+> answer and it is a retreat — correct, but it concedes the ground. Timbers cost three seconds and
+> buy one collapse, which turns a Brute's ten-second cooldown into a *resource it has to spend* on
+> a corridor rather than a key that removes one. Neither class wins the exchange outright: the Brute
+> gets through on the second press, and the Engineer decides whether that corridor was worth making
+> it come back for.
+>
+> **The toss is the Generalist answering the cork.** *"Takes the surface route"* was the only line
+> in this diagram that named no mechanic — it meant *go the long way and hope*. A pass is a real
+> answer, and it is the only arrow in the web that requires a second mouse on your own crew to be
+> standing somewhere useful.
 
 > **The middle of this diagram is now built, and it is the first time the web has been a loop
 > rather than a wish.** *Sneak sonar finds it → Brute collapses it → Engineer digs deeper* was
@@ -1104,7 +1247,9 @@ All four are core, but they don't arrive at once. Recommended order:
 > "the Engineer un-digs" and "the Brute collapses" were the same capability described twice. That
 > is the argument for this ordering restated as evidence: the collision was invisible while only
 > one half existed, and it was obvious the moment the second class needed its own reason to exist.
-> Corking is still geometry rather than code (§4), and *Slam* is still to build.
+> Corking is still geometry rather than code (§4). `[REVISED]` *Slam* has since been built, as have
+> Second Wind, the Engineer's shoring and the Generalist's banner toss — **the Sneak's *Fade* is now
+> the only ability §4 names that nothing implements.**
 
 ---
 
@@ -1122,6 +1267,21 @@ All four are core, but they don't arrive at once. Recommended order:
    question, not the absolute values. Pure playtest.
 8. **Is Scurry at 1 cheese too cheap?** (§2) It should feel like a decision, not a
    cooldown. If people press it on reflex, raise the cost before touching the effect.
+9. `[ADDED]` **Is three seconds the right price for a shored cell?** (§4) The number rations an
+   ability with no cooldown, so it is the *only* thing rationing it — and the two failure modes are
+   opposite. Too cheap and an Engineer brings a whole route up to one-collapse-proof while nobody is
+   looking; too dear and nobody ever completes one under pressure, which is the only time it matters.
+   Watch whether shoring happens **during** a fight or only before one.
+10. `[ADDED]` **Does the Brute actually end up doing the hauling?** (§2) Five wedges is a deliberate
+    pull on the class least able to survive being caught with them. If Brutes ignore cheese and
+    Generalists keep doing the shopping three at a time, the spread is decoration and the interesting
+    number is the Generalist's, not the Brute's.
+11. `[ADDED]` **Five seconds between wedges — felt as pacing, or as waiting?** (§2) Twenty seconds to
+    fill a Brute is a long time to stand in a yard. Pure playtest, and the first dial to move if
+    hauling stops being something people choose to do.
+12. `[ADDED]` **Is the banner toss ever thrown to a team mate?** (§4, §5) The whole design rests on
+    it being a pass. If in practice it is only ever thrown forward past a cork and then walked to,
+    it is a leap with extra steps and the fumble clock needs to be longer.
 
 **Resolved:** cursor steers and W/S/A/D move relative to facing · sprint is free,
 per-class stamina · sprint on double-tap W, Shift is Slow · cheese buys Scurry, not
@@ -1135,4 +1295,7 @@ tall grass bends to movement · per-class flag carry penalties · obstructions a
 per-plane · maps are seeded from fixed anchors · shared + signature world events ·
 class switching free at own nest · zero cheese = 20s respawn · one currency ·
 **un-digging is the Brute's alone, cave-in underground and stomp from the surface, and the
-Engineer's exclusive is Barricade** (§4)
+Engineer's exclusive is Barricade** (§4) · shoring is the Engineer's `Q`, three seconds, no
+cooldown, absorbs exactly one collapse (§4) · the Generalist throws the banner four cells on `V`
+and nobody catches it mid-air (§4) · cheese capacity is per class with five seconds between
+wedges, and it stacks with the banner (§2)

@@ -49,10 +49,13 @@ extends MouseControl
 ## Standing in the wrong cell is the whole counterplay, which is why the reach is one tile and
 ## the cooldown is long enough to see coming.
 ##
-## NUMBERS LIVE HERE, not in an AbilityDefinition resource, and that is on purpose for exactly
-## one more ability. The plan sketches `AbilityDefinition` and it is the right shape -- the day
-## Slam lands there are three things sharing a cooldown, a cast time and a cheese cost, and it
-## should be built then, from real examples rather than from a guess.
+## `[REVISED]` NUMBERS LIVE HERE, not in an AbilityDefinition resource, and **that is now overdue
+## rather than deliberate.** This note used to say "on purpose for exactly one more ability", and
+## named the day Slam landed as the moment to build the resource. Slam has landed, and so have
+## Second Wind, the shore-up and the banner toss -- six abilities, every one of them carrying its
+## own `owner_class` export and its own cooldown dial, and every one of them tuned by opening a
+## different file. The plan's `AbilityDefinition` is the right shape and there are now more than
+## enough real examples to build it from. **It has not been built, and this is the reminder.**
 
 ## Emitted whichever way it goes, so the HUD can say what happened without this file knowing
 ## there is a HUD. Refusals matter as much as successes: a key that silently does nothing is
@@ -298,8 +301,17 @@ func _cave_in() -> void:
 	# its other end down with it (see [method TunnelNetwork.collapse_shaft]), and everyone standing
 	# in either one is buried -- burying only the cell that was aimed at would leave a mouse alive
 	# inside a tile that no longer exists.
+	# ASKED BEFORE THE COLLAPSE, because the collapse is what spends it. An Engineer's timbers take
+	# one cave-in and are gone (GDD section 4); the corridor survives, the cooldown does not, and
+	# the Brute may come back in six seconds and have it. **The cooldown is the whole cost of the
+	# counterplay** -- refusing here without charging would make shoring free to test, and a Brute
+	# could tap Q down a corridor to find out which cells an Engineer had bothered with.
+	var shored := _network.is_shored(plane, cell)
 	var footprint := _network.collapse_footprint(plane, cell)
 	if not _network.collapse(plane, cell):
+		if shored:
+			_cooldown_left = cooldown
+			note("timbers -- they hold, but not twice")
 		return
 
 	for down: Array in footprint:
@@ -352,7 +364,7 @@ func _stomp() -> void:
 	_kick_up_dust(here)
 
 	# A puppet runs its cooldown and moves no earth, exactly as the aimed form does -- BUT IT STILL
-	# HAS TO SAY SOMETHING, and this is the one place in the five controls where that is true.
+	# HAS TO SAY SOMETHING, and this is the one place in the whole control set where that is true.
 	#
 	# Every other ability leaves a puppet a visible result to read: a cell vanishes, a boulder
 	# appears, an echo shimmers, and the server's picture supplies it a moment later. A stomp that
@@ -379,9 +391,14 @@ func _stomp() -> void:
 	_shake_the_earth(_tremor_seed_cells(here))
 
 	var taken := 0
+	var splintered := 0
 	for entry: Array in reached:
 		var plane: int = entry[0]
 		var cell: Vector2i = entry[1]
+		# Counted before the attempt, because after it the shoring is gone and there is nothing
+		# left to ask -- the same reason the footprint is taken first.
+		if _network.is_shored(plane, cell):
+			splintered += 1
 		# A SHAFT INSIDE THE PATCH COMES DOWN WHOLE, which is how a stomp reaches the surface. The
 		# patch itself never touches plane 0 -- there is nothing up there to collapse but grass --
 		# so an entrance is taken through its LANDING: the plane-1 cell is in the patch like any
@@ -401,10 +418,18 @@ func _stomp() -> void:
 	# These two lines are the reason [MouseControl] has a second door at all: sent down the refusal
 	# channel they came out on screen as **BLOCKED: the ground gives way beneath you**, which is
 	# what a channel named for one voice does to a message written in the other.
-	note(
-		"the ground gives way beneath you" if taken > 0
-		else "solid ground -- nothing under here"
-	)
+	# THREE ANSWERS RATHER THAN TWO, and the middle one is new. "Solid ground" was the only thing a
+	# stomp that took nothing could say, and over a shored corridor it is a lie of exactly the kind
+	# this ability is otherwise careful not to tell -- there IS something under there, it held, and
+	# a Brute that walked away believing the mark was wrong would be walking away from the one cell
+	# an Engineer thought worth three seconds. Timbers giving is a sound you would hear through a
+	# lawn; nothing at all is not.
+	if taken > 0:
+		note("the ground gives way beneath you")
+	elif splintered > 0:
+		note("timber cracks below -- something down there is braced")
+	else:
+		note("solid ground -- nothing under here")
 
 
 ## The surface half of a stomp: a ring of dust, and a thump in the camera.

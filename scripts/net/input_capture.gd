@@ -41,6 +41,8 @@ const ACTIONS: Dictionary = {
 	InputFrame.Action.ABILITY: &"ability",
 	InputFrame.Action.BARRICADE: &"barricade",
 	InputFrame.Action.SWAP_CLASS: &"swap_class",
+	InputFrame.Action.SLAM: &"slam",
+	InputFrame.Action.TOSS: &"toss",
 }
 
 ## Buttons that a cursor parked over the HUD must not produce. The two that are aimed with the

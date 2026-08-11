@@ -36,7 +36,7 @@ const HIDDEN: Array[String] = [
 const SECTIONS: Array = [
 	["MOVING", ["move_forward", "move_back", "strafe_left", "strafe_right", "sprint", "slow", "scurry"]],
 	["DIGGING", ["dig", "burrow", "shaft_down", "shaft_up"]],
-	["FIGHTING", ["attack", "ability", "barricade"]],
+	["FIGHTING", ["attack", "ability", "barricade", "slam", "toss"]],
 	["THE YARD", ["aim", "view_left", "view_right", "swap_class", "pause", "screenshot"]],
 ]
 
@@ -57,6 +57,8 @@ const LABELS: Dictionary = {
 	"attack": "Attack",
 	"ability": "Class ability",
 	"barricade": "Barricade",
+	"slam": "Slam — shove them back",
+	"toss": "Throw the banner",
 	"aim": "Aim",
 	"view_left": "Turn the view left",
 	"view_right": "Turn the view right",

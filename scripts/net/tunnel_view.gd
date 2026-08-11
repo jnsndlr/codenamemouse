@@ -38,6 +38,16 @@ enum Kind {
 	## entries for the two cells it came down with name planes the shaft is not stored under, and
 	## a client acting on those alone would keep drawing the ladder.
 	FORGET_SHAFT,
+	## Timbers in a cell (GDD section 4). Sent under exactly the same permission as the cell they
+	## are in -- `_gather_shoring` reads the shored book through the same `TunnelSight.knows` gate
+	## as the floor -- so shoring can never be the thing that reveals a corridor. It is a property
+	## of a cell you were already allowed to know about.
+	SHORED,
+	## Timbers gone: broken by a collapse, or aged out of the fog with the cell. Its own kind
+	## rather than a `SHORED` with zero bits, because absence in `wanted` is how everything else
+	## here signals removal and shoring should not be the one entry that encodes it in a payload
+	## byte instead.
+	UNSHORED,
 }
 
 ## Plane, x, y, kind, bits. Cells are signed and can exceed a byte in a large arena.
@@ -86,6 +96,7 @@ func batch(peer: int, side: int) -> Array:
 		_gather_cells(side, plane, wanted)
 		_gather_shafts(side, plane, wanted)
 		_gather_rock(side, plane, wanted)
+		_gather_shoring(side, plane, wanted)
 
 	for key: String in wanted:
 		if out.size() >= MAX_ENTRIES:
@@ -117,6 +128,13 @@ func batch(peer: int, side: int) -> Array:
 				entry[0] = Kind.FORGET
 			elif entry[0] == Kind.SHAFT:
 				entry[0] = Kind.FORGET_SHAFT
+			elif entry[0] == Kind.SHORED:
+				# THE SAME CAMP AS CELLS AND SHAFTS, and for the stronger version of the reason:
+				# shoring is not merely forgettable, it is *destructible*. A Brute spending a
+				# cave-in on an Engineer's timbers is the whole point of the mechanic, and without
+				# this line the client that watched them go in would keep drawing them standing --
+				# over a corridor its own crew is about to walk down believing is braced.
+				entry[0] = Kind.UNSHORED
 			else:
 				continue
 			entry.append(0)
@@ -142,6 +160,22 @@ func _gather_cells(side: int, plane: int, into: Dictionary) -> void:
 func _gather_shafts(side: int, plane: int, into: Dictionary) -> void:
 	for cell: Vector2i in _network.known_shaft_cells(plane, side):
 		into[_key(Kind.SHAFT, plane, cell)] = _network.shaft_known_bits(plane, cell)
+
+
+## Every shored cell this crew may know about. **Gated on `knows` for the CELL**, which is the one
+## thing to be sure of here: shoring must never be a second, weaker route to a coordinate. If the
+## crew may see the floor it may see the timbers standing on it, and if it may not, this sends
+## nothing and the client never hears that anybody was down there.
+##
+## The bits are a constant 1 rather than knowledge bits. Shoring has no per-crew reading -- timbers
+## are timbers, and who put them in is not a fact this payload carries -- but the entry still needs
+## a value, because `batch` diffs on it and an entry whose bits never change is one that is sent
+## once and then left alone, which is exactly the behaviour wanted.
+func _gather_shoring(side: int, plane: int, into: Dictionary) -> void:
+	for cell: Vector2i in _network.shored_cells(plane):
+		if not _sight.knows(side, plane, cell):
+			continue
+		into[_key(Kind.SHORED, plane, cell)] = 1
 
 
 func _gather_rock(side: int, plane: int, into: Dictionary) -> void:

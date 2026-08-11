@@ -28,9 +28,11 @@ const DEFINITIONS: Array[ClassDefinition] = [
 
 ## How many the swap point walks through.
 ##
-## All four are pickable. The Engineer, Sneak and Brute have their defining map-control abilities
-## -- the barricade, sonar, and the cave-in in both its forms. Second Wind, Fade and Slam remain
-## later work.
+## All four are pickable, and **every class now answers Q**, which it did not until the shore-up
+## landed: the Brute caves in or stomps, the Sneak sounds, the Generalist takes a second wind, and
+## the Engineer puts timbers in. Two classes carry a second key as well -- the Engineer's barricade
+## on X, and V for the Brute's Slam and the Generalist's banner toss. The Sneak's Fade remains the
+## one ability GDD section 4 names and nothing has built.
 const COUNT: int = 4
 
 

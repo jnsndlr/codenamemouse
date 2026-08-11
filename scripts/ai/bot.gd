@@ -73,6 +73,14 @@ enum { RAIDER, DEFENDER }
 @export_group("Thinking")
 ## Seconds between decisions. Doubles as reaction time.
 @export var think_seconds: float = 0.3
+## How long a bot may ask for a heading and not travel before it decides it is stuck. Comfortably
+## longer than a think, so an ordinary re-plan or a moment spent squeezing past somebody is not
+## mistaken for a wedge -- and short enough that a player never watches a teammate stand in a
+## corridor wondering what it is doing.
+@export var stuck_seconds: float = 1.0
+## How far it must have got in that window to count as moving. A tenth of a body width: a bot
+## grinding along a wall does travel, slowly, and that is not stuck.
+@export var stuck_distance: float = 0.15
 ## How close an enemy has to be before this bot squares up to them -- turns to face, and swings
 ## if they come inside `strike_radius`. It does NOT change where the bot is going.
 ##
@@ -158,6 +166,10 @@ var _goal_plane: int = 0
 var _route: Array[Dictionary] = []
 var _quarry: Mouse = null
 var _since_think: float = 999.0
+## Progress bookkeeping for [method _check_progress]: when the current window opened, and where.
+var _stuck_for: float = 0.0
+var _stuck_at: Vector3 = Vector3.ZERO
+var _stuck_strikes: int = 0
 ## Purely for the debug readout -- what it thinks it's doing.
 var _intent: String = "idle"
 ## The Engineer's raid. Held by every bot and consulted by none of them but an Engineer, which is
@@ -241,6 +253,7 @@ func _control(delta: float) -> void:
 	_drive(delta)
 	_fight(delta)
 	_walk(delta)
+	_check_progress(delta)
 
 
 # ------------------------------------------------------------------------------- the class
@@ -867,6 +880,58 @@ func _heading() -> Vector3:
 	if toward.length_squared() < 0.0001:
 		return Vector3.ZERO
 	return toward.normalized()
+
+
+## Pushing, and going nowhere: throw the plan away and make another one.
+##
+## `[ADDED at M8]` THE FILE ALREADY DESCRIBED THIS BUG before anything could cause it -- see
+## `_advance`: *"a bot that keeps walking a route it has fallen off is the one that ends up jogging
+## on the spot against a wall"*. Only one way of falling off a route was handled there, the shaft
+## that turned out not to be under your feet, because until mice were solid to their own crew
+## nothing else could put a bot somewhere its plan did not expect. Now a teammate can, and a
+## corridor is one cell wide, so being nudged half a metre sideways underground is the difference
+## between a waypoint you can walk to and one with earth in the way. `bot_soak` caught an Engineer
+## pressed into a wall at 2.9 m/s for fifteen seconds with nobody within three metres of it.
+##
+## RE-PLANNING IS THE WHOLE FIX, and it is enough because a plan is cheap and made from where the
+## bot ACTUALLY is: the next one routes out of the corner it is in rather than through it. What it
+## must not do is fire while a bot is legitimately still -- a digger at a face and a defender at
+## its post both stand there on purpose -- so the test is *asked for a heading and did not travel*,
+## which neither of them does.
+##
+## A SIDESTEP ON THE SECOND STRIKE, because a re-plan alone can hand back the same route: the
+## planner has no idea the bot is wedged, and a wedge that survives one re-plan will survive ten.
+## One cell of lateral push is enough to break the symmetry, and it is thrown away the moment the
+## bot moves again.
+func _check_progress(delta: float) -> void:
+	if _driven or _wish.is_zero_approx():
+		_stuck_for = 0.0
+		_stuck_at = global_position
+		return
+
+	_stuck_for += delta
+	if _stuck_for < stuck_seconds:
+		return
+	# Measured over the whole window rather than per frame, so a bot squeezing past somebody at a
+	# crawl is not mistaken for one that has stopped.
+	var travelled := Vector2(
+		global_position.x - _stuck_at.x, global_position.z - _stuck_at.z
+	).length()
+	_stuck_for = 0.0
+	_stuck_at = global_position
+	if travelled > stuck_distance:
+		_stuck_strikes = 0
+		return
+
+	_stuck_strikes += 1
+	_route.clear()
+	_plan()
+	if _stuck_strikes >= 2:
+		# Perpendicular to whichever way it was trying to go, and the side alternates with the
+		# strike count so a bot that picks the wrong one does not keep picking it.
+		var side := Vector3(-_wish.z, 0.0, _wish.x).normalized()
+		_wish = (side if _stuck_strikes % 2 == 0 else -side)
+		_stuck_strikes = 0
 
 
 ## Arrived at a waypoint: drop it, and if the next one is on another plane, take the shaft that

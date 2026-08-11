@@ -88,6 +88,9 @@ static func _puff_texture() -> ImageTexture:
 	return _falloff
 
 
+## How much wider than this class's own default the caller asked for, from `reach`. Everything a
+## puff does in METRES scales with it; nothing it does in seconds or in alpha does.
+var _spread: float = 1.0
 var _puffs: Array[Dictionary] = []
 var _ring: MeshInstance3D
 var _ring_material: StandardMaterial3D
@@ -98,11 +101,27 @@ var _longest: float = 0.0
 
 ## Throw dust at `at`. `seed_value` should be derived from the stomped cell so both machines
 ## produce the same cloud.
-static func burst(parent: Node, at: Vector3, seed_value: int) -> StompDust:
+##
+## `reach` is how far the shock ring runs, in metres, or 0 for this class's own default.
+##
+## A REACH RATHER THAN A SCALE FACTOR, because both callers know a distance and neither knows a
+## multiplier. [Slam] draws its ring at exactly the radius it shoves through, which is what makes
+## the dust teach the ability's range instead of merely decorating it -- and a caller that had to
+## work out `1.6 / 1.05` to say so would be one refactor of the default away from lying about it.
+## The puffs are carried outward in proportion, so a wider ring is not a narrow burst with a big
+## circle drawn round it. Their SIZE is untouched on purpose: grain of dust is grain of dust, and
+## this file's own hard-won note about clouds that swallow the mouse applies at every reach.
+static func burst(
+	parent: Node, at: Vector3, seed_value: int, reach: float = 0.0
+) -> StompDust:
 	if parent == null:
 		return null
 	var dust := StompDust.new()
 	dust.name = "StompDust"
+	if reach > 0.0:
+		dust._spread = reach / maxf(dust.ring_radius, 0.01)
+		dust.ring_radius = reach
+		dust.burst_speed *= dust._spread
 	parent.add_child(dust)
 	# Positioned after entering the tree, so `at` is honoured as the world point it is whatever
 	# transform the parent carries -- the same reason [RockDebris.burst] does it in this order.
@@ -152,7 +171,13 @@ func _build(seed_value: int) -> void:
 		# centre means the first tenth of a second is every puff stacked in one place, which is the
 		# densest and most opaque moment of the effect and lands squarely over the mouse -- the
 		# thing you are actually meant to be looking at.
-		piece.position = out * rng.randf_range(0.22, 0.44) + Vector3.UP * 0.06
+		#
+		# AND THE RING WIDENS WITH `reach`, which the first version of that argument missed. Held
+		# at a fixed 0.22-0.44 while [Slam] drew its shock out to 1.6m, ten puffs still opened
+		# inside half a metre and rebuilt the exact beige disc this note was written about -- plain
+		# in `slam_03.png` and invisible to every audit in the project. A birth radius is a
+		# distance, so it scales with the other distances here.
+		piece.position = out * rng.randf_range(0.22, 0.44) * _spread + Vector3.UP * 0.06
 		add_child(piece)
 
 		_puffs.append({

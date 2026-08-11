@@ -43,6 +43,24 @@ enum Action {
 	ABILITY,
 	BARRICADE,
 	SWAP_CLASS,
+	## APPENDED, AND THAT IS LOAD-BEARING RATHER THAN TIDY. These are bit positions in the two
+	## `u16` masks `to_bytes` writes, so the ORDER is the wire format: inserting one in the middle
+	## would silently renumber every action below it, and a client one build behind would dig when
+	## it meant to burrow. New actions go on the end. Fourteen used, two spare, and the packet does
+	## not change size until the seventeenth.
+	SLAM,
+	## The Generalist's banner toss. **The same physical key as `SLAM`** -- V carries one meaning
+	## per class, exactly as `ABILITY` does -- and deliberately still its own bit rather than a
+	## second reading of that one.
+	##
+	## Because a bit here is an *intent*, not a keypress. `ABILITY` is one bit for four abilities
+	## because the four really are the same slot: whatever your class's Q is, you pressed Q. The
+	## toss is not that -- it is a second capability on a class that already has one, sharing a key
+	## with a different class's second capability by coincidence of both hands reaching the same
+	## place. Folded together, [Slam] and [BannerToss] would each be reading a bit named for the
+	## other one's ability, and the first person to rebind either key would have to find out the
+	## hard way that the two were secretly one thing.
+	TOSS,
 }
 
 ## Strafe on x, forward/back on y, already radially clamped. Facing-relative conversion is the

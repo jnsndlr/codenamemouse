@@ -137,6 +137,22 @@ const SEATS: Array[Dictionary] = [
 ## five metres is noise; one pile of fifteen is a landmark, and a landmark is the thing worth
 ## fighting over. Merging is what turns a killing ground into an objective instead of litter.
 @export var drop_merge_radius: float = 2.2
+## How far a scruffed carrier's banner skids, in metres.
+##
+## THE STAND-OFF ON ONE SQUARE METRE is what this is for -- see [method Banner.drop], which has the
+## argument. Deliberately smaller than `drop_merge_radius`, because the banner and the cheese are
+## being scattered for two different reasons: the banner skids so the ground around a fallen
+## carrier becomes contestable, and it must not skid so far that the crew who won the fight cannot
+## find it.
+@export var banner_scatter: float = 1.4
+## How far the wedges a scruffed mouse was carrying fly, in metres.
+##
+## WIDER THAN THE BANNER'S, and the reason is capacity. A Brute goes down with up to five wedges on
+## it, and five wedges landing on one spot is the same pile it was carrying -- whoever won the
+## fight sweeps it up in one step and the haul never happened. Spread over a couple of metres it is
+## a *scatter*, which takes time to collect, can be contested while you collect it, and is
+## visibly the wreck of somebody's run.
+@export var cheese_scatter: float = 2.0
 
 @export_group("Bots")
 ## Mice per crew, the player included. Solo play is the same match with AI in every other seat
@@ -544,7 +560,10 @@ func _check_pickup(mouse: Mouse) -> void:
 
 	var theirs := _banners[Team.other(mouse.team)]
 	if not mouse.is_carrying() and theirs.state != Banner.CARRIED:
-		if _within(mouse, theirs, pickup_radius):
+		# `may_take` is the banner's own veto and covers exactly one case: the mouse it was just
+		# knocked out of, for `recovery_seconds`. Without it a Slam is a no-op -- the banner lands
+		# on the carrier's feet and this line hands it straight back on the same tick.
+		if _within(mouse, theirs, pickup_radius) and theirs.may_take(mouse):
 			theirs.take(mouse)
 			event.emit("%s takes the %s banner" % [
 				mouse.get_display_name(), Team.name_of(theirs.team)
@@ -601,16 +620,26 @@ func _check_cheese(mouse: Mouse) -> void:
 
 	# Banking first, so arriving home with a wedge always resolves this frame rather than being
 	# beaten to it by the cache you happen to be standing in.
-	if mouse.get_carried_cheese() > 0:
-		if _nests[mouse.team].at_stores(mouse.global_position):
-			var banked := mouse.release_wedges()
-			gain_cheese(mouse.team, banked)
-			event.emit("%s banks a wedge  (%s: %d)" % [
-				mouse.get_display_name(), Team.name_of(mouse.team), _cheese[mouse.team]
-			])
+	#
+	# `[REVISED]` NO LONGER A `return` WHEN YOU ARE MERELY HOLDING SOMETHING. While a mouse could
+	# carry exactly one wedge, "carrying" and "full" were the same condition and returning here was
+	# right. With capacity they are different: a Brute with two wedges walking over a cache should
+	# take a third, and this line used to be what silently stopped it. The return stays for the
+	# frame a bank actually happens, so arriving home does not also refill you from a pile
+	# somebody dropped on your own doorstep.
+	if mouse.get_carried_cheese() > 0 and _nests[mouse.team].at_stores(mouse.global_position):
+		var banked := mouse.release_wedges()
+		gain_cheese(mouse.team, banked)
+		event.emit("%s banks %d wedge%s  (%s: %d)" % [
+			mouse.get_display_name(), banked, "" if banked == 1 else "s",
+			Team.name_of(mouse.team), _cheese[mouse.team]
+		])
 		return
 
-	if not mouse.has_free_paws():
+	# Full paws, or still stowing the last one. Both are the mouse's own business (see
+	# [method Mouse.has_room]) and neither is worth announcing -- a cache you walk over without
+	# taking from is a thing you can see happening.
+	if not mouse.has_room():
 		return
 
 	var cache := CheeseCache.nearest(get_tree(), mouse.global_position)
@@ -657,6 +686,63 @@ func _drop_cheese(at: Vector3, wedges: int) -> void:
 		return
 
 	_make_cache(here, wedges, 0.22, "DroppedWedge")
+
+
+## A whole armful going down at once: one wedge per landing spot, thrown around the mouse.
+##
+## THIS EXISTS BECAUSE CAPACITY DOES. While everybody carried exactly one wedge, `_drop_cheese`
+## was the whole story and one pile was the right picture. A Brute carries five, and five wedges
+## delivered to a single point is the carrier's own stack handed intact to whoever scruffed it --
+## the haul is not interrupted, it changes owner. Scattered, it is a mess somebody has to stand in
+## the open picking up.
+##
+## SIBLINGS DO NOT MERGE WITH EACH OTHER, AND THAT IS THE WHOLE OF WHY THIS IS NOT A LOOP AROUND
+## `_drop_cheese`. It was, first, and the scatter did almost nothing: `drop_merge_radius` is 2.2 and
+## the scatter is 2.0, so the first wedge landed, made a pile, and every wedge after it was inside
+## that pile's merge radius and joined it. The armful came apart in the air and arrived as one
+## stack -- which is precisely the picture this method exists to prevent, and it was invisible
+## except as an audit that failed about one run in three.
+##
+## SO THE MERGE IS ASKED OF THE WORLD AS IT WAS BEFORE THE DROP. A wedge landing near a pile that
+## was ALREADY there still joins it -- that is the landmark rule from `_drop_cheese` and it is
+## worth keeping, because it is what stops a contested corridor becoming litter over a whole match.
+## What it may not do is merge with its own siblings, because those are not a landmark, they are
+## this one death. One armful, one moment, several places.
+func _scatter_cheese(at: Vector3, wedges: int) -> void:
+	if wedges <= 0:
+		return
+	if wedges == 1 or cheese_scatter <= 0.0:
+		_drop_cheese(at, wedges)
+		return
+
+	# Snapshotted BEFORE anything lands, which is the whole fix. Identity by instance rather than by
+	# position: a pile that grows during this drop is still the same pile, and a fresh one made a
+	# moment ago is still not eligible however close it is.
+	var already: Array = []
+	for node: Node in get_tree().get_nodes_in_group(CheeseCache.GROUP):
+		var pile := node as CheeseCache
+		if pile != null and not pile.is_queued_for_deletion():
+			already.append(pile)
+
+	for i: int in range(wedges):
+		var angle := randf() * TAU
+		# Square-rooted for an even spread over the disc rather than a clump in the middle -- the
+		# same correction `Banner.drop` makes, for the same reason.
+		var reach := sqrt(randf()) * cheese_scatter
+		var here := at + Vector3(cos(angle), 0.0, sin(angle)) * reach
+		here.y = 0.0
+
+		var joined := false
+		for pile: CheeseCache in already:
+			if (
+				is_instance_valid(pile)
+				and pile.global_position.distance_to(here) <= drop_merge_radius
+			):
+				pile.add_wedges(1)
+				joined = true
+				break
+		if not joined:
+			_make_cache(here, 1, 0.22, "DroppedWedge")
 
 
 ## Put cheese in a crew's pile. The only way the number ever goes up.
@@ -724,7 +810,10 @@ func _on_scruffed(mouse: Mouse, by: Mouse) -> void:
 	if mouse.is_carrying():
 		var banner := mouse.get_carried() as Banner
 		if banner != null:
-			banner.drop()
+			# SCATTERED HERE AND NOWHERE ELSE. Every other drop in the game is a rule setting the
+			# banner down -- a carrier refused a shaft, a carrier who stopped existing -- and those
+			# should land where the rule caught them. This one is somebody being put on their back.
+			banner.drop(banner_scatter)
 			event.emit("the %s banner is dropped" % Team.name_of(banner.team))
 
 	# What you were hauling lands where you fell, exactly as the banner does and for the same
@@ -732,8 +821,10 @@ func _on_scruffed(mouse: Mouse, by: Mouse) -> void:
 	# vanished on a scruff would make escorting a carrier pointless and raiding free.
 	var wedges := mouse.release_wedges()
 	if wedges > 0:
-		_drop_cheese(mouse.global_position, wedges)
-		event.emit("%s drops a wedge" % mouse.get_display_name())
+		_scatter_cheese(mouse.global_position, wedges)
+		event.emit("%s drops %d wedge%s" % [
+			mouse.get_display_name(), wedges, "" if wedges == 1 else "s"
+		])
 
 	# READ BEFORE THE CHARGE. A crew on its last cheese pays for this respawn at the normal rate
 	# and goes broke for the next one -- charging first would take the cheese and then bill the

@@ -24,10 +24,13 @@ const COLORS: Array[Color] = [
 const NAMES: Array[String] = ["BLUE", "RED"]
 
 ## Collision layer bits, one per crew, well clear of the world bit and the four plane bits
-## TunnelNetwork owns (1 and 2..5). A mouse sits on its own crew's layer and masks the OTHER
-## crew's, which is exactly GDD section 6's recommendation -- enemies collide, allies pass
-## through -- expressed as two numbers instead of a rule anyone has to remember. It is also
-## what will make the Brute's cork work at M8 without a special case.
+## TunnelNetwork owns (1 and 2..5).
+##
+## `[REVISED at M8]` A mouse now masks BOTH crews, so every mouse is solid to every other one --
+## see the long note on `Mouse.set_plane`. These stay one bit per crew even though nothing
+## currently distinguishes them, because the two are still separately addressable and the day
+## something wants to (a Juggernaut its own crew can shelter behind, a hazard that only reads one
+## side) it should be a mask change rather than a new layer scheme.
 const LAYER_BITS: Array[int] = [1 << 6, 1 << 7]
 
 

@@ -1206,6 +1206,18 @@ func _apply_earth(bytes: PackedByteArray) -> void:
 				_tunnels.forget_cell(plane, cell)
 			TunnelView.Kind.FORGET_SHAFT:
 				_tunnels.forget_shaft(plane, cell)
+			TunnelView.Kind.SHORED:
+				# THE BOOK FIRST, THEN THE PROP, and the prop is placed here rather than left to
+				# the ability -- the same shape [BarricadeRock.reproduce] has, and for the same
+				# reason: the Engineer's node lives on the Engineer's mouse, which on this machine
+				# is somebody else's puppet three hundred miles away. Removal is NOT mirrored here,
+				# because timbers free themselves off `shoring_broke` and `forget_shoring` emits
+				# it -- so there is one place that decides when they come down and two that decide
+				# when they go up, which is the right way round.
+				if _tunnels.adopt_shoring(plane, cell):
+					Shoring.place(_tunnels, plane, cell)
+			TunnelView.Kind.UNSHORED:
+				_tunnels.forget_shoring(plane, cell)
 		_earth_taken += 1
 
 

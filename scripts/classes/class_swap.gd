@@ -90,7 +90,7 @@ func prompt() -> String:
 ## Nothing consumes the press any more. `set_input_as_handled` used to stop two ability nodes
 ## reacting to the same key; the class gate below was always what actually did that work, since
 ## only one node's `owner_class` can match the mouse.
-## A CLIENT ASKS AND WAITS, with no local guess (M7). This is the one of the five with nothing to
+## A CLIENT ASKS AND WAITS, with no local guess (M7). This is the one control with nothing to
 ## predict: a swap is instantaneous, the new class rides in the very next pose -- two spare bits of
 ## the flag byte, see `snapshot.gd` -- and a client that swapped itself would be re-typing the
 ## mouse a thirtieth of a second before being told the same thing, or, on the run where the server
