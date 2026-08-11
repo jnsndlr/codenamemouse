@@ -107,6 +107,29 @@ func _wait_to_stow(mouse: Mouse, frames: int = 900) -> bool:
 	return false
 
 
+## Hold until nothing is bouncing, or give up.
+##
+## `[ADDED with flight]` A DROP IS NOT INSTANT ANY MORE and three checks in this file went red the
+## moment it stopped being. Wedges spend about half a second in the air (see [FlyingWedge]), and
+## during that time they are on nobody's books -- not in a mouse's paws, not in a pile -- so any
+## count taken two frames after a scruff is a count of a world mid-throw. That is *not* a bug in
+## the conservation rule; it is this file measuring at the wrong moment, and the fix is to say when
+## the moment is rather than to loosen what is asserted.
+##
+## THE WAITING IS ITSELF PART OF THE INVARIANT. If a wedge ever failed to settle it would never
+## become cheese, and this would time out and return false -- which is why the callers below assert
+## on the return value rather than discarding it. A silent sleep would turn a lost wedge into a
+## check that quietly passed a moment later.
+func _wait_for_landing(frames: int = 300) -> bool:
+	for i in range(frames):
+		if not FlyingWedge.any_in_flight(self):
+			# One more, so the `settled` handlers have run and the piles they make exist.
+			await process_frame
+			return true
+		await process_frame
+	return false
+
+
 func _fresh_cache(at: Vector3, wedges: int = 3) -> CheeseCache:
 	var cache := Node3D.new()
 	cache.set_script(load("res://scripts/game/cheese_cache.gd"))
@@ -257,11 +280,16 @@ func _check_drop_on_scruff() -> void:
 	_blue.take_hit(9999.0, fell_at + Vector3(1.0, 0.0, 0.0), 0.0, _red)
 	await process_frame
 	await process_frame
+	# THE PAWS EMPTY IMMEDIATELY EVEN THOUGH THE PILE DOES NOT APPEAR IMMEDIATELY, and asserting
+	# both halves in that order is the point: the wedge leaves the mouse on the tick of the scruff
+	# and exists as a thrown object for half a second before it is cheese anybody can take.
 	_ok("paws empty after the scruff", _blue.get_carried_cheese() == 0)
+	_ok("the wedge is in the air rather than nowhere", FlyingWedge.any_in_flight(self))
 
+	_ok("and it lands", await _wait_for_landing())
 	var dropped := CheeseCache.nearest(self, fell_at)
-	_ok("a wedge is lying where they fell",
-		dropped != null and dropped.global_position.distance_to(fell_at) < 1.0,
+	_ok("a wedge is lying near where they fell",
+		dropped != null and dropped.global_position.distance_to(fell_at) < 2.5,
 		"nearest pile is %s" % ("none" if dropped == null else str(dropped.global_position)))
 
 	# It waits. No clock, no fade, no quiet disappearance -- a pile you can win by ignoring is
@@ -305,7 +333,8 @@ func _check_an_armful_scatters() -> void:
 
 	_blue.take_hit(9999.0, here + Vector3(1.0, 0.0, 0.0), 0.0, _red)
 	await process_frame
-	await process_frame
+	_ok("the armful is in the air", FlyingWedge.any_in_flight(self))
+	_ok("and every wedge of it comes down", await _wait_for_landing())
 
 	var found := 0
 	var piles := 0

@@ -38,8 +38,19 @@ signal refused(reason: String)
 ## How far it goes, in cells -- and a cell is a metre (`TunnelChunks.CELL`).
 @export var range_cells: float = 4.0
 @export var cooldown: float = 10.0
-## Seconds in the air. Short: this is a shove of a pole, not a punt.
-@export var flight_seconds: float = 0.45
+## Seconds from leaving your paws to first hitting the ground.
+##
+## `[REVISED]` 0.7, UP FROM 0.45, AND IT IS A GAMEPLAY NUMBER RATHER THAN AN ANIMATION ONE. This is
+## how long the banner is uncatchable and in plain view -- the window in which the crew that just
+## lost it can get somebody under where it is going. At 0.45 the throw was over before anybody
+## could read it, which made the pass an instant teleport of the objective and gave the defending
+## crew nothing to react to; the whole design of the ability (see the header) is that it is worth
+## having only because somebody else is there, and that needs a moment in which being there is
+## visibly a choice.
+##
+## It does not change the RANGE. The launch is solved to reach the aim point in exactly this long
+## (see [method Banner.throw]), so a longer flight is a higher, slower arc over the same ground.
+@export var flight_seconds: float = 0.7
 
 var _cooldown_left: float = 0.0
 

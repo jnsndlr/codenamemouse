@@ -153,6 +153,11 @@ const SEATS: Array[Dictionary] = [
 ## a *scatter*, which takes time to collect, can be contested while you collect it, and is
 ## visibly the wreck of somebody's run.
 @export var cheese_scatter: float = 2.0
+## What a wedge in the air looks like. Matched to [CheeseCache]'s own defaults rather than read off
+## a cache, because a scatter can happen where there is no cache to ask -- and a wedge that changed
+## colour on landing would make the throw read as a swap rather than as a throw.
+@export var dropped_cheese_color: Color = Color(0.93, 0.78, 0.32)
+@export var dropped_wedge_size: float = 0.16
 
 @export_group("Bots")
 ## Mice per crew, the player included. Solo play is the same match with AI in every other seat
@@ -696,53 +701,69 @@ func _drop_cheese(at: Vector3, wedges: int) -> void:
 ## the haul is not interrupted, it changes owner. Scattered, it is a mess somebody has to stand in
 ## the open picking up.
 ##
-## SIBLINGS DO NOT MERGE WITH EACH OTHER, AND THAT IS THE WHOLE OF WHY THIS IS NOT A LOOP AROUND
-## `_drop_cheese`. It was, first, and the scatter did almost nothing: `drop_merge_radius` is 2.2 and
-## the scatter is 2.0, so the first wedge landed, made a pile, and every wedge after it was inside
-## that pile's merge radius and joined it. The armful came apart in the air and arrived as one
-## stack -- which is precisely the picture this method exists to prevent, and it was invisible
-## except as an audit that failed about one run in three.
+## `[REVISED]` THE WEDGES ARE THROWN AND THE PILES ARE MADE WHERE THEY LAND, rather than the piles
+## being placed at spots a random number picked. See [FlyingWedge] for why that is one system
+## instead of two. What this method now does is choose a direction and a distance, hand both to a
+## wedge, and wait to be told where it stopped.
 ##
-## SO THE MERGE IS ASKED OF THE WORLD AS IT WAS BEFORE THE DROP. A wedge landing near a pile that
-## was ALREADY there still joins it -- that is the landmark rule from `_drop_cheese` and it is
-## worth keeping, because it is what stops a contested corridor becoming litter over a whole match.
-## What it may not do is merge with its own siblings, because those are not a landmark, they are
-## this one death. One armful, one moment, several places.
+## SIBLINGS DO NOT MERGE WITH EACH OTHER, AND THAT IS THE OLDEST RULE HERE. The first version of
+## this looped `_drop_cheese`, and the scatter did almost nothing: `drop_merge_radius` is 2.2
+## against a 2.0 scatter, so the first wedge made a pile and every wedge after it was inside that
+## pile's radius and joined it. The armful came apart in the air and arrived as one stack -- the
+## exact picture this method exists to prevent, invisible except as an audit that failed about one
+## run in three.
+##
+## FLIGHT MAKES THAT RULE HARDER RATHER THAN EASIER, which is worth saying out loud: the wedges now
+## land at *different times*, so "the piles that existed before the drop" is no longer the same set
+## as "the piles that exist when this wedge lands". The snapshot below is therefore taken once, at
+## launch, and carried to every wedge in the armful through the binding on `settled`. A wedge
+## landing near a pile that was already lying there still joins it -- that is the landmark rule and
+## it is what stops contested ground becoming litter over a match. What it may not do is join a
+## pile its own siblings made a fifth of a second ago.
 func _scatter_cheese(at: Vector3, wedges: int) -> void:
 	if wedges <= 0:
 		return
-	if wedges == 1 or cheese_scatter <= 0.0:
-		_drop_cheese(at, wedges)
-		return
 
-	# Snapshotted BEFORE anything lands, which is the whole fix. Identity by instance rather than by
-	# position: a pile that grows during this drop is still the same pile, and a fresh one made a
-	# moment ago is still not eligible however close it is.
-	var already: Array = []
+	# Snapshotted BEFORE anything is thrown. Identity by instance rather than by position: a pile
+	# that grows during this drop is still the same pile, and one made by a sibling mid-flight is
+	# still not eligible however close it lands.
+	var already: Array[CheeseCache] = []
 	for node: Node in get_tree().get_nodes_in_group(CheeseCache.GROUP):
 		var pile := node as CheeseCache
 		if pile != null and not pile.is_queued_for_deletion():
 			already.append(pile)
 
-	for i: int in range(wedges):
-		var angle := randf() * TAU
-		# Square-rooted for an even spread over the disc rather than a clump in the middle -- the
-		# same correction `Banner.drop` makes, for the same reason.
-		var reach := sqrt(randf()) * cheese_scatter
-		var here := at + Vector3(cos(angle), 0.0, sin(angle)) * reach
-		here.y = 0.0
+	if cheese_scatter <= 0.0:
+		_drop_cheese(at, wedges)
+		return
 
-		var joined := false
-		for pile: CheeseCache in already:
-			if (
-				is_instance_valid(pile)
-				and pile.global_position.distance_to(here) <= drop_merge_radius
-			):
-				pile.add_wedges(1)
-				joined = true
-				break
-		if not joined:
-			_make_cache(here, 1, 0.22, "DroppedWedge")
+	# THE SURFACE OVER WHERE YOU FELL, not where you fell. Cheese has never gone underground (see
+	# `_drop_cheese`), so a mouse scruffed three planes down spills onto the lawn above -- and a
+	# wedge launched from the corridor it actually died in would fly up through the earth.
+	var from := Vector3(at.x, 0.0, at.z)
+	var field := get_tree().get_first_node_in_group(&"cheese_field")
+	for i: int in range(wedges):
+		# Spread evenly around, with a nudge so an armful is not a perfect rosette.
+		var heading := TAU * (float(i) + randf() * 0.7) / float(wedges)
+		# Square-rooted so the landing spots are spread evenly over the disc rather than bunched in
+		# the middle. Divided down because the bounces carry a wedge past where it first hits --
+		# this is the *throw*, not the resting place, and the resting place is what has to stay
+		# inside `cheese_scatter`.
+		var reach := sqrt(randf()) * cheese_scatter * 0.62
+		var wedge := FlyingWedge.toss(
+			field if field != null else self, from, heading, reach,
+			dropped_cheese_color, dropped_wedge_size
+		)
+		wedge.settled.connect(_land_wedge.bind(already))
+
+
+## One wedge has stopped rolling. The only place a scatter turns into cheese anybody can pick up.
+func _land_wedge(_wedge: FlyingWedge, at: Vector3, eligible: Array[CheeseCache]) -> void:
+	for pile: CheeseCache in eligible:
+		if is_instance_valid(pile) and pile.global_position.distance_to(at) <= drop_merge_radius:
+			pile.add_wedges(1)
+			return
+	_make_cache(at, 1, 0.22, "DroppedWedge")
 
 
 ## Put cheese in a crew's pile. The only way the number ever goes up.

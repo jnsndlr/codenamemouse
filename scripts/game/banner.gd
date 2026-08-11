@@ -56,6 +56,35 @@ const POLE_HEIGHT: float = 0.55
 @export var idle_bob: float = 0.05
 @export var idle_spin: float = 0.9
 
+@export_group("Falling")
+## Metres per second downward while it is loose. Matched to [FlyingWedge] rather than to
+## [RockDebris], for the reason that file sets out: cheese and the banner are objectives coming
+## loose and both crews are being asked to watch where they go, whereas debris is punctuation. At
+## 9.0 a fumbled banner was on the floor in half a second and read as a teleport with a stutter.
+@export var gravity: float = 6.0
+## How much of its downward speed the banner keeps on hitting the lawn.
+##
+## LOW, AND LOWER THAN THE CHEESE'S, because this is a pole with a cloth on it and not a wedge. A
+## banner that hopped like a ball would read as a pickup item in a different game; what it should
+## do is come down, kick once, and flop. It is also what keeps a toss's range honest -- the aim
+## point is where it first hits, so anything it gains after that is range the ability did not pay
+## for.
+@export_range(0.0, 1.0, 0.05) var bounce: float = 0.22
+## What a bounce costs it sideways. This is the friction, and it is high for the same reason the
+## bounce is low: a flag lands and stops.
+@export_range(0.0, 1.0, 0.05) var skid: float = 0.45
+## Below this speed, on the ground, it has come to rest.
+@export var rest_speed: float = 0.5
+## How much further than its ballistic range the bounce and skid carry it.
+##
+## MEASURED, NOT DERIVED, and it exists so that callers can go on thinking in the distance they
+## actually mean. `drop(scatter)` is documented in metres and `MatchDirector.banner_scatter` is a
+## design number about how far a fumbled banner ends up -- so the launch is solved backwards from
+## a wanted RESTING distance, and this is the correction between where it first hits and where it
+## stops. Change `bounce` or `skid` and this wants re-measuring; `match_audit`'s `BANNER_FLOP`
+## budget is what will complain if it is not.
+@export var flop_stretch: float = 1.15
+
 var team: int = Team.BLUE
 var state: int = AT_NEST
 var carrier: Mouse = null
@@ -66,13 +95,13 @@ var _left_alone: float = 0.0
 ## outlive the drop it describes.
 var _fumbled_by: Mouse = null
 var _age: float = 0.0
-## Seconds of arc still to run, and the two ends of it. Airborne is not a STATE -- see
-## [method throw] for why the banner is already DROPPED at its destination while it is still in
-## the air.
-var _flight_left: float = 0.0
-var _flight_time: float = 0.0
-var _flight_from: Vector3 = Vector3.ZERO
-var _flight_to: Vector3 = Vector3.ZERO
+## How it is moving while it is loose and still settling. Airborne is not a STATE -- see
+## [method throw] for why the banner is already DROPPED while it is still in the air.
+var _velocity: Vector3 = Vector3.ZERO
+## Radians per second of tumble, decaying with every bounce. Not a physics quantity, a legibility
+## one: a banner that translated without turning read as a sprite being slid across the lawn.
+var _tumble: Vector3 = Vector3.ZERO
+var _falling: bool = false
 var _cloth: MeshInstance3D
 ## A banner this machine does not decide anything about (M7). Same three states, same bob and
 ## spin, same countdown on the HUD -- what stops is the countdown *expiring into an action*.
@@ -127,8 +156,16 @@ func may_take(who: Mouse) -> bool:
 	return _left_alone >= recovery_seconds
 
 
+## Loose and still moving: thrown, or knocked out of somebody and still bouncing.
+##
+## `[REVISED]` NOT MERELY "IN THE AIR" ANY MORE, and the widening is deliberate. It used to mean
+## "inside the 0.45s of a toss"; it now means "has not come to rest", which also covers the tumble
+## after a scruff and the skid after a throw lands. That makes the rule in [method may_take] the
+## one it always should have been -- **you cannot grab a banner that is still bouncing** -- and
+## costs a scrambling crew about half a second, during which the thing they are scrambling for is
+## visibly not yet on the floor.
 func is_airborne() -> bool:
-	return _flight_left > 0.0
+	return _falling
 
 
 func take(by: Mouse) -> void:
@@ -142,21 +179,26 @@ func take(by: Mouse) -> void:
 
 ## Put down where it is -- scruffed, or carried somewhere the banner may not go.
 ##
-## `scatter` throws it a metre or two in a direction nobody chose. **Zero by default and supplied
-## only by the scruff**, which is the distinction: a banner that could not go underground is being
-## *set down* by a rule, and it should land where the rule caught you. A banner coming off a mouse
-## somebody just put on its back is being *dropped*, and it should skitter.
+## `scatter` throws it clear in a direction nobody chose. **Zero by default and supplied only by
+## the scruff**, which is the distinction: a banner that could not go underground is being *set
+## down* by a rule and should land where the rule caught you. A banner coming off a mouse somebody
+## just put on its back is being *dropped*, and it should tumble.
 ##
 ## WHY THAT IS WORTH A RANDOM NUMBER. The banner used to land exactly on the fallen carrier's feet,
-## which quietly made every scruff into a stand-off on one square metre: the killer is standing on
-## it, `recovery_seconds` does not bind them, and there is no ground to contest. A metre of skid
-## turns that into a scramble, gives an arriving team mate somewhere to reach for, and -- the part
-## that matters against a Brute -- means a carrier scruffed at a chokepoint does not hand the
-## banner to whoever is holding it.
+## which quietly made every scruff a stand-off on one square metre: the killer is standing on it,
+## `recovery_seconds` does not bind them, and there is no ground to contest. A metre or two of
+## tumble turns that into a scramble, gives an arriving team mate somewhere to reach for, and --
+## the part that matters against a Brute -- means a carrier scruffed at a chokepoint does not hand
+## the banner straight to whoever was holding it.
 ##
-## SERVER-SIDE ONLY IN PRACTICE, and it needs no seed. A client is a puppet whose banner position
-## arrives in the next snapshot, so the two machines cannot disagree about where it went for longer
-## than a tick.
+## `[REVISED]` IT IS THROWN NOW RATHER THAN TELEPORTED. `scatter` used to be a landing point picked
+## with a random number and assigned on the spot; it is a *distance to throw it* now, and where it
+## stops is whatever the bounce and the friction decide. The rest of the argument above is
+## unchanged, because it was never about the arithmetic.
+##
+## SERVER-SIDE, AND THE CLIENTS GET IT FREE. A banner's position has always been three floats in
+## every snapshot, so a puppet does not simulate any of this -- it is handed the tumble a frame at
+## a time, which is why [method _process] leaves a puppet's height alone.
 func drop(scatter: float = 0.0) -> void:
 	var at := global_position
 	if carrier != null:
@@ -168,15 +210,14 @@ func drop(scatter: float = 0.0) -> void:
 		carrier = null
 	state = DROPPED
 	_left_alone = 0.0
-	_flight_left = 0.0
-	var here := Vector3(at.x, 0.0, at.z)
-	if scatter > 0.0:
-		var angle := randf() * TAU
-		# Square-rooted so the landing spots are spread evenly over the disc rather than bunched at
-		# its centre, which is what a raw `randf()` radius gives you.
-		var reach := sqrt(randf()) * scatter
-		here += Vector3(cos(angle), 0.0, sin(angle)) * reach
-	global_position = here
+	global_position = Vector3(at.x, 0.0, at.z)
+	if scatter > 0.0 and not _puppet:
+		var heading := randf() * TAU
+		# Square-rooted so the landing spots spread evenly over the disc rather than bunching at
+		# its centre, which is what a raw `randf()` radius gives you. Divided by `flop_stretch`
+		# because `scatter` is where it should END UP and the launch only decides where it first
+		# comes down.
+		_start_falling(_ballistic(heading, sqrt(randf()) * scatter / maxf(flop_stretch, 0.01)))
 	dropped.emit(self, global_position)
 
 
@@ -190,9 +231,21 @@ func drop(scatter: float = 0.0) -> void:
 ## and it is *there*. The arc is presentation, and it reaches a client for free because the host
 ## sends the banner's position every tick anyway.
 ##
-## NOBODY MAY TAKE IT UNTIL IT LANDS -- see [method may_take]. That is what stops the destination
-## being pickable before the thing visibly arrives there, which would be the one place this
-## shortcut could have been felt.
+## NOBODY MAY TAKE IT UNTIL IT COMES TO REST -- see [method may_take]. That is what stops the
+## destination being pickable before the thing visibly arrives there, which would be the one place
+## this shortcut could have been felt.
+##
+## `[REVISED]` BALLISTIC RATHER THAN INTERPOLATED. This used to lerp along a hand-drawn parabola
+## for a fixed 0.45s and then simply stop, which is the one moment of a throw everybody watches and
+## it looked like the banner had been switched off. It is a launch velocity now, solved so the
+## banner is back at ground level after `flight` seconds, and what happens when it gets there is
+## whatever [method _fall] decides -- a low kick and a short skid.
+##
+## THE AIM POINT IS WHERE IT FIRST HITS, NOT WHERE IT STOPS, and that is a design decision rather
+## than an approximation. `bounce` is deliberately low so the difference is a few tens of
+## centimetres; making it zero would mean a banner that lands like a dropped brick, and solving the
+## launch backwards from a wanted resting place would put the arithmetic back that the change was
+## made to remove. Four cells is four cells, plus a flop.
 func throw(to: Vector3, flight: float = 0.45) -> void:
 	var from := carrier.global_position if carrier != null else global_position
 	if carrier != null:
@@ -201,18 +254,97 @@ func throw(to: Vector3, flight: float = 0.45) -> void:
 		carrier = null
 	state = DROPPED
 	_left_alone = 0.0
-	_flight_from = Vector3(from.x, 0.0, from.z)
-	_flight_to = Vector3(to.x, 0.0, to.z)
-	_flight_time = maxf(flight, 0.01)
-	_flight_left = _flight_time
-	global_position = _flight_from
-	dropped.emit(self, _flight_to)
+	global_position = Vector3(from.x, 0.0, from.z)
+	if _puppet:
+		# A puppet is told where the banner is thirty times a second and simulates none of it. It
+		# still has to leave the carrier's hands, which the lines above have done.
+		dropped.emit(self, Vector3(to.x, 0.0, to.z))
+		return
+
+	var span := maxf(flight, 0.05)
+	var across := Vector3(to.x - from.x, 0.0, to.z - from.z) / span
+	# The vertical that brings it back to the floor after exactly `span` seconds: rise and fall are
+	# symmetric, so the launch speed is half of what gravity takes away over the whole flight.
+	_start_falling(across + Vector3.UP * gravity * span * 0.5)
+	dropped.emit(self, Vector3(to.x, 0.0, to.z))
+
+
+## The launch velocity that lands `reach` metres away along `heading`.
+##
+## FIFTY DEGREES, and the same reasoning [FlyingWedge] gives: 45 maximises range and skims, which
+## at mouse scale reads as the banner being kicked rather than thrown. Slightly steeper buys enough
+## time in the air to see it turning over.
+##
+## Used by the fumble and not by the toss, because the two are asking different questions. A
+## fumble knows how FAR it wants the banner to go and does not care how long it takes; a throw
+## knows where it is going and wants to be there in a fixed moment, so it solves for a flight time
+## instead. Sharing one solver between them would mean one of the two lying about its inputs.
+func _ballistic(heading: float, reach: float) -> Vector3:
+	# 58 degrees, steepened alongside `gravity` for the same reason [FlyingWedge] steepens: for a
+	# wanted distance, angle and gravity are the two levers on flight time and neither of them
+	# touches where it lands.
+	var angle := deg_to_rad(58.0)
+	var speed := sqrt(maxf(reach, 0.05) * gravity / maxf(sin(angle * 2.0), 0.01))
+	return (
+		Vector3(cos(heading), 0.0, sin(heading)) * speed * cos(angle)
+		+ Vector3.UP * speed * sin(angle)
+	)
+
+
+## Arm the tumble. The one door into it, so a drop and a throw cannot drift into having different
+## ideas about what "loose and still moving" means.
+func _start_falling(velocity: Vector3) -> void:
+	_velocity = velocity
+	_falling = true
+	# Turned mostly about the upright, with a wobble on the other two: a banner spins on its pole
+	# far more readily than it cartwheels, and the first version tumbled it evenly on all three
+	# axes, which read as a thrown stick.
+	_tumble = Vector3(
+		randf_range(-1.4, 1.4), randf_range(-5.0, 5.0), randf_range(-1.4, 1.4)
+	)
+
+
+## One tick of being loose. Gravity, a low kick off the lawn, and friction until it stops.
+##
+## HAND-INTEGRATED, NO RIGID BODY, exactly as [RockDebris] and [FlyingWedge] are, and here the case
+## is stronger than for either of them: the banner is the object both crews are making decisions
+## about, its position is in every snapshot, and handing that to a physics engine would mean the
+## thing the match is *about* moves for reasons the rules cannot see. Four lines of integration
+## are four lines everybody can read.
+func _fall(delta: float) -> void:
+	_velocity.y -= gravity * delta
+	global_position += _velocity * delta
+	rotation += _tumble * delta
+
+	if global_position.y > 0.0:
+		return
+
+	global_position.y = 0.0
+	_velocity.y = -_velocity.y * bounce
+	_velocity.x *= skid
+	_velocity.z *= skid
+	_tumble *= skid
+	# ON THE FLOOR AND SLOW ENOUGH. Asked only on contact, because a banner at the top of its arc is
+	# momentarily this slow and would otherwise come to rest in mid-air.
+	if _velocity.length() >= rest_speed:
+		return
+	_velocity = Vector3.ZERO
+	_tumble = Vector3.ZERO
+	_falling = false
+	# Set flat rather than left wherever the tumble finished. A banner is read at a glance from
+	# across a yard and it has one correct silhouette; letting it come to rest at whatever pitch it
+	# happened to stop at made half of them look like litter.
+	rotation = Vector3(0.0, rotation.y, 0.0)
 
 
 func send_home() -> void:
 	if carrier != null:
 		carrier.release_carry()
 		carrier = null
+	_falling = false
+	_velocity = Vector3.ZERO
+	_tumble = Vector3.ZERO
+	rotation = Vector3.ZERO
 	state = AT_NEST
 	_left_alone = 0.0
 	_fumbled_by = null
@@ -278,21 +410,12 @@ func _process(delta: float) -> void:
 		_left_alone += delta
 		if _left_alone >= return_seconds and not _puppet:
 			send_home()
-		# The arc, on every machine. A puppet runs it too: its banner is DROPPED at the far end
-		# already, so without this it would appear at the destination while the thrower's own
-		# screen still had it in the air, and the two would disagree about the only part of a toss
-		# anybody actually watches.
-		if _flight_left > 0.0:
-			_flight_left = maxf(0.0, _flight_left - delta)
-			var travelled := 1.0 - _flight_left / _flight_time
-			global_position = _flight_from.lerp(_flight_to, travelled)
-			# A parabola that is zero at both ends and peaks halfway. Height scales with the throw,
-			# so a short toss is a flick and a full-range one is a proper heave.
-			position.y = (
-				_flight_from.distance_to(_flight_to) * 0.22
-				* travelled * (1.0 - travelled) * 4.0
-			)
-			rotation.y = _age * idle_spin * 3.0
+		# STILL MOVING, so nothing below this runs -- not the idle spin, not the bob, and not the
+		# resting height, all three of which would fight the tumble for the same three floats.
+		# A puppet never gets here: `drop` and `throw` do not arm the fall on one, because its
+		# banner's whole trajectory arrives in the snapshots a frame at a time.
+		if _falling:
+			_fall(delta)
 			return
 
 	# At rest, and only at rest. A carried banner spinning on someone's back reads as a pickup

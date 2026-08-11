@@ -264,12 +264,29 @@ func _check_scruff_drops() -> void:
 	_expect(runner.is_scruffed(), "a big enough hit scruffs")
 	_expect(not runner.is_carrying(), "a scruffed mouse is not carrying anything")
 	_expect(theirs.state == Banner.DROPPED, "the banner is dropped, not returned")
+	# LOOSE AND STILL MOVING IS ITS OWN MOMENT, and asserting it before waiting is what stops the
+	# check below from passing against a banner that never tumbled at all.
+	_expect(theirs.is_airborne(), "and it is thrown clear rather than set down on the spot")
+	_expect(not theirs.may_take(runner), "nobody may take it while it is still bouncing")
+
+	await _advance(2.5)
+	_expect(not theirs.is_airborne(), "it comes to rest")
 	var skid := Vector2(
 		theirs.global_position.x - where.x, theirs.global_position.z - where.z
 	).length()
 	_expect(
-		skid <= _director.banner_scatter + 0.01,
-		"the banner lands within a skid of where the carrier fell (%.2fm)" % skid
+		skid <= _director.banner_scatter + BANNER_FLOP,
+		"the banner comes to rest within a tumble of where the carrier fell (%.2fm)" % skid
+	)
+	# ON THE FLOOR RATHER THAN STOPPED IN MID-AIR. Measured against the idle bob rather than against
+	# zero: a banner at rest has always floated a few centimetres and back again (`idle_bob`), and
+	# it picks that up again the moment the tumble hands control back. What this rules out is the
+	# real failure -- a settle test that fires at the top of an arc and leaves the banner hanging.
+	var floor_height := maxf(theirs.get_home().y, 0.0) + theirs.idle_bob + 0.01
+	_expect(
+		theirs.global_position.y <= floor_height,
+		"and on the floor rather than stopped in mid-air (y=%.3f, floor %.3f)"
+			% [theirs.global_position.y, floor_height]
 	)
 	_expect(
 		theirs.global_position.distance_to(theirs.get_home()) > 1.0,
@@ -1392,6 +1409,16 @@ func _check_shore_up() -> void:
 	)
 
 
+## How far a banner is allowed to travel past the spot it first hits, in metres.
+##
+## THE ONE NUMBER THAT GUARDS THE TOSS'S RANGE. A thrown banner is ballistic to the cursor and then
+## bounces (GDD section 4, and [method Banner.throw]), so the ability's four cells are four cells
+## *plus a flop*. Stated here as a budget rather than folded into each tolerance, because the thing
+## being protected is a design number: raise `Banner.bounce` and the effective range of the
+## Generalist's whole ability grows, silently, and this is the only place that would object.
+const BANNER_FLOP: float = 0.6
+
+
 ## The Generalist's banner toss: the first answer in the game to a Brute already in the doorway
 ## (GDD sections 4 and 5).
 ##
@@ -1451,11 +1478,21 @@ func _check_banner_toss() -> void:
 	_expect(not theirs.is_airborne(), "it lands")
 	_expect(theirs.may_take(waiting), "and is anybody's once it does")
 
-	# SHORT OF THE CURSOR LANDS UNDER IT. Two metres asked for, two metres travelled.
+	# SHORT OF THE CURSOR LANDS UNDER IT -- plus the flop.
+	#
+	# `[REVISED]` THE TOLERANCE IS ASYMMETRIC NOW, AND THAT IS THE ASSERTION. The banner is thrown
+	# ballistically and then bounces, so the cursor is where it FIRST HITS and it keeps a little
+	# after that (see [method Banner.throw]). A symmetric window around the aim point would either
+	# have to be wide enough to hide a throw that undershot, or would fail on the flop it is
+	# supposed to have. So: never short, and never more than a flop long.
 	var flat := Vector2(theirs.global_position.x - from.x, theirs.global_position.z - from.z)
 	_expect(
-		absf(flat.length() - 2.0) < 0.3,
-		"a throw inside the range lands under the cursor (%.2fm)" % flat.length()
+		flat.length() >= 1.9,
+		"a throw inside the range reaches the cursor (%.2fm of 2.0m)" % flat.length()
+	)
+	_expect(
+		flat.length() <= 2.0 + BANNER_FLOP,
+		"and does not bounce halfway across the yard (%.2fm)" % flat.length()
 	)
 
 	# AND PAST IT IS CLAMPED RATHER THAN REFUSED, because a throw that failed for being aimed too
@@ -1467,9 +1504,19 @@ func _check_banner_toss() -> void:
 	_toss(throw)
 	await _advance(1.0)
 	flat = Vector2(theirs.global_position.x - from.x, theirs.global_position.z - from.z)
+	var reach := throw.range_cells * TunnelNetwork.CELL
 	_expect(
-		absf(flat.length() - throw.range_cells * TunnelNetwork.CELL) < 0.3,
-		"a throw aimed past the range goes as far as it goes (%.2fm)" % flat.length()
+		flat.length() >= reach - 0.1,
+		"a throw aimed past the range still goes the full range (%.2fm of %.2fm)"
+			% [flat.length(), reach]
+	)
+	# THE FLOP IS CAPPED, and this is the line that keeps the range honest. Four cells is the
+	# ability's number; if `Banner.bounce` were ever raised, the effective range would quietly grow
+	# with it and nothing else in the project would notice.
+	_expect(
+		flat.length() <= reach + BANNER_FLOP,
+		"and the bounce does not quietly extend it (%.2fm of at most %.2fm)"
+			% [flat.length(), reach + BANNER_FLOP]
 	)
 
 	# THE COOLDOWN IS REAL, asked after a throw rather than by reading the field back.

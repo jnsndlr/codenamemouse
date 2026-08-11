@@ -66,9 +66,10 @@ Deliberately unmodified playground CTF (Pillar 1):
 - Cheese is gathered from **caches** on the map and carried home. `[REVISED]` **How much you can
   carry is a class stat** — Sneak 1, Engineer 2, Generalist 3, **Brute 5** — and there are
   **five seconds between wedges**, so filling up is a commitment rather than a walk-over.
-- Scruffed mice **drop carried cheese** where they fall. `[REVISED]` A full load **scatters** over a
-  couple of metres rather than landing as one parcel, and **a scruffed carrier's banner skids** up
-  to 1.4m.
+- Scruffed mice **drop carried cheese** where they fall. `[REVISED]` A full load is **thrown clear**
+  — the wedges arc out, bounce and skid to rest over a couple of metres rather than landing as one
+  parcel — and **a scruffed carrier's banner tumbles** up to about 1.4m. Roughly a second of it
+  being visibly loose before anybody can pick it up.
 - **The world takes cheese too** — crows raid your stores, ants haul caches away (§7).
 - Enemy stores are **raidable**.
 
@@ -89,6 +90,18 @@ Deliberately unmodified playground CTF (Pillar 1):
 > **And it gives the drop something to scatter.** A mouse going down with five wedges is a real loss
 > and a real prize, which is what makes escorting a hauler worth doing — and why the load comes
 > apart on the ground instead of changing owner intact.
+>
+> `[REVISED]` **The wedges are thrown rather than placed, and that is a rules change as well as a
+> look.** They arc out, bounce, and skid, and **a pile does not exist until the wedge stops
+> rolling** — about a second. Nobody is picking cheese up out of the air, so a scruff now has a
+> beat in it where the loot is visibly loose and neither crew has it. Before, the drop resolved on
+> the same tick as the scruff: the mouse fell and five wedges were simply *there*, a metre away,
+> which read as the pile changing owner rather than as a haul coming apart.
+>
+> **The same applies to the banner** — a fumbled one tumbles for about half a second and **cannot be
+> taken while it is still moving**. That extends the existing three-quarter-second fumble rule from
+> *the mouse it fell from* to *everybody*, for as long as it is in the air, which is what makes the
+> scramble a scramble instead of whoever swung last standing on it.
 >
 > `[REVISED]` **Cheese and the banner now stack in the same paws.** The original instinct was that
 > the two errands should compete for one mouse, enforced by refusing a loose banner to anybody
@@ -415,7 +428,7 @@ without these.
 | Stats | Balanced — medium health, medium speed, medium damage |
 | **Unique capability** | **Carries the flag at near-full speed** (-10% vs -25/30/40%) |
 | Ability | *Second Wind* — brief self-heal, long cooldown. `[REVISED]` **Built** — `Q`, **45 health over two seconds** on a **40s** cooldown, and it **refills your sprint stamina** on the keypress. Nothing interrupts it except being scruffed. |
-| Ability | *Banner Toss* `[ADDED]` — **Built** — `V`, throws the banner **four cells** toward the cursor on a **10s** cooldown. Nobody may take it out of the air, including you. |
+| Ability | *Banner Toss* `[ADDED]` — **Built** — `V`, throws the banner **four cells** toward the cursor on a **10s** cooldown, **0.7s in the air**. Nobody may take it while it is still moving, including you. |
 | Carries | **3 wedges** of cheese `[ADDED]` |
 | Role | Primary flag runner, on-ramp class |
 
@@ -426,9 +439,9 @@ without these.
 > Brute by removing it or going around it. **The runner answers by not being the one who has to get
 > past.**
 >
-> **It is a pass, not a leap, and every number is there to keep it one.** The banner cannot be
-> caught in the air, and the thrower is bound by the same three-quarter-second fumble clock a Slam
-> uses — so throwing it forward and running under it buys you a banner you may not touch, in the
+> **It is a pass, not a leap, and every number is there to keep it one.** The banner is a ballistic
+> arc to the cursor with a flop on the end, it cannot be taken while it is still moving, and the
+> thrower is bound by the same three-quarter-second fumble clock a Slam uses — so throwing it forward and running under it buys you a banner you may not touch, in the
 > open, having just announced exactly where it is. Thrown to a team mate it is instant and free.
 > **The ability is worth having precisely to the extent that somebody else is there**, which is the
 > first thing in this game that is true of anything.
