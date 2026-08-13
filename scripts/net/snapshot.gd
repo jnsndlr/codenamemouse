@@ -63,6 +63,25 @@ enum Flag {
 	## from, and the alternative is a remote player's HUD confidently reporting the wrong word for
 	## the six seconds it is on screen.
 	BURIED = 64,
+	## Behind the Sneak's veil (GDD section 4, [Fade]).
+	##
+	## **BIT 7, AND IT IS THE LAST ONE IN THIS BYTE.** Plane took two, class took two, and the three
+	## state bits take the rest -- a ninth thing to say about a pose does not fit and grows
+	## [constant POSE_SIZE] for all ten mice thirty times a second. Written down here because the
+	## byte has looked half empty in every previous edit of this enum and does not any more.
+	##
+	## IT HAS TO BE REPLICATED AND CANNOT BE DERIVED, which is the argument for spending the last
+	## bit on it. A client is told a remote player's *poses*, never their input -- so the machine
+	## watching a third player's Sneak has no way whatsoever to know the ability fired, and the
+	## failure mode is not cosmetic: it draws a solid mouse standing where the server says an
+	## invisible one is. That is the one disagreement between two screens that decides a fight.
+	##
+	## SAFE TO PUT IN AN UNFILTERED BROADCAST, which this packet is and which the header above is
+	## emphatic about. It reveals nothing: a viewer either can already see this mouse -- in which
+	## case the veil is the thing they are looking at -- or cannot, in which case there is no mouse
+	## on their screen for the bit to be attached to. `spotting.gd` decides who is on the map, and
+	## this decides how a mouse already being drawn is drawn.
+	FADED = 128,
 }
 
 ## Which of the four layers a mouse is on, packed into the spare bits of the same byte.

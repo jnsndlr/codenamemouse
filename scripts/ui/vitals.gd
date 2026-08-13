@@ -70,6 +70,27 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 
+## May a bar be drawn over this mouse at all? See the note in `_draw`.
+##
+## FAILS OPEN, deliberately, and it is the opposite choice from the backstab's `Mouse._is_unseen`.
+## With no spotting node there is no concealment model in this arena, so nobody is hidden and every
+## bar should be drawn -- a probe or an audit that lost its health bars because it built a scene
+## without a `Spotting` in it would be reporting a bug that does not exist. The backstab fails
+## closed for the mirror-image reason: there, the absent model would hand out a *bonus*.
+func _crew_can_see(player: Mouse, mouse: Mouse) -> bool:
+	if player == null or mouse == null or mouse.team == player.team:
+		return true
+	var watch := get_tree().get_first_node_in_group(Spotting.SPOTTING_GROUP) as Spotting
+	if watch == null:
+		return true
+	var entry: Variant = watch.contacts_for(player.team).get(mouse)
+	# LIVE, NOT MERELY REMEMBERED. A stale contact is a guess about where somebody *was* -- that is
+	# the minimap's business and it draws it hollow and fading to say so. A health bar hanging in the
+	# air over an empty patch of lawn would be that guess told as a fact, in the world, at full
+	# confidence.
+	return entry != null and bool((entry as Dictionary).get("live", false))
+
+
 func _draw() -> void:
 	var camera := get_viewport().get_camera_3d()
 	if camera == null:
@@ -91,6 +112,29 @@ func _draw() -> void:
 		var mouse := key as Mouse
 		if mouse == null:
 			_shown.erase(key)
+			continue
+
+		# `[ADDED]` NO BAR OVER SOMEBODY YOUR CREW CANNOT SEE, and this is a leak rather than a
+		# polish note. A bar is drawn over any hurt mouse, which was harmless while the only way to
+		# be concealed was to stand still in grass -- a mouse you cannot quite resolve is a mouse
+		# whose bar you were going to notice anyway, at the same spot, at the same time.
+		#
+		# The Sneak's third milestone broke that in two directions at once. A faded Sneak
+		# (`fade_glass.gdshader`) is a lens with no colour of its own, and a hurt one was a lens
+		# with **a floating health bar over it** -- the one thing on screen that says exactly where
+		# an invisible mouse is standing. A [DustScreen] is worse: the bar is a `Control` drawn on
+		# top of the whole 3D frame, so it sails over a cloud that is otherwise total.
+		#
+		# ASKED OF `spotting.gd` RATHER THAN OF THE ABILITIES, which is what makes this one line
+		# instead of two and keeps it right for whatever conceals somebody next. The contact book is
+		# already the answer to "does my crew know this mouse is there", and it is already the answer
+		# the minimap draws -- so the bar over a head and the dot on the map now appear and vanish
+		# together, which they visibly did not before.
+		#
+		# YOUR OWN CREW IS NEVER GATED. They are drawn on the minimap unconditionally, they are
+		# standing in front of you in team colour, and a Sneak crew mate who fades is somebody you
+		# still need to be able to keep track of.
+		if not _crew_can_see(player, mouse):
 			continue
 
 		# Scaled by the body under it: `HEAD` was measured against a mouse that was the same size

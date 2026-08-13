@@ -31,6 +31,8 @@ const CONTROLS: Dictionary = {
 	"Slam": "res://scripts/classes/slam.gd",
 	"SecondWind": "res://scripts/classes/second_wind.gd",
 	"Sonar": "res://scripts/classes/sonar.gd",
+	"Fade": "res://scripts/classes/fade.gd",
+	"DustKick": "res://scripts/classes/dust_kick.gd",
 	"Barricade": "res://scripts/classes/barricade.gd",
 	"ShoreUp": "res://scripts/classes/shore_up.gd",
 	"BannerToss": "res://scripts/classes/banner_toss.gd",

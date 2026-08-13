@@ -67,6 +67,24 @@ const KEYS: Dictionary = {
 	# written out at `InputFrame.Action.TOSS`. Both bits go down on a V press and exactly one node
 	# is listening, since each gates on `owner_class` and silently ignores the wrong class.
 	"toss": [KEY_V],
+	# The Sneak's second ability: Fade (GDD section 4). THE SAME KEY AGAIN, for the third time, and
+	# the rule is unchanged by the third tenant -- V is "your class's second thing" and a mouse is
+	# one class. A Brute shoves, a Generalist throws, a Sneak goes to glass.
+	#
+	# Its own registered action rather than a third reading of `slam`, for the argument written out
+	# at `InputFrame.Action.TOSS`: a bit is an INTENT. Reading the Brute's bit to fade would mean
+	# the day somebody rebinds the shove, the Sneak's stealth moves with it.
+	"fade": [KEY_V],
+	# The Sneak's dust screen (GDD section 4). X, which was "the Engineer's ability" and is now
+	# *your class's other thing* -- the same generalisation V went through the moment a second class
+	# wanted a second ability. The Sneak is the first class in the game with three, and the two it
+	# does not share with the Engineer are on the two keys the left hand already knows.
+	#
+	# FAR FROM Q AND FROM V ON PURPOSE, which is the reasoning barricade was placed with and matters
+	# more here than it did there: a Sneak under pressure has three keys to choose between, and the
+	# panic button (this) and the ambush setup (V) are the two that must never be confused. Q is the
+	# scan, which is the one you press when nothing is happening yet.
+	"dust": [KEY_X],
 	# Scurry -- the cheese boost (GDD sections 2 and 9). Space, and the thumb is the right home
 	# for it: it is available to every class, it is not an ability, and it wants to be pressable
 	# without any finger leaving WASD or the mouse. It is also the only key in the game that

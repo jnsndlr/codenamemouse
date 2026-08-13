@@ -39,6 +39,26 @@ const SPOTTING_GROUP: StringName = &"spotting"
 ## they are a shape in the grass you haven't resolved. Not zero: perfect concealment would make
 ## the fringe of a patch a hard line to sit exactly on.
 @export_range(0.0, 1.0, 0.01) var reveal_opacity: float = 0.35
+## How close you have to be to pick out a mouse behind the Sneak's veil (GDD section 4, [Fade]).
+##
+## THE ONE PLACE CONCEALMENT HAS A RANGE, and it exists because the veil is the one concealment
+## that is not made of terrain. Grass hides you because there is something in the way, and walking
+## up to a patch does not make the blades transparent -- so the grass model needs no distance term
+## and has never had one. Glass is different: it is a distortion of what is behind it, and a
+## distortion is exactly the sort of thing that resolves as you get closer to it. Standing on top of
+## a faded Sneak and not seeing it would be the model disagreeing with the picture on screen, which
+## `fade_glass.gdshader` deliberately makes findable.
+##
+## AND IT IS WHAT KEEPS THE BOTS HONEST, which is the reason it is a number rather than a maybe. A
+## bot reads this crew's contact book (see `bot.gd`), so without this line a faded Sneak is
+## unreachable by the AI in every sense -- it could stand in a nest and be walked past forever, and
+## the ability would be strictly better against three quarters of the mice in a match than against
+## the humans. One and a half metres is close enough to be an accident rather than a search, which
+## is the intended reading: you did not find them, you nearly walked into them.
+##
+## Roughly four body radii, and about half a swing's reach past `attack_reach` -- so being noticed
+## and being hit are not the same moment, and a Sneak that is discovered still gets the first blow.
+@export var fade_reveal_range: float = 1.5
 ## Seconds between sweeps. Doubles as how long it takes to notice someone, which is why it is
 ## not once a frame: instant spotting on the exact frame someone clips a corner reads as the
 ## defence cheating.
@@ -82,7 +102,22 @@ func contacts_for(side: int) -> Dictionary:
 ##
 ## Only about being SEEN. Range, line of sight and which plane you are on are the sweep's
 ## business; a caller that wants those wants `_can_see`.
+##
+## THE VEIL IS ASKED OF THE MOUSE RATHER THAN READ OFF ITS OPACITY, even though
+## `grass_camouflage.gd` already drops a faded mouse to the concealed figure and this line would
+## therefore have got the right answer anyway. Two reasons, and the second is the real one:
+##
+## - The opacity is SMOOTHED -- it chases its target over about a third of a second -- so for the
+##   first frames of a fade the number still says "visible" while the mouse has already gone to
+##   glass. A quarter of a second of being on the enemy minimap after pressing the button is not a
+##   rounding error, it is the ability failing at the only moment it is ever pressed.
+## - `_opacity_of` fails OPEN when there is no camouflage model at all, which is deliberate for the
+##   grass -- no grass means nothing to hide in -- and exactly wrong for this, because the veil is a
+##   thing a mouse does to itself and owes the lawn nothing. An arena with no grass node would
+##   otherwise have a Sneak pressing V and appearing on every map in the match.
 func hidden(mouse: Mouse) -> bool:
+	if mouse != null and mouse.is_faded():
+		return true
 	return _opacity_of(mouse) < reveal_opacity
 
 
@@ -175,6 +210,10 @@ func _look(side: int) -> void:
 		else:
 			quarry.append(mouse)
 
+	# The Sneaks on this side whose pulse is still coming back, gathered once for the whole sweep
+	# rather than per enemy. Usually empty, and cheap when it is not: a listen lasts five seconds.
+	var ears := _listeners(side)
+
 	for enemy in quarry:
 		# CARRYING YOUR BANNER IS BEING SEEN (GDD section 2). It rides on a pole above their
 		# head, above the grass line, glowing -- the one object in the match everyone is looking
@@ -183,10 +222,72 @@ func _look(side: int) -> void:
 		if enemy.is_carrying():
 			_mark(book, enemy)
 			continue
+		# HEARD, WHICH IS NOT SEEN AND DELIBERATELY OBEYS NONE OF THE SAME RULES (GDD section 4).
+		# Checked before the eyes because it is the cheaper test and because it is the one that can
+		# succeed where they cannot -- which is the whole of the Sneak's listen.
+		if _heard_by(ears, enemy):
+			_mark(book, enemy)
+			continue
 		for watcher in watchers:
 			if _can_see(watcher, enemy):
 				_mark(book, enemy)
 				break
+
+
+## The Sneaks on `side` whose pulse is still listening (GDD section 4, [Sonar]).
+##
+## ASKED OF THE ABILITY RATHER THAN OF A FLAG ON THE MOUSE, unlike [Fade] -- and the two really are
+## different, which is worth saying because they arrived together. Being faded is a state of a
+## *body*: it changes how the mouse is drawn, four unrelated systems ask about it, and a bot has to
+## be able to be in it. Listening is a state of an *ability*: nothing draws it, nothing else asks,
+## and only a mouse carrying a [Sonar] can be doing it at all. Putting it on [Mouse] would have been
+## a field that exists on ten mice so that one node can read it.
+func _listeners(side: int) -> Array[Sonar]:
+	var ears: Array[Sonar] = []
+	for node in get_tree().get_nodes_in_group(Sonar.SONAR_GROUP):
+		var sonar := node as Sonar
+		if sonar == null or not sonar.is_listening():
+			continue
+		var owner_mouse := sonar.get_parent() as Mouse
+		if owner_mouse != null and owner_mouse.team == side:
+			ears.append(sonar)
+	return ears
+
+
+## Is this enemy inside somebody's live pulse?
+##
+## IT IGNORES CONCEALMENT, LINE OF SIGHT AND THE PLANE, and each of those three is a deliberate hole
+## in a rule this file otherwise enforces absolutely -- so each is worth defending separately:
+##
+## - **Concealment**, because that is the entire ability. The listen is for finding what cannot be
+##   seen: a mouse lying still in deep grass, and above all another Sneak behind its own veil, which
+##   nothing else in the game can find at range. It is the only counter to [Fade] that is not
+##   walking into it.
+## - **Line of sight**, because sound goes round things. A pulse stopped by a boulder would be a
+##   second pair of eyes rather than a different sense, and the ability would add nothing to a
+##   Sneak that could simply look.
+## - **The plane**, which is the exception that would be alarming if it were not the point. GDD
+##   section 3's hardest rule is that an enemy a metre below your feet is not visible, and this file
+##   holds that line everywhere else. Q has always been the one thing in the game that reaches
+##   through a floor -- it is a *sonar* -- and hearing the mouse walking down there is the same
+##   claim as hearing the corridor it is walking in.
+##
+## WHAT KEEPS IT FAIR IS THE RANGE AND THE CLOCK, not these tests. Five seconds, and only as far as
+## the floor plan reaches -- so it answers "is anyone near me right now", which is a question a scout
+## should be able to answer, and never "where is everybody", which is the one M5 spent a milestone
+## making sure nothing could.
+func _heard_by(ears: Array[Sonar], enemy: Mouse) -> bool:
+	for sonar: Sonar in ears:
+		var listener := sonar.get_parent() as Mouse
+		if listener == null:
+			continue
+		# Measured flat, so a Sneak does not hear further along a corridor than across a lawn just
+		# because the two ends of the measurement are at different heights.
+		var gap := listener.global_position - enemy.global_position
+		gap.y = 0.0
+		if gap.length() <= sonar.listen_range():
+			return true
+	return false
 
 
 func _mark(book: Dictionary, enemy: Mouse) -> void:
@@ -209,9 +310,39 @@ func _can_see(watcher: Mouse, enemy: Mouse) -> bool:
 	var gap := watcher.global_position - enemy.global_position
 	if gap.length() > sight_range:
 		return false
-	if hidden(enemy):
+	# CONCEALMENT, EXCEPT AT ARM'S LENGTH FROM A FADED MOUSE. See `fade_reveal_range` for why the
+	# veil is the one concealment in the game with a distance term and the grass is not.
+	#
+	# THE LINE OF SIGHT STILL HAS TO BE CLEAR, which is why this is folded into the opacity test
+	# rather than returning true on its own. Standing a metre from a faded Sneak with a boulder
+	# between you is still standing behind a boulder.
+	if hidden(enemy) and not (enemy.is_faded() and gap.length() <= fade_reveal_range):
 		return false
 	return _clear_line(watcher, enemy)
+
+
+## Is there a live dust screen standing across this sightline?
+##
+## GATED ON THE PLANE, and the gate is the interesting part. A cloud is thrown on the layer its
+## Sneak was standing on and hangs in that layer's air; a screen kicked up in a corridor cannot
+## blind somebody on the lawn a metre above it, and one on the lawn does not reach down a shaft.
+## Without the gate the ability would be a free denial of a plane the Sneak is not even on, which is
+## the same species of leak GDD section 3's hardest rule exists to prevent -- and it would be a
+## *tell* as well, since a defender losing sight of somebody for no visible reason has learned that
+## a Sneak is directly underneath them.
+##
+## The watcher's plane is the one asked for, since it is the watcher's eyes the dust is in. Both
+## mice are on the same plane by the time this is reached -- `_can_see` tests that first -- so the
+## choice does not matter today and is written down because it will the first time something asks
+## this about two mice on different layers.
+func _dust_between(watcher: Mouse, enemy: Mouse) -> bool:
+	for node in get_tree().get_nodes_in_group(DustScreen.SCREEN_GROUP):
+		var cloud := node as DustScreen
+		if cloud == null or cloud.plane != watcher.get_plane():
+			continue
+		if cloud.blocks(watcher.global_position, enemy.global_position):
+			return true
+	return false
 
 
 ## How visible this mouse is right now, on the grass's own scale. Asked rather than recomputed,
@@ -225,7 +356,16 @@ func _opacity_of(mouse: Mouse) -> float:
 ## Props and walls block; mice do not. Crews sit on their own collision layers rather than on
 ## the world bit, so a body between you and a target never hides them -- which is right: you can
 ## see over a mouse, and a spot that flickered as your own crew walked past would be maddening.
+##
+## AND DUST BLOCKS (GDD section 4, [DustScreen]), which is the half of the Sneak's screen that is a
+## rule rather than a picture. The cloud is geometry, so a human simply cannot see through it -- but
+## a bot does not look at the screen, it reads this book, and without this line the ability would
+## work perfectly against people and be completely invisible to three quarters of the mice in a
+## match. That is the exact failure the grass concealment had before the AI was taught to read it,
+## and it is worse here: the dust is the panic button, and the thing chasing you is usually a bot.
 func _clear_line(watcher: Mouse, enemy: Mouse) -> bool:
+	if _dust_between(watcher, enemy):
+		return false
 	var space := get_tree().root.world_3d.direct_space_state
 	if space == null:
 		return true

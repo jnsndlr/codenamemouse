@@ -11,5 +11,6 @@ speed = 3.6
 turn_speed = 14.0
 sprint_seconds = 6.0
 attack_damage = 34.0
+unseen_damage = 2.0
 carry_penalty = 0.4
 carry_capacity = 1

@@ -45,10 +45,16 @@ func _check_round_trip() -> void:
 	sent.aim_point = Vector3(12.5, -1.25, -30.0)
 	sent.look = Vector3(0.0, 0.0, -1.0)
 	# Deliberately the first and last actions plus one in the middle: an off-by-one in the mask
-	# loses an end, and SWAP_CLASS is the highest bit there is.
+	# loses an end, and DUST is the highest bit there is.
+	#
+	# THE TOP BIT HAS TO BE RE-NAMED WHENEVER ONE IS APPENDED, which sounds like a maintenance tax
+	# and is the check earning its keep. This line said SWAP_CLASS until the Sneak's [Fade] and dust
+	# screen took the last two seats in the `u16`; at sixteen of sixteen the next action to be
+	# appended has nowhere to go, and the audit that would notice is this one -- but only if it is
+	# actually pointed at the end of the enum rather than at the middle of it.
 	sent.set_held(InputFrame.Action.ATTACK, true)
 	sent.set_held(InputFrame.Action.DIG, true)
-	sent.set_pressed(InputFrame.Action.SWAP_CLASS, true)
+	sent.set_pressed(InputFrame.Action.DUST, true)
 
 	var bytes := sent.to_bytes()
 	_check("the packet is the size it says it is (%d)" % bytes.size(), bytes.size() == InputFrame.SIZE)
@@ -62,12 +68,18 @@ func _check_round_trip() -> void:
 	_check("the aim point survives", got.aim_point.is_equal_approx(sent.aim_point))
 	_check("the look direction survives", got.look.is_equal_approx(sent.look))
 	_check("held actions survive", got.is_held(InputFrame.Action.ATTACK) and got.is_held(InputFrame.Action.DIG))
-	_check("the highest bit survives", got.is_pressed(InputFrame.Action.SWAP_CLASS))
+	_check("the highest bit survives", got.is_pressed(InputFrame.Action.DUST))
+	# The masks are `u16` and the enum is now exactly sixteen long. A seventeenth entry would be
+	# silently dropped by `to_bytes` rather than refused, so the fit is asserted rather than assumed.
+	_check(
+		"the action enum still fits in the two u16 masks",
+		InputFrame.Action.size() <= 16
+	)
 
 	# The half that would otherwise pass by accident: held and pressed are different words, and a
 	# serializer that wrote one mask twice would satisfy every line above.
 	_check("held is not pressed", not got.is_pressed(InputFrame.Action.ATTACK))
-	_check("pressed is not held", not got.is_held(InputFrame.Action.SWAP_CLASS))
+	_check("pressed is not held", not got.is_held(InputFrame.Action.DUST))
 	_check("an action nobody touched is off", not got.is_held(InputFrame.Action.SCURRY))
 
 	print("-- and a malformed one is refused rather than half-read")

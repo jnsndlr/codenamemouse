@@ -681,6 +681,8 @@ func _broadcast_snapshot() -> void:
 				flags |= Snapshot.Flag.BURIED
 			if mouse.is_swinging():
 				flags |= Snapshot.Flag.SWINGING
+			if mouse.is_faded():
+				flags |= Snapshot.Flag.FADED
 			flags |= (mouse.get_plane() << Snapshot.PLANE_SHIFT) & Snapshot.PLANE_MASK
 			flags |= (mouse.mouse_class << Snapshot.CLASS_SHIFT) & Snapshot.CLASS_MASK
 			shot.add(

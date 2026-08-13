@@ -60,6 +60,38 @@ const SONAR_GROUP: StringName = &"sonar"
 ## Arm's reach for rubbing out an enemy mark.
 @export var erase_reach_cells: float = 1.6
 
+@export_group("Listen")
+## `[ADDED]` How long the pulse keeps finding MICE as well as corridors (GDD section 4).
+##
+## THE SAME KEYPRESS, DELIBERATELY NOT A SECOND ABILITY. A Sneak pressing Q was asking one question
+## -- *what is under this ground* -- and the honest reading of a pulse of sound is that it comes
+## back off anything in its way, not only off empty space. Folding it in costs no key, no cooldown
+## and no HUD, and it makes the scan worth pressing in the two situations where it previously did
+## nothing at all: standing over bedrock, and standing somewhere you already know the floor plan of.
+##
+## FIVE SECONDS AGAINST THE OUTLINE'S THIRTY, and the gap is the point. A corridor stays where it
+## was put and a reading of one goes stale slowly; a mouse is somewhere else almost immediately, so
+## a long listen would be a tracker rather than a sounding. Five is long enough to answer *is anyone
+## in this room* and far too short to follow anybody with.
+##
+## A MILD BUFF AND NOT MEANT TO CARRY THE ABILITY. It reveals what is close and already nearby --
+## inside the same radius the floor plan uses -- so it tells a scout that the room it is standing in
+## is occupied. It does not find the enemy across the yard, and a crew cannot use it to sweep.
+@export var listen_seconds: float = 5.0
+
+var _listen_left: float = 0.0
+## The mice this listen has picked out, and the pips drawn over them. Rebuilt each sweep rather than
+## accumulated: a listen reveals who is there NOW, and somebody who has walked out of range has
+## stopped being an answer.
+var _pips: Dictionary = {}
+
+@export_group("Listen")
+## The pip drawn over a body the pulse found. Deliberately the WAVE's colour rather than a crew
+## colour: this is the sound coming back, and what it has found is a mouse rather than a corridor.
+## Crew is the echo's question and the minimap answers it -- the pip's question is *there is
+## somebody there*, which is a different and more urgent one.
+@export var pip_color: Color = Color(0.42, 0.92, 0.94, 0.85)
+
 @export_group("Wave")
 ## How long the pulse takes to run out to `radius_cells`. Fast: it is the sound leaving, and the
 ## echo that follows is the part you are meant to read.
@@ -92,6 +124,11 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	_cooldown_left = maxf(0.0, _cooldown_left - delta)
 	_echo_left = maxf(0.0, _echo_left - delta)
+	# ON EVERY MACHINE, like the cooldown and unlike the reveal. The listen's *effect* -- putting a
+	# contact in the crew's book -- resolves where the simulation is, in `spotting.gd`, which reads
+	# this clock through [method is_listening]. The pips below are the local viewer's own picture.
+	_listen_left = maxf(0.0, _listen_left - delta)
+	_step_pips()
 	if is_instance_valid(_echo):
 		_echo_material.albedo_color.a = _echo_alpha()
 		if _echo_left <= 0.0:
@@ -136,6 +173,24 @@ func cooldown_left() -> float:
 	return _cooldown_left
 
 
+## Is this Sneak's pulse still coming back off bodies? Read by `spotting.gd`, which is what turns
+## the answer into contacts the whole crew can see.
+func is_listening() -> bool:
+	return _listen_left > 0.0 and _player != null and not _player.is_scruffed()
+
+
+## Seconds of listen left, for a HUD.
+func listen_left() -> float:
+	return _listen_left
+
+
+## How far the listen reaches, in metres. **The same radius as the floor plan**, converted out of
+## cells, so the ability has one range rather than two -- what you hear and what you see are the
+## same pulse, and a player who has learned where the outline stops has learned where this stops.
+func listen_range() -> float:
+	return radius_cells * TunnelNetwork.CELL
+
+
 func marks_for(viewer_team: int, viewer_class: int, plane: int) -> Array[SonarMark]:
 	var visible_marks: Array[SonarMark] = []
 	for mark: SonarMark in _all_marks():
@@ -171,9 +226,6 @@ func scan() -> int:
 	if _player == null or _network == null or _player.mouse_class != owner_class:
 		return 0
 	var source_plane := _player.get_plane()
-	if source_plane + 1 >= TunnelNetwork.PLANE_COUNT:
-		refused.emit("nothing but bedrock below")
-		return 0
 	if _cooldown_left > 0.0:
 		refused.emit("listening for the echo -- %ds" % ceili(_cooldown_left))
 		return 0
@@ -182,6 +234,22 @@ func scan() -> int:
 	# follows and for the same reason. It is the pulse LEAVING -- it cannot depend on what comes
 	# back, and putting it above every branch below means it structurally cannot start to.
 	_show_wave(source_plane)
+
+	# AND THE LISTEN OPENS WITH IT, above every branch below for exactly the same reason. A pulse
+	# comes back off bodies whatever the ground under them is doing, so this cannot be inside the
+	# half of the ability that is about earth.
+	#
+	# `[ADDED]` THE BEDROCK REFUSAL MOVED BELOW THIS LINE and stopped being the end of the ability.
+	# On the bottom plane there is nothing under your feet to sound, and the whole of Q used to be
+	# one line of text saying so -- the same failure the wave was built to fix, left standing in the
+	# one place a Sneak most wants an answer. A scan down there now still sounds, still listens, and
+	# still says there is no floor plan; what it no longer does is nothing.
+	_listen_left = maxf(listen_seconds, 0.0)
+	_cooldown_left = cooldown
+
+	if source_plane + 1 >= TunnelNetwork.PLANE_COUNT:
+		refused.emit("nothing but bedrock below")
+		return 0
 
 	# A PUPPET RUNS THE COOLDOWN AND SOUNDS NOTHING (M7), and this is the one ability where a
 	# client MUST NOT evaluate the rule even for its own eyes. A client's tunnel network holds only
@@ -192,7 +260,6 @@ func scan() -> int:
 	# The wave above is the exception that proves it: a client may draw the pulse going out,
 	# because that is its own mouse doing a thing. What it may not do is draw what answered.
 	if not acts():
-		_cooldown_left = cooldown
 		return 0
 
 	var target_plane := source_plane + 1
@@ -201,7 +268,6 @@ func scan() -> int:
 	for cell: Vector2i in _network.dug_cells(target_plane):
 		if Vector2(cell - here).length() <= radius_cells:
 			found.append(cell)
-	_cooldown_left = cooldown
 
 	# Sorted BEFORE the owners are read off, so the two arrays are parallel and the nearest answer
 	# -- the one that becomes the mark -- is index 0 of both.
@@ -420,6 +486,139 @@ func _echo_color(whose: int) -> Color:
 	# Barely lightened. The crew hue is the message here, and every step toward white is a step
 	# toward the pale ground it is being read against.
 	return Team.color_of(whose).lerp(Color.WHITE, 0.10)
+
+
+# ------------------------------------------------------------------------------- the pips
+
+
+## A ring over every body the pulse is currently finding, for as long as it keeps finding it.
+##
+## THE SAME SPLIT THE REST OF THE ABILITY MAKES, and it is the reason the listen is worth building
+## as part of Q rather than as a new thing. The MARK is a record and is shared with the crew; the
+## ECHO is a reading and is one Sneak's alone. A contact in the book (`spotting.gd`) is the shared
+## half of the listen -- it goes on everybody's minimap, because that is what the book is for -- and
+## this is the private half: the thing only the mouse that pressed the key can see, in the world,
+## where it is standing.
+##
+## WHICH MEANS THE SNEAK GETS SOMETHING ITS CREW DOES NOT, exactly as it does with the floor plan.
+## A crew mate reading the minimap knows a mouse is over there. The Sneak can see, without looking
+## away from the fight, that the thing it is about to walk into is a body.
+##
+## REBUILT AGAINST THE CURRENT ANSWER EVERY FRAME rather than placed once and left. A pip is a live
+## reading of where somebody is now, so it follows them -- and a mouse that walks out of range loses
+## its pip, which is the honest picture: the pulse has stopped coming back off them.
+func _step_pips() -> void:
+	if not watched() or _listen_left <= 0.0 or _player == null:
+		_drop_pips()
+		return
+
+	var reach := listen_range()
+	var heard: Dictionary = {}
+	for node in get_tree().get_nodes_in_group(Mouse.MOUSE_GROUP):
+		var other := node as Mouse
+		# ENEMIES ONLY. Your own crew is already drawn on the minimap unconditionally and is
+		# standing in front of you in team colour; a pip over a team mate would be the ability
+		# reporting something the player cannot fail to know.
+		if other == null or other == _player or other.team == _player.team:
+			continue
+		if other.is_scruffed():
+			continue
+		var gap := _player.global_position - other.global_position
+		gap.y = 0.0
+		if gap.length() > reach:
+			continue
+		heard[other] = true
+
+	for gone: Variant in _pips.keys():
+		if not heard.has(gone):
+			var stale: Node3D = _pips[gone]
+			if is_instance_valid(stale):
+				stale.queue_free()
+			_pips.erase(gone)
+
+	for found: Variant in heard:
+		var target := found as Mouse
+		if not _pips.has(target):
+			_pips[target] = _make_pip(target)
+		var pip: Node3D = _pips[target]
+		if not is_instance_valid(pip):
+			_pips.erase(target)
+			continue
+		# Over the head rather than under the feet, because a mouse in a tunnel below has a floor
+		# between it and the pip and a ring drawn on ITS floor would be invisible from up here.
+		# `no_depth_test` on the material is what carries it through the earth; the lift is what
+		# stops it sitting inside the body it is describing.
+		pip.global_position = target.global_position + Vector3.UP * (target.model_radius * 3.0)
+		# Fading out over the last second, so the listen ends rather than stops.
+		var going := clampf(_listen_left / 1.0, 0.0, 1.0)
+		# A slow throb, so a pip is legible against a moving background without being a flashing
+		# light. Half a second a cycle -- a heartbeat rather than an alarm.
+		var beat := 0.82 + 0.18 * sin(Time.get_ticks_msec() * 0.009)
+		var wide := target.model_radius * 2.2 * beat
+		pip.scale = Vector3(wide, 1.0, wide)
+		var material := (pip as MeshInstance3D).material_override as StandardMaterial3D
+		if material != null:
+			material.albedo_color.a = pip_color.a * going
+
+
+func _drop_pips() -> void:
+	for pip: Variant in _pips.values():
+		if is_instance_valid(pip):
+			(pip as Node3D).queue_free()
+	_pips.clear()
+
+
+## One ring, parented to the NETWORK rather than to the mouse it describes.
+##
+## NOT A CHILD OF THE TARGET, which is the obvious construction and would have been a leak. A pip
+## parented to an enemy is a node inside that enemy's subtree -- it would ride their scruff
+## animation onto its side, and more to the point it would still be there, owned by them, if this
+## Sneak's listen ended between two frames of something else freeing it. Parented to the world and
+## moved by hand, the ability owns its own picture and can always take it away.
+func _make_pip(target: Mouse) -> MeshInstance3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = pip_color
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# THROUGH THE EARTH, and this is the one place in the project that turns depth testing off for
+	# a thing about a mouse. `SecondWind`'s rings deliberately keep it, on the argument that a ring
+	# drawn through a floor is a free tell that somebody is on the layer below. That argument is
+	# exactly right for a ring anybody can see -- and this is a readout private to one Sneak who has
+	# just spent a cooldown asking what is down there. Being able to see the answer through a floor
+	# is what was bought.
+	material.no_depth_test = true
+
+	var pip := MeshInstance3D.new()
+	pip.name = "SonarPip"
+	pip.mesh = _pip_mesh()
+	pip.material_override = material
+	pip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var parent: Node = _network if _network != null else get_tree().current_scene
+	parent.add_child(pip)
+	pip.global_position = target.global_position
+	return pip
+
+
+## A flat ring, one metre across at scale 1. Triangles rather than `PRIMITIVE_LINES` for the reason
+## the echo has the receipts for: a hairline one pixel wide over a mouse the same size as it is
+## invisible in a screenshot and worse in motion.
+func _pip_mesh() -> ArrayMesh:
+	var tool := SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var segments := 20
+	var inner := 0.62
+	for index in range(segments):
+		var a := TAU * float(index) / float(segments)
+		var b := TAU * float(index + 1) / float(segments)
+		var outer_a := Vector3(cos(a), 0.0, sin(a))
+		var outer_b := Vector3(cos(b), 0.0, sin(b))
+		for corner: Vector3 in [
+			outer_a * inner, outer_a, outer_b, outer_a * inner, outer_b, outer_b * inner
+		]:
+			tool.set_normal(Vector3.UP)
+			tool.add_vertex(corner)
+	return tool.commit()
 
 
 ## The pulse leaving: a ring on the Sneak's own floor, running out to the scan radius.

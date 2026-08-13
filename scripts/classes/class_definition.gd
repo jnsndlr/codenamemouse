@@ -71,6 +71,29 @@ extends Resource
 
 @export_group("Combat")
 @export var attack_damage: float = 26.0
+## What a swing struck from concealment is worth, as a multiplier on `attack_damage`. **The Sneak's
+## backstab** (GDD section 4); 1.0 for everybody else, which is to say the passive is off.
+##
+## A NUMBER RATHER THAN AN ABILITY, and that is the whole design of it. The Sneak already had the
+## best burst in the game as a stat -- 34 to a Generalist's 26 -- which is a fact about the class
+## that is true whether it plays like an assassin or charges down a corridor. This is the version of
+## the same idea that has a *decision* in it: the damage arrives only if you were not seen coming,
+## so the class's stat line finally rewards the thing its fantasy is made of.
+##
+## AT 2.0 A SNEAK OPENS FOR 68, which is not arbitrary arithmetic. A Generalist has 100 health and a
+## Brute rather more, so this is two thirds of a whole mouse in one blow and a kill in two -- an
+## ambush that genuinely decides the fight, which is what "glass cannon" has to mean if the sixty
+## five health on the other side of the trade is to be worth paying. It is expressly NOT a one-shot:
+## the ambushed mouse gets a turn, and the Sneak that opened is now standing in the open next to
+## somebody who knows exactly where it is.
+##
+## WHAT COUNTS AS CONCEALED IS NOT DECIDED HERE, deliberately. `Mouse.swing` asks `Spotting.hidden`,
+## which is the same predicate the minimap draws from and the bots hunt by -- so the bonus lands
+## from deep grass, from a Slow walk in cover, and from behind [Fade], and it lands for exactly the
+## reason the player can already see on screen. A second definition of "hidden" living on the Sneak
+## is the thing this avoids: two of them would disagree eventually, and the player would have no way
+## to tell which one they were being paid by.
+@export_range(1.0, 4.0, 0.05) var unseen_damage: float = 1.0
 
 @export_group("Carrying")
 ## What the banner costs you, as a fraction of your speed. THE Generalist's whole identity

@@ -36,7 +36,7 @@ const HIDDEN: Array[String] = [
 const SECTIONS: Array = [
 	["MOVING", ["move_forward", "move_back", "strafe_left", "strafe_right", "sprint", "slow", "scurry"]],
 	["DIGGING", ["dig", "burrow", "shaft_down", "shaft_up"]],
-	["FIGHTING", ["attack", "ability", "barricade", "slam", "toss"]],
+	["FIGHTING", ["attack", "ability", "barricade", "slam", "toss", "fade", "dust"]],
 	["THE YARD", ["aim", "view_left", "view_right", "swap_class", "pause", "screenshot"]],
 ]
 
@@ -59,6 +59,13 @@ const LABELS: Dictionary = {
 	"barricade": "Barricade",
 	"slam": "Slam — shove them back",
 	"toss": "Throw the banner",
+	# THREE ROWS SHARE V AND TWO SHARE X, and the panel prints all five rather than collapsing them.
+	# The key is the same and the ability is not, so a Sneak reading "Slam" against V would have
+	# learned the wrong thing about their own class -- and a row saying "V: your class's second
+	# thing" would be true, useless, and a phrase no player has ever heard. The names are what
+	# differ, so the names are what is listed.
+	"fade": "Fade — glass for 10 seconds",
+	"dust": "Kick up dust — break away",
 	"aim": "Aim",
 	"view_left": "Turn the view left",
 	"view_right": "Turn the view right",

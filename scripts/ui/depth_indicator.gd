@@ -91,7 +91,11 @@ func _process(delta: float) -> void:
 		if bool(_player.call("is_carrying")):
 			hint += "     V: throw the banner"
 	elif kind == MouseClass.SNEAK:
-		hint += "\nQ: sound below / erase enemy cant"
+		# ALL THREE, and the Sneak is the only class with that many. Listed on one line in the order
+		# they are used rather than the order they were built -- scan, then approach, then leave --
+		# because that reading is the class, and a player who has just picked it up learns the whole
+		# loop from the hint instead of three unrelated keys.
+		hint += "\nQ: sound below / erase enemy cant     V: fade     X: kick up dust"
 	elif kind == MouseClass.ENGINEER and plane > 0:
 		# BOTH KEYS, and the Q line is new: until the shoring landed the Engineer was the one class
 		# whose ability key did nothing, and this line said so by being absent. Ordered ability-key

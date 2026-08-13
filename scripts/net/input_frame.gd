@@ -61,6 +61,20 @@ enum Action {
 	## other one's ability, and the first person to rebind either key would have to find out the
 	## hard way that the two were secretly one thing.
 	TOSS,
+	## The Sneak's *Fade* -- **the third meaning of V**, and its own bit for the reason `TOSS` gives
+	## in full. Three abilities on one key is the same rule the key already had, not a new one: V
+	## means "your class's second thing", and no mouse is ever two classes at once.
+	FADE,
+	## The Sneak's dust screen, on X. THE SAME KEY AS `BARRICADE`, which is the Engineer's, and the
+	## generalisation is deliberate: X now means *your class's other thing* exactly as V means your
+	## class's second thing. The Sneak is the first class to want three, and X was the only key left
+	## that the left hand reaches without leaving WASD.
+	##
+	## THIS IS THE SIXTEENTH ACTION AND THE MASKS HOLD SIXTEEN. `to_bytes` writes `_held` and
+	## `_pressed` as `u16`, so the packet is now exactly full: a seventeenth action does not
+	## "go on the end", it changes [constant SIZE] and both ends of the wire with it. Said here
+	## rather than discovered there.
+	DUST,
 }
 
 ## Strafe on x, forward/back on y, already radially clamped. Facing-relative conversion is the

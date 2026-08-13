@@ -80,9 +80,6 @@ func _process(delta: float) -> void:
 		var mouse := node as Mouse
 		if mouse == null:
 			continue
-		var material := mouse.get_body_material()
-		if material == null:
-			continue
 
 		var now: float = _opacity.get(mouse, 1.0)
 		now = lerpf(now, _wanted_opacity(mouse), 1.0 - exp(-fade_speed * delta))
@@ -92,9 +89,13 @@ func _process(delta: float) -> void:
 		# grass colour -- both existed only to stay out of the transparent queue, because the
 		# pixel pass used to erase whatever was in it. It runs after transparency now, so the
 		# honest version works and fades correctly against whatever is actually behind the mouse.
-		var colour := mouse.team_color
-		colour.a = now
-		material.albedo_color = colour
+		#
+		# ASKED OF THE MOUSE RATHER THAN WRITTEN ON ITS MATERIAL, since the Sneak's [Fade] arrived.
+		# This used to fetch `get_body_material()` and set `albedo_color` on it, which was correct
+		# while a mouse had exactly one material for its whole life -- and silently stopped working
+		# the moment the veil swapped a [ShaderMaterial] over the top, because the writes kept
+		# landing on a material that was no longer bound to any mesh.
+		mouse.set_body_alpha(now)
 
 
 ## How visible this mouse should be, before smoothing.
@@ -103,18 +104,43 @@ func _process(delta: float) -> void:
 ## patch hides you PARTLY. A yes-or-no test would make the rim of every patch a hard line to
 ## sit exactly on, and the rim is meant to be a risk, not a hiding place.
 func _wanted_opacity(mouse: Mouse) -> float:
+	# CARRIERS ARE ALWAYS VISIBLE (GDD section 2). No hiding with the flag -- the rule exists so
+	# a steal has to be run home rather than parked in a bush until the coast clears, and it is
+	# the same rule that floats the banner above the carrier's head where everyone can see it.
+	#
+	# FIRST, ABOVE EVERY OTHER TEST, which it was not before the Sneak's [Fade] arrived and which is
+	# now load-bearing rather than tidy. [Mouse.set_faded] refuses a carrier as well, so the rule is
+	# stated in both places -- the Sneak is the best thief in the game and the worst carrier, which
+	# makes it exactly the class that would have been first to want an exception.
+	if mouse.is_carrying() or mouse.is_scruffed():
+		return 1.0
+
+	# THE VEIL BEATS EVERYTHING BELOW, including bare dirt and including the floor. That is the whole
+	# ability: concealment in the OPEN, which the grass cannot sell at any price, and concealment
+	# UNDERGROUND, where there is no grass to sell it. The two systems compose rather than compete --
+	# a faded Sneak sitting in deep grass is at the same figure as one standing on a path, because
+	# there is no more hidden to be.
+	#
+	# ABOVE THE PLANE TEST, and that ordering is the difference between an ability and half of one.
+	# The test below returns 1.0 for anything underground because the GRASS is a two-dimensional
+	# field; the veil is a shader on a body and does not care which layer the body is on. Read after
+	# it, a Sneak would have been fully visible in the one part of the map where being seen at all
+	# means being seen by somebody who is definitely looking for you.
+	#
+	# NOT ZERO, and the number is the same 0.10 the deepest grass gives, for the reason written at
+	# `hidden_opacity`: hidden information is about not being FOUND, and the shader (see
+	# `fade_glass.gdshader`) is built to be beatable by somebody watching the ground carefully. A
+	# true zero would make this the one thing in the game that cannot be seen through by playing
+	# well, and would say so on the minimap too, since spotting.gd reads this number.
+	if mouse.is_faded():
+		return hidden_opacity
+
 	# THERE IS NO GRASS UNDERGROUND. `concealment_at` is a two-dimensional field -- it answers for
 	# an x,z and has no idea what height asked -- so a mouse in a tunnel was reading the lawn's
 	# cover through a floor's worth of earth and fading out in a bare corridor. Not merely a
 	# cosmetic slip: spotting.gd gates on this same number, so a tunneller under a thick patch went
 	# unspottable by the only crew who CAN see them, the one down there with them.
 	if mouse.get_plane() > 0:
-		return 1.0
-
-	# CARRIERS ARE ALWAYS VISIBLE (GDD section 2). No hiding with the flag -- the rule exists so
-	# a steal has to be run home rather than parked in a bush until the coast clears, and it is
-	# the same rule that floats the banner above the carrier's head where everyone can see it.
-	if mouse.is_carrying() or mouse.is_scruffed():
 		return 1.0
 
 	var cover: float = _grass.concealment_at(mouse.global_position)

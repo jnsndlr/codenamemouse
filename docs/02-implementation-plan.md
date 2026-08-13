@@ -31,7 +31,7 @@ do until art arrives. We are removing every variable except whether the systems 
 | **Tunnel pathing** | **`AStar3D` over dug cells** | Graph traversal, not dynamic navmesh |
 | Surface pathing | `NavigationServer3D` navmesh | Standard, baked once per map |
 | Target (dev) | **Desktop** | Fast iteration, real UDP, no browser constraints during design |
-| Target (later) | **Web export, decided at M9** | Same project either way. An export target, not an architecture. |
+| Target (later) | **Web export, decided at M12** (was "M9" before the recalibration renumbered the endgame) | Same project either way. An export target, not an architecture. |
 | Netcode (v1) | **Listen server** | One client hosts, authoritative. Zero infrastructure. |
 | Netcode (v2) | **Headless dedicated** | Same codebase, `--headless` export, ~$5/mo VPS when needed |
 | Transport | **Behind an interface from day one** | The one piece of early architecture worth building |
@@ -172,7 +172,7 @@ Each has a **question**, a **done-when**, and a hard scope boundary.
 - A cube on a plane under an orthographic iso camera
 - **Web export smoke test** — deploy to Cloudflare Pages, confirm it loads
 
-**Done when:** you've seen your cube in a browser tab. Then ignore web until M9.
+**Done when:** you've seen your cube in a browser tab. Then ignore web until the endgame (M12, after the recalibration).
 
 ---
 
@@ -1345,7 +1345,7 @@ at all. Its own class comment records that the fragment-shader version was tried
 because a full-screen quad in the transparent queue erased anything translucent, which is the
 mouse's grass concealment.
 
-So web is not a build target, it is a rendering decision, and it stays at M9 where §"Tech
+So web is not a build target, it is a rendering decision, and it stays at the endgame milestone (now M12) where §"Tech
 decisions" already put it. M0's cube loaded in a browser; nothing since M2.5 would.
 
 ---
@@ -1462,7 +1462,7 @@ architecture notes above made promises in week one; this is the audit of which o
 Step 1 is done. [`net_transport.gd`](scripts/net/net_transport.gd) is the interface the *Tech
 decisions* section has been promising since week one, and
 [`enet_transport.gd`](scripts/net/enet_transport.gd) is its only implementation. Nothing above this
-layer will ever name ENet, which is the entire point: whether this is a web build is an M9 question,
+layer will ever name ENet, which is the entire point: whether this is a web build is an endgame question (now M12),
 and the price of keeping it open is this file.
 
 - **The interface is shaped like `MultiplayerPeer`, deliberately.** All three candidate backends
@@ -2200,8 +2200,17 @@ permitted. Verified by deleting the filter and watching it name the leak.
   falling grit. Pulled toward grey and down to a third of the surface dust's opacity. Same
   generated falloff texture, because it is the same earth — different light.
 
-**Still to build in 8a:** *Slam*, and a verdict on corking (which is geometry rather than code —
-a one-cell corridor plus body-blocking — so it is a playtest, not a feature).
+**8a's build-out is done, and it overshot the plan.** *Slam* landed (`V`, a 2.5m shove on an 8s
+cooldown, the only attack in the game that does no damage — and the thing that makes carriers
+droppable without killing them), and it arrived with a wave the plan never scheduled: the
+Generalist's **Second Wind** (self-heal plus stamina refill), the Generalist's **Banner Toss**
+(the banner four cells through the air, untouchable in flight), and the Engineer's **Shore Up**
+(three seconds standing still puts timbers in a cell; the next collapse breaks the timbers
+instead of the corridor — the answer to "the Engineer lost its escape button"). The GDD carries
+the full record of each; every one shipped with its own audit checks and shot probes, and
+`match_audit` roughly doubled. What remains of 8a is only the **corking verdict**, which is
+geometry rather than code — a one-cell corridor plus body-blocking — so it is a playtest, not a
+feature.
 
 #### 8d — The bots start playing the same game
 
@@ -2277,53 +2286,362 @@ question to answer by playing these four changes first.
 > announce every stomp on the map. That is a hidden-information question wearing a dust cloud, and
 > it wants deciding rather than defaulting.
 
-**8b — The world:** the Cat first, on a fixed schedule. Then the Crow. Does the match
-get better when they show up — as threat *and* as respite?
+**8b — The world** and **8c — Water** are **resequenced to M11**, and the reason is the
+recalibration recorded there: the game's proven strength is the eight-player match, so the next
+milestones spend on what every multiplayer session touches (getting connected, and the map) before
+spending on PvE spice that improves sessions people already can't easily have.
 
-**8c — Water, binary version:** flooded/not-flooded segments on a timer. Proves whether
-water-as-a-threat is fun *before* building the flow simulation.
+**Done when (8a):** an honest verdict on corking, from play.
 
-**Done when:** you have an honest verdict on each.
+---
+
+#### 8b — Finishing the Sneak (3–5 evenings) `[ADDED]`
+
+**Not a milestone that was planned, and worth saying why it happened anyway.** GDD §12 recorded, at
+the close of 8a, that *Fade* was the last ability §4 named that nothing implemented. That was true
+and it undersold the situation: the Sneak had **one verb**, and it pointed at terrain. Every other
+class had two by then, and every one of the Sneak's listed roles — assassin, counter-Engineer, cache
+raider — was a role with no tool behind it. The class was a stat line and a scan.
+
+**What shipped, and each is written up in GDD §4:**
+
+| | Key | |
+|---|---|---|
+| **Fade** | V | Ten seconds of glass. A timed ability, not the stance §4 described. |
+| **Backstab** | — | A swing from concealment does double. A passive on [Mouse], not part of Fade. |
+| **Dust screen** | X | Four metres, one second, and nobody sees through it — including you. |
+| **Listen** | Q | Five seconds in which the sonar also comes back off bodies. |
+
+**The design work was mostly subtraction, and the record is in the GDD.** *Fade* as written was the
+grass model with the Sneak's name on it; *backstab* was the class's existing burst stat given a
+decision to hang on; *listen* was a fourth key that turned out to be a fifth second on the first
+one. What is new is the dust, and only the dust.
+
+**Three things the build learned that no amount of designing would have:**
+
+- **A screenshot is the only audit for an ability whose subject is visibility.** Every rule here
+  can be asserted headlessly and none of them is the ability. `tools/fade_shot.gd` had to be pointed
+  at a black-and-white test card before it could say anything at all — a lens is invisible in what
+  it does not bend, so two frames on plain grass proved nothing twice. `tools/dust_shot.gd` measures
+  a mouse's **contrast against the ground beside it in the same frame**; its first metric compared
+  each frame against clear air, which scored a perfectly hidden mouse and a bare patch of lawn
+  identically at 21% and reported the ability broken while the picture showed it working.
+- **The concealment model had one bug in it and three systems had to be asked, not told.** Bots read
+  `spotting.gd`'s contact book, so the arm's-length reveal, the dust's line-of-sight block and the
+  backstab's predicate all went **in that file** rather than in the abilities. One rule each,
+  covering the AI, the minimap and the eye together — the same lesson M8a's bots learned about
+  grass.
+- **The leak was in the HUD, and nothing else would have found it.** A hurt mouse gets a health bar
+  over its head, which was harmless while concealment meant *standing still in long grass*. A faded
+  Sneak is a lens with no colour of its own, and a hurt one was a lens **with a floating bar over
+  it**; a mouse inside a dust cloud had a bar sailing over the top of it, because a `Control` is
+  drawn on top of the whole 3D frame. `vitals.gd` now asks the contact book, so the bar over a head
+  and the dot on the map appear and vanish together.
+
+**And one cost that is now spent.** `InputFrame.Action` is **sixteen of sixteen** — the two masks
+are `u16` and *fade* and *dust* took the last seats. A seventeenth action is no longer an append;
+it changes the packet size and both ends of the wire with it. `input_audit.gd` asserts the fit
+rather than leaving it to be discovered.
+
+**Done when:** the four are in, audited, and photographed. **Met.** Four open questions went to
+GDD §13 — whether Fade should break on attacking, whether a metre and a half is the right range to
+find one at, whether four metres of dust is a screen or a wall, and whether the listen ever finds
+anybody worth finding. All four are playtests, and none of them blocks anything.
 
 > **Flowing water is deliberately not here.** The full system (GDD §7 — sources, spread
 > with noise, current vectors, breath meter, cascade through ramps, ride-the-current-to-a-
 > ramp escapes) is a cellular automaton over the tunnel graph. It's tractable and it's the
-> best set piece in the design, but it is a **post-M9 upgrade**. Build binary flooding
+> best set piece in the design, but it is a **post-M12 upgrade**. Build binary flooding
 > first. If binary water isn't fun, flowing water won't rescue it.
 
 ---
 
-### M9 — Decide what this is (open)
+### The recalibration — this is a multiplayer game, so plan like one
 
-With M2–M8 answered, the real decisions become answerable: web or desktop, dedicated
-server or not, Generalist and Juggernaut, more maps or better feel, and the first
-non-capsule mouse.
+Written at the close of 8a's build-out, on one working assumption stated out loud: **everything
+currently standing play-tests well.** The flag run is tense, the counterplay web loops, the
+abilities read, and checkpoint 5's human verdict — still formally outstanding — comes back
+"playable". Every verdict below stays honestly revisable, but the *plan* stops hedging on them,
+because hedging was starting to order the milestones.
+
+What seven milestones actually discovered is that **the multiplayer bones are the best thing this
+project owns.** The M7 survey's expensive promises all held: one authoritative sim, intent as a
+value, seats instead of scenes, per-crew knowledge filtered at one door, complete-picture
+replication that heals loss and late joins by construction, and a measured cost of **6.3 KB/s
+down, 2.2 KB/s up per client** — numbers small enough to make every hosting decision easy. Ten
+suites play real matches over real sockets, including one on a deliberately bad line. That is not
+a prototype's netcode; that is a shippable game's netcode waiting for a way for two strangers to
+find each other.
+
+So the recalibrated ordering principle: **spend next on what every multiplayer session touches,
+in the order a session touches it.** Getting connected (M9), the yard the match is played in
+(M10), then the world that makes sessions richer (M11), then the decisions that only matter once
+people are actually playing (M12).
+
+---
+
+### M9 — Code lobbies over the internet (1–2 weeks)
+
+**Question:** can a friend with no terminal, no router admin page, and no IP address get into
+your match with nothing but a four-letter code?
+
+This is the milestone the whole multiplayer investment has been waiting on. M7 built a door
+(Host, Join, a lobby) but the address a joiner types is still an IP the host has to discover,
+and the port is still one the host has to forward. That is the actual wall between this game
+and anyone playing it — not the netcode, which is done and audited.
+
+#### The decision: one small VPS running headless matches, fronted by a code directory
+
+**Rejected first, so the shape of the problem is visible:**
+
+| Option | Cost | Why not |
+|---|---|---|
+| Manual port forwarding | $0 | The current state. Fails the question by definition — it's the wall. |
+| UPnP auto-forward | $0 | Works on roughly half of home routers, silently fails on the rest. "Reliable" is the brief. |
+| UDP hole punching + relay (noray-style) | a VPS anyway | The punch fails on ~10–15% of NAT pairs, so a relay box is required for the fallback — at which point the box exists and the listen server's host advantage is still in the game. |
+| WebRTC P2P | $0 + TURN | Same shape: free until the pairs that need TURN, and TURN is a relay box. Plus a GDExtension dependency on native builds. |
+| Steam networking | $100 + a launch decision | Free relays and lobbies, but couples distribution to Steam years early and closes the web option M0 paid to keep open. |
+| **Headless dedicated on one VPS** | **~€4.50/mo** | **Removes NAT from the problem entirely — both players are outbound clients. Chosen.** |
+
+The dedicated server was never a rival architecture — the tech-decisions table has said
+"Netcode (v2): headless dedicated, same codebase, ~$5/mo VPS" since week one, and the codebase
+kept the promise: `is_server()` is a mode, the seat table doesn't care whether a chair's occupant
+is local, and bots already run only where the sim runs. **A dedicated server is a listen server
+whose host has no eyes.** The client half of the game does not change at all — a client connects
+to an address, and whether that address is a friend's router or a Hetzner box is not something
+any code above the transport can see.
+
+And it closes two open risks as a side effect, which is what tips the decision against the
+relay options at the same price:
+
+- **Listen-server host advantage** — the risk register's "unfixable at this scale" — is fixed at
+  this scale: every player pays a symmetric round trip to the box.
+- **The host quitting no longer ends the match.** `drop_audit`'s scenario becomes an ordinary
+  leaver whose chair goes to a bot.
+
+#### The shape of the work
+
+1. **A server with no eyes.** `--server` mode: `NetSession` hosts with *every* seat remote or
+   bot — no local player, no camera, no HUD. The game has never run a match nobody is watching,
+   and the assumption that blue seat 0 is "me" has been evicted from gameplay code twice already
+   (M7's survey, then `mouse_control.gd`); this flushes wherever it is still hiding in
+   presentation bootstrap. The audit is the existing two-process suites re-pointed at a headless
+   host — they assert seating, replication, leaks and drops already, and should pass unchanged.
+   That "unchanged" is the check.
+2. **The directory.** A deliberately tiny HTTP service — target ~150 lines — on the same box:
+   `POST /lobby` mints a code (four letters, unambiguous alphabet, expiring) and assigns a port;
+   `GET /lobby/CODE` returns `address:port` or 404. No accounts, no auth beyond the code itself,
+   no state that survives a restart mattering. HTTPS via a caddy/nginx in front, because the
+   client will ship with this URL baked in.
+3. **The spawner.** One headless Godot process per lobby, launched on demand, killed after
+   sitting empty. `OS.create_process` knowledge from `seat_audit` transfers directly — the tools
+   have been spawning and supervising Godot processes since M7. **Measure matches-per-box before
+   promising capacity**: a headless `bot_soak` at full seats, watched with `top`, is an afternoon
+   and turns "a CX22 is probably plenty" into a number.
+4. **The lobby UI grows a code.** Host shows the code in letters big enough to read over a
+   shoulder or a voice call; Join is a four-letter field instead of an address field. Direct
+   `address:port` join stays, demoted to a dev/LAN corner — it is the test path and the offline
+   path, and the listen server is never deleted: it is single player, it is LAN, and it is what
+   every in-process audit runs on.
+5. **The audits.** A directory round-trip test (two real processes meet through a real code);
+   wrong code, expired code, full lobby, and the server process dying mid-match (the client
+   already has `wire_lost`; this is the first time it will fire for a reason that isn't the
+   *host player* leaving). The replication and leak suites re-run against the headless host
+   as-is.
+
+**Done when:** someone in another house, told nothing but four letters out loud, is in your
+match in under a minute — and the box survives the two of you playing a full one.
+
+**Not in scope:** matchmaking, queues, parties, accounts, server browsers, regions. One box,
+one region, friends with a code. The moment two strangers should find each other *without*
+exchanging a code, that is a different game economically and this plan says so rather than
+drifting into it.
+
+> **The economics, so nobody re-litigates them.** At the measured 6.3 KB/s per client, a full
+> 8-human match is ~70 KB/s of egress — the CX22's 20TB allowance is on the order of **80,000
+> match-hours a month**. Bandwidth will never be the bill; the bill is €4.50 flat. The free-tier
+> alternative (directory on Cloudflare Workers, host still port-forwards) was considered and
+> fails the brief on the word "reliable" — it solves the *address* problem and leaves the *NAT*
+> problem, and the NAT problem is the one that actually stops a friend joining.
+
+---
+
+### M10 — The Backyard BBQ (2–3 weeks)
+
+**Question:** M4's, still unpaid — *would you rather take the tunnel?* — asked at last on a map
+built to make it a real choice.
+
+Every system verdict still outstanding is waiting on this layout, and it is primarily a *design*
+milestone: the systems are built, audited, and provably indifferent to which map they run on. The
+one piece of engineering it earns is a narrow map-authoring tool, because a layout assembled only
+after pressing Play cannot be designed by looking at it.
+
+- The real yard: patios and paving as committed no-surface crossings, props that break sightlines,
+  grass laid as routes rather than decoration, nests that can be defended without being bunkers.
+  Eighty metres of open dirt is what made every router correctly answer "walk" — the map's job is
+  to make "dig" the honest answer somewhere.
+- **The dig-controls pass**, deferred since M4, lands here — the map is what tells us whether
+  point-and-hold is the friction or the fun.
+- The seeded rock, boulder, and vein dials get their first real tuning, because depth-versus-cover
+  trade-offs finally exist.
+- Bot verdicts re-run: `tunnel_bias`, the digger's judgement, and the defender's watch all tuned
+  against real routes. `bot_soak`'s cells-per-mouth is the instrument.
+
+#### The yard authoring tool
+
+The current scene is a shell: ground, perimeter, nests, one no-surface zone and three props are
+authored, while grass, pebble scatter, boulders, cheese, underground veins and the surface navmesh
+appear from `_ready`. That split is useful at runtime and hostile in the Godot editor — the scene
+shows the old test shapes or an almost empty lawn instead of the map being designed. M10 adds a
+small editor plugin that makes the hybrid map visible and editable without turning this project
+into a general-purpose level editor.
+
+**The build order is the scope guard: recipe format → runtime consumption → preview → validation
+→ placement palette, in that order and with the palette timeboxed.** The recipe must stand alone
+before any plugin UI exists, because a typed `Resource` with exported fields is already an
+authoring tool — diff-able text serialization and inspector editing for free. That is the
+fallback the milestone keeps in its pocket: if plugin work balloons, the Backyard BBQ still gets
+designed with the inspector and standard editor handles, and the palette dies without taking the
+map with it. The palette is also the piece most likely to be unnecessary — zones, nests and props
+authored as ordinary nodes with `EditorNode3DGizmoPlugin` gizmos get selection, transform handles
+and snapping from the editor itself, and a bespoke palette has to beat that to earn its keep.
+
+- **Preview the recipe in the 3D editor.** One action rebuilds editor-only previews of the current
+  grass, scatter, boulders, caches and per-plane rock from their real seeds and settings. Surface,
+  plane 1, plane 2 and plane 3 can be viewed separately. Preview generation and runtime generation
+  share the layout rules, so the tool cannot show a pleasant fiction that the match replaces on
+  launch; preview objects themselves are disposable and never become authoritative game state.
+- **Author the things that make routes.** Hand placement for nests, rectangular no-surface zones,
+  collidable/nav-aware props, fixed boulders, grass route regions and explicit cache positions.
+  Important landmarks are hand placed; the seeded generators remain available as filler around
+  them. Underground rock can stay generated, be regenerated per plane, or receive hand-authored
+  cells where a deliberate obstruction is needed. Tunnels are not painted into a map — they remain
+  the thing players and bots build during a match.
+- **Save an ordinary project asset.** A map is a small authored recipe — placements, bounds,
+  generator settings and seeds — a custom `Resource` saved as `.tres`, typed exports rather than a
+  dictionary blob, consumed by the same arena shell. Not a baked copy of thousands of blades and
+  stones. `arena.tscn` becomes the first recipe rather than a unique scene full of assumptions.
+  "Play this map" launches that recipe directly for iteration.
+- **The recipe has a wire obligation, and it is the one genuinely new rule here.** Host and every
+  client build their world from the recipe plus its seeds — the design `rock_seed` already relies
+  on, generalised. So the recipe carries a **version field and a content hash, asserted at
+  `HELLO`/`START`**: a client with a stale or locally edited copy fails loudly at the door rather
+  than desyncing the knowledge masks silently mid-match, which is precisely the class of failure
+  this plan keeps finding "looks fine from inside a match". The same obligation reaches the
+  generators: explicit `RandomNumberGenerator` with stored seeds and no dictionary-order
+  iteration, or preview, host and client diverge three ways.
+- **Validate gameplay, not just geometry — and the validator is an audit wearing a panel.** Before
+  play or save, report out-of-bounds objects, off-grid boulders, obstructed nest clearances,
+  illegal caches, mismatched surface/tunnel/minimap bounds, missing collision or navigation
+  participation, and routes whose obvious surface walk is never challenged. The editor report is a
+  thin view over a shared `map_lint` that also runs headless as a `--script` suite against a
+  deliberately broken fixture recipe, per the standing rules — two copies of "is this nest
+  clearance legal" will drift, and the editor copy will be the one that is wrong. The
+  route-challenge check in particular is a navmesh question and is answered by baking headlessly
+  and asking `route_planner`, not by a second heuristic. The existing cache, tunnel, navigation
+  and bot probes remain the final checks; the editor report catches the cheap failures before a
+  match boots.
+- **Undo, redo and deletion are mandatory, and they go through `EditorUndoRedoManager`.** Not a
+  bespoke stack — the plugin's edits must compose with the editor's own history, because a
+  parallel undo works in a demo and corrupts a scene in month three. Selection, grid snapping,
+  seed controls, layer visibility and clear warnings are enough. Terrain sculpting, arbitrary
+  polygons, an in-game editor, asset importing and a distributable mod format are not M10.
+
+> **Two classic plugin traps, named now because both will bite.** First, **`@tool` contamination**:
+> sharing generation code with the editor means those scripts run inside the editor process. The
+> `@tool` annotation stays on a thin editor-only layer and the generators are pure — recipe in,
+> placements out, no autoloads, no `Input`, no scene-tree side effects — with
+> `Engine.is_editor_hint()` guards at the seams. Every node-order scar this document carries
+> (`_init` versus `_ready`, ready-order under `Surface`) gets a second life in-editor. Second,
+> **preview nodes leaking into the saved scene**: editor-created nodes are serialized into the
+> `.tscn` the moment they are given an `owner`. Previews keep `owner = null`, and `map_lint`
+> asserts **zero preview nodes exist on save** — the "disposable preview" claim turned into a
+> check, because otherwise a preview quietly becomes authoritative state, which is the exact
+> failure the preview bullet promises to prevent, arriving through the back door.
+
+> **The plugin lives in `addons/`, excluded from export presets the way `tools/` already is.** It
+> must not ship in the `.app` and must not reach the headless server.
+
+> **The honest risk of folding the tool into M10 rather than giving it a milestone:** tool work
+> eating the design milestone. The build order above and the palette timebox are the mitigation —
+> if placement UX is not done in a few evenings, the yard gets designed with inspector and gizmos
+> and the palette dies. The milestone's question is still *would you rather take the tunnel*, not
+> *is the editor nice*.
+
+This does **not** add a map-selection screen or procedural variation per match. The host and every
+client still enter the same checked-in Backyard BBQ recipe. Choosing and synchronising among
+multiple recipes belongs with "more maps or better feel" at M12; the tool merely ensures a second
+map would not require hand-editing a monolithic `.tscn` when that decision is eventually made.
+
+**Done when:** M4's done-when, verbatim: you'd rather take the tunnel than the surface route, and
+the choice feels like a real decision rather than an obvious one. Plus one new bar, now that M9
+exists: **a full-evening session with friends on the real map produces the story M3 produced
+against bots.** The authoring bar is equally concrete: the Backyard BBQ can be reconstructed from
+an empty recipe, previewed at every depth and launched for a match without editing scene text or
+running the game merely to discover where its generated parts landed.
+
+---
+
+### M11 — The world (2 weeks)
+
+The former 8b and 8c, unchanged in content, resequenced behind connectivity and the map because
+they make good sessions better rather than making sessions possible.
+
+- **The Cat first, on a fixed schedule. Then the Crow.** Does the match get better when they
+  show up — as threat *and* as respite? PvE pressure is also the natural anti-turtle mechanism a
+  defended nest may turn out to need; that hypothesis is written down here so M10's playtests
+  know to watch for turtling.
+- **Water, binary version:** flooded/not-flooded segments on a timer. Proves whether
+  water-as-a-threat is fun *before* the flow simulation earns its keep.
+
+**Done when:** an honest verdict on each, added separately so you can tell which did what.
+
+---
+
+### M12 — Decide what this is (open)
+
+With connection, map, and world answered, the real decisions become answerable — and they are
+mostly *distribution* decisions now, which is why they wait until there is something worth
+distributing:
+
+- **Web or desktop.** The transport interface has kept this open since M0; a web build makes the
+  code lobby radically more powerful (the code becomes a link) and the dedicated server means
+  browser clients were never going to need to host. The open cost is the renderer (the pixel
+  pass) and a `WebSocketTransport`.
+- Generalist and Juggernaut, the remaining classes.
+- More maps or better feel.
+- The first non-capsule mouse, and whether art starts in earnest.
 
 ---
 
 ## What we deliberately don't build yet
 
 - ~~Matchmaking, lobbies, parties — friends use a direct connect code~~ **Split, because this lumped
-  a day of work in with real infrastructure.** A lobby exists as of M7 checkpoint 5. What remains
-  deferred, in ascending cost: **LAN room names** (UDP broadcast, no infrastructure, host names a
-  lobby and the house sees it in a list); **internet room names** (an address book — one HTTP endpoint
-  and a key-value store, which also survives the host's IP changing — but the host still forwards a
-  port once); **no port forwarding at all** (UDP hole punching or a relay, needs an always-on box and
-  is impossible on HTTP-only serverless). Only the last removes what actually stops a friend joining,
-  and only the last costs anything. Real matchmaking — ranking, queues, parties — stays out entirely.
+  a day of work in with real infrastructure.** A lobby exists as of M7 checkpoint 5. ~~What remains
+  deferred, in ascending cost: **LAN room names**; **internet room names**; **no port forwarding at
+  all**.~~ **The last rung is now M9** — the analysis here (only removing port forwarding removes
+  what actually stops a friend joining, and only that costs anything) is exactly why it was promoted
+  to the next milestone, resolved as a dedicated headless box rather than hole punching. LAN room
+  names stay deferred (nice, not blocking). Real matchmaking — ranking, queues, parties, strangers —
+  stays out entirely.
 - Accounts, persistence, stats, leaderboards
 - Anti-cheat beyond server authority and visibility filtering
-- Multiple maps — one map, iterated, beats three mediocre ones
-- Procedural map variation (GDD §8) — one hand-built layout until the systems are proven
+- Multiple playable maps and map selection — M10's authoring tool serves one checked-in Backyard
+  BBQ recipe; one map, iterated, still beats three mediocre ones
+- Procedural map variation *per match* (GDD §8) — M10 previews seeded filler inside one hand-built
+  layout, but does not make the strategic layout change underneath players
 - Free-form digging and free-angle placement — snapped chunks only
-- **Flowing water** — binary flooding at M8c, flow simulation post-M9
+- **Flowing water** — binary flooding at M11, flow simulation post-M12
 - ~~**Tall grass bending** (GDD §8) — a shader problem, not a systems problem. Post-M9.~~
   **Reversed — it is M2.5**, ahead of the core loop. It is a systems problem: the bend is
   hidden information every class can produce and read, which makes it a mechanic, not a
   finish. Building the flag chase on bare ground and adding cover afterwards would mean
   tuning the chase twice.
-- **Sneak camouflage shader** — placeholder transparency until then
-- The Juggernaut and Generalist — M9 at the earliest
+- ~~**Sneak camouflage shader** — placeholder transparency until then~~ **Built at 8b**, and it is
+  not the shader this line was expecting: `art/shaders/fade_glass.gdshader` is a **lens** rather
+  than a blend toward the terrain's colour, because a blend can only be convincing against ground
+  that has one average colour, and a lawn photographed from above does not
+- The Juggernaut and Generalist — M12 at the earliest
 - Audio beyond crude placeholders
 - Client prediction — until it demonstrably hurts
 
@@ -2353,11 +2671,15 @@ evening, stop and go back to systems.
 |---|---|---|
 | M0–M6 | Local only | **$0** |
 | M7–M8 | Listen server, direct connect | **$0** |
-| Post-M9, if there are players | 1× Hetzner CX22 (2 vCPU / 4GB / 20TB) | **~€4.50/mo** |
-| Web build hosting | Cloudflare Pages free tier | **$0** |
-| Domain | | **~$12/yr** |
+| M9 onward | 1× Hetzner CX22 (2 vCPU / 4GB / 20TB): code directory + headless match servers | **~€4.50/mo** |
+| Web build hosting (M12, if web) | Cloudflare Pages free tier | **$0** |
+| Domain (the directory URL ships in the client) | | **~$12/yr** |
 
-At 1000 monthly players (10–30 peak concurrent), one small VPS is comfortably enough.
+The M7 measurements make this table trustworthy rather than hopeful: at 6.3 KB/s per client, a
+full 8-human match is ~70 KB/s, so the CX22's 20TB is ~80,000 match-hours a month — the cost is
+the flat €4.50, forever, until this game has a problem it should be so lucky to have. At 1000
+monthly players (10–30 peak concurrent), one small VPS is comfortably enough — pending M9's
+matches-per-box measurement for the CPU half of that claim.
 **Do not host game traffic on AWS/GCP** — egress at ~$0.09/GB would cost more than the
 entire server.
 
@@ -2365,10 +2687,10 @@ entire server.
 
 ## How this project tests
 
-Ten suites in `tools/`, all `--script` runners. Three shapes, and the distinction matters:
+Eleven suites in `tools/`, all `--script` runners. Three shapes, and the distinction matters:
 
 - **Audits** assert rules against hand-built scenarios (`tunnel_audit`, `match_audit`,
-  `cheese_audit`, `input_audit`, `net_audit`).
+  `cheese_audit`, `sneak_audit`, `input_audit`, `net_audit`).
 - **Two-process audits** launch real Godot processes over a real socket and compare what each
   concluded (`seat_audit`, `replication_audit`, `lobby_audit`, `drop_audit`, `link_audit`).
   Slower and uglier than anything else here, and the only thing that can see seating, leak and
@@ -2388,6 +2710,25 @@ Ten suites in `tools/`, all `--script` runners. Three shapes, and the distinctio
 > over bare earth, because the stomp's whole design is that those two must be indistinguishable.
 > It is the screenshot version of *"a check on a filter must observe a case the other rules would
 > have permitted"*.
+>
+> `[ADDED at 8b]` **And a fifth: *is the picture measuring what it claims to?*** The Sneak's two
+> probes are the first that had to answer a question about **absence**, and both got a plausible
+> answer to the wrong question first. `fade_shot` photographed a mouse that was not faded at all —
+> it had copied `slam_shot`'s `set_physics_process(false)` and the veil's clock lives on the physics
+> tick, so the frame showed the old translucent mouse and looked like a working ability. `dust_shot`
+> measured each frame against clear air, which scores a fully hidden mouse and a bare patch of lawn
+> identically, and called a working screen broken. **Where a probe is checking that something cannot
+> be seen, the metric needs its own control in the same frame** — a test card the lens has to bend,
+> a patch of ground the hidden mouse has to match.
+
+> `[ADDED at 8b]` **`await process_frame` is not a unit of time, and in a headless run it is barely
+> a unit of anything.** Idle frames run as fast as the process can produce them — thousands a
+> second — so a wait counted in frames can contain no physics tick at all. Every rule worth auditing
+> resolves on that tick: `spotting.gd` sweeps four times a second, an attack cools down in 0.28s,
+> and a control's clock ticks on the frame. **`sneak_audit` waits in seconds throughout** and says
+> so at `_sweep`, because the failure mode is uniquely nasty: the check reads state from *before*
+> the thing it just did, does it reliably, and reports a working rule as broken. It cost an
+> afternoon across two files before it was named.
 
 **The recurring failure is a check that cannot fail**, caught five times with a different cause
 every time: scaffolding that silently no-opped and left every scenario reporting `ok`; a subject
@@ -2415,11 +2756,13 @@ Still open:
 
 | Risk | Mitigation |
 |---|---|
-| **Digging is legible but boring** | M4's verdict is still deferred behind the Backyard BBQ layout. Be willing to hear "no." |
-| Netcode rabbit hole | Listen server, no prediction until it hurts, transport behind an interface |
-| Listen-server host advantage | Unfixable at this scale — name it and measure it at M7 checkpoint 5 (see M7 §Risks) |
-| Scope creep via classes | Four classes now; Brute's abilities at M8, Juggernaut at M9 |
-| Art paralysis | Capsules for maps and props through M8. No art decisions until systems are proven. |
+| **Digging is legible but boring** | M4's verdict is still deferred behind the Backyard BBQ layout — now M10. Be willing to hear "no." |
+| Netcode rabbit hole | Listen server held; prediction still deferred until it demonstrably hurts. M9 adds a box, not a protocol. |
+| Listen-server host advantage | ~~Unfixable at this scale~~ **Fixed at this scale by M9** — a dedicated box gives every player a symmetric round trip. Until then, name it at checkpoint 5. |
+| **A server nobody is watching** | New with M9. A headless match can fail in ways no screen shows — the answer is the same as ever: the two-process suites run against it, and the spawner logs are evidence, not decoration. |
+| **Operating a box becomes a hobby** | New with M9. One box, one region, ~150 lines of directory, systemd and a log — the moment it wants Kubernetes, the scope has drifted and this row says so. |
+| Scope creep via classes | Four classes plus an unscheduled ability wave at 8a — the wave shipped audited, but it *was* unscheduled. Juggernaut waits for M12. |
+| Art paralysis | Capsules for maps and props through M11. No art decisions until systems are proven. |
 | Motivation over a long solo project | Every milestone is 1–2 weeks and ends in something playable |
 
 Answered: tunnels read on screen (M2), M3 is fun (M3), bots path through tunnels via one shared
@@ -2450,33 +2793,35 @@ dig, and a lobby with Host and Join so a friend does not need a terminal. Checkp
 **Ten suites, ~250 checks**, including two-process audits that play real matches over real sockets
 and one that plays a match at 120ms/40ms jitter/12% loss.
 
-**Immediate next: M7 checkpoint 5**, which is the only part automation cannot do — a friend, over
-the internet, for a full match. Router reachability, how a stranger gets in, and whether it feels
-fair. Mac only; web stays an M9 rendering decision.
+**M8b closed the Sneak.** *Fade*, the *backstab* passive, the *dust screen* and the sonar's
+*listen* — four abilities on a class that had one, written up under 8b and recorded in GDD §4.
+It was not on the plan; the Sneak having a single verb that pointed at terrain is what put it
+there.
 
-Then **M8**, which is three separate experiments (Brute, the PvE faction, binary water) added one
-at a time so each has its own verdict.
+**M8a's build-out is closed, and it ran past its own plan.** Un-digging moved to the Brute and
+grew the **stomp**; the feel pass and tuning pass are written up under M8a; and then a wave the
+plan never scheduled shipped audited: **Slam** (the carrier-drop shove), **Second Wind**,
+**Banner Toss**, and **Shore Up** (the Engineer's answer to losing the cave-in). The bots learned
+to play the same game — contact book, per-crew routes, the cheese economy, the speed ladder. The
+GDD carries the ability records; the corking verdict is the only 8a item left, and it is a
+playtest.
 
-**8a has started, out of order and deliberately so.** Un-digging has moved from the Engineer to
-the Brute and grown its surface form — the **stomp** — which closes the `[DECIDE]` GDD §4 has
-carried since M4 and makes §5's counterplay web a loop for the first time: a Sneak's cant mark is
-now something another class can act on. `match_audit` is 21 checks; the new `stomp` check is the
-one that matters, because the rule it guards (a stomp over nothing still costs the cooldown) is a
-hidden-information leak that no playtest could see.
+**The plan is recalibrated from here — see §The recalibration.** The working assumption, stated
+there and revisable, is that everything standing play-tests well. On that assumption the ordering
+principle is: spend on what every multiplayer session touches, in the order a session touches it.
 
-**Then the feel pass, which is what makes the handoff legible**: dust and a camera thump on the
-stomp, and cant that names *whose* corridor it found — crew colour on the echo and the mark, a
-reticle instead of a rune when the tunnel is theirs, and a pulse that leaves whether or not
-anything answers. One byte of it crosses the wire and is asserted there. Three bugs came out of
-photographing it that no audit could have seen, written up under M8a.
-
-**Then a tuning pass that turned out not to be one.** The patch is a tile wider so a cant mark is
-enough to aim it; a mouse caught in a collapse is **buried** rather than scruffed, with its own
-feed line, HUD word and pose bit; the echo lasts thirty seconds rather than 1.8, which makes the
-outline a *reading* and the mark a *record*; and a collapse now dusts the ceiling and rattles the
-view of anyone underground nearby who was **not** caught — the near miss, which until now was
-completely silent. `match_audit` is 22 checks: the new one guards the dust against being a free
-sonar sweep, which is what it would be unfiltered.
-
-**Slam and the corking verdict are what is left of 8a**, and the map verdict above is what 8a's
-real question — *does the Engineer start digging deeper?* — is still waiting on.
+1. **M7 checkpoint 5** — a friend, over the internet, a full match. The one thing automation
+   cannot answer, and now days away rather than blocking: it needs one evening and one
+   port-forward, and its verdict (especially on fairness and host advantage) feeds M9 directly.
+2. **M9 — Code lobbies over the internet.** The centrepiece of the recalibration: one ~€4.50/mo
+   box running headless matches behind a four-letter-code directory. Chosen over hole punching,
+   relays, UPnP and Steam for reasons tabled in the milestone; kills the NAT wall, the
+   host-advantage risk and host-quit-ends-match in one move, and the netcode above the transport
+   does not change.
+3. **M10 — The Backyard BBQ.** The map that finally makes M4's *"would you rather take the
+   tunnel?"* answerable, plus the deferred dig-controls pass — and the first full-evening
+   friend sessions on real infrastructure.
+4. **M11 — The world.** The Cat, the Crow, binary water — the former 8b/8c, unchanged, one at a
+   time so each keeps its own verdict.
+5. **M12 — Decide what this is.** Web or desktop (the code becomes a *link* if web wins),
+   remaining classes, more maps, the first real mouse.

@@ -145,6 +145,10 @@ const MOUSE_GROUP: StringName = &"mouse"
 ## Damage per connected swing. Four swings to scruff -- long enough that a scrap has a shape
 ## and either mouse can decide to leave, short enough that ganging up is decisive.
 @export var attack_damage: float = 26.0
+## What a swing struck from concealment is worth, as a multiplier. Copied off the class (GDD
+## section 4); 1.0 for everybody but the Sneak, so the passive is simply absent on three quarters
+## of the mice and needs no test anywhere asking which class this is.
+@export_range(1.0, 4.0, 0.05) var unseen_damage: float = 1.0
 ## Seconds from pressing to the swing finishing.
 @export var attack_swing: float = 0.4
 ## How far into the swing the hit resolves. The rest is recovery, which is what makes a
@@ -257,6 +261,8 @@ var _buried: bool = false
 var _since_damage: float = 999.0
 var _swing_left: float = 0.0
 var _swing_hit: bool = false
+## Whether the swing currently in the air was started from concealment. See [method swing].
+var _struck_unseen: bool = false
 var _cooldown_left: float = 0.0
 var _knock: Vector3 = Vector3.ZERO
 var _stun_left: float = 0.0
@@ -269,6 +275,21 @@ var _wedges: int = 0
 var _wedge_wait: float = 0.0
 var _boost_left: float = 0.0
 var _boost_cooldown: float = 0.0
+## Seconds of [Fade] left (GDD section 4). STATE ON THE MOUSE RATHER THAN ON THE ABILITY NODE, and
+## for the reason `_boost_left` is here rather than on whatever presses Scurry: four unrelated
+## things have to ask *is this mouse faded* -- the veil shader, `grass_camouflage.gd`, `spotting.gd`
+## and the backstab in `_resolve_swing` -- and only one of them is anywhere near the Sneak's control
+## set. A bot has no controls at all (see [MouseControls]) and would have had no way to be faded by
+## anything, which is the same shape of bug the sprint tank was moved here to fix at M8.
+##
+## The COOLDOWN is not here, because that genuinely is the ability's: it rations a keypress.
+var _fade_left: float = 0.0
+## The veil's own 0..1, chased toward `1 if _fade_left > 0 else 0` so going to glass takes a moment
+## at each end. Not derived from `_fade_left` directly: the ability is ten seconds and the
+## transition is a fraction of one, so a ratio of the remaining time would spend the whole ability
+## arriving.
+var _veil: float = 0.0
+var _veil_material: ShaderMaterial
 var _stamina: float = 0.0
 var _regen_timer: float = 0.0
 ## Spending stamina to run. INTENT, set by whoever is driving -- a double-tapped W for a player, a
@@ -349,6 +370,7 @@ func apply_class(definition: ClassDefinition) -> void:
 	speed = definition.speed
 	turn_speed = definition.turn_speed
 	attack_damage = definition.attack_damage
+	unseen_damage = definition.unseen_damage
 	carry_penalty = definition.carry_penalty
 	# NOT CLAMPED, and the wedges are not spilled. Swapping happens at your own nest, which is the
 	# one spot on the map where anything you were carrying has already been banked -- and a Brute
@@ -447,10 +469,25 @@ func apply_team_color(colour: Color) -> void:
 		(node as MeshInstance3D).material_override = material
 
 
-## The one material every part of the mouse shares, so concealment can fade the whole body
-## without walking the model.
-func get_body_material() -> StandardMaterial3D:
-	return _body_material
+## How solid this mouse is right now, 0..1. The door `grass_camouflage.gd` writes concealment
+## through (GDD section 8).
+##
+## A METHOD RATHER THAN THE MATERIAL ITSELF, which is what it used to hand out. One caller reached
+## in and set `albedo_color` directly, which was fine while there was exactly one material -- and
+## stopped being fine the moment [Fade] swapped a [ShaderMaterial] over the top of it, because the
+## caller went on writing alpha to a material that was no longer bound to anything. The mouse got
+## quietly, permanently stuck at whatever opacity it happened to have when the veil went up.
+##
+## So the mouse owns *which material is on the body* and nobody else needs to know. Both materials
+## take the tint; the standard one because it is what draws an ordinary mouse, and the veil because
+## a faded Sneak standing in deep grass is concealed by BOTH and the two must not cancel out.
+func set_body_alpha(alpha: float) -> void:
+	var tint := team_color
+	tint.a = clampf(alpha, 0.0, 1.0)
+	if _body_material != null:
+		_body_material.albedo_color = tint
+	if _veil_material != null:
+		_veil_material.set_shader_parameter(&"body_color", tint)
 
 
 # ---------------------------------------------------------------------------- collision
@@ -521,6 +558,106 @@ func get_horizontal_speed() -> float:
 ## written here before there was anything to enforce it against.
 func is_boosting() -> bool:
 	return _boost_left > 0.0
+
+
+## Behind the veil (GDD section 4). Read by `grass_camouflage.gd`, which drops a faded mouse to
+## nothing, and by `spotting.gd`, which then refuses to put it on anybody's map.
+func is_faded() -> bool:
+	return _fade_left > 0.0
+
+
+## Seconds of veil left, for a HUD that wants to draw the ability running out.
+func fade_left() -> float:
+	return _fade_left
+
+
+## Go to glass for `seconds`, or come back at 0. The one door into the state.
+##
+## TWO CALLERS AND THEY ARE NOT THE SAME KIND OF THING, which is worth naming because it looks like
+## duplication. [Fade] calls it on the machine that simulates this mouse, as the result of a
+## keypress. `apply_pose` calls it on every OTHER machine, as the result of a bit in a snapshot --
+## because a puppet cannot be told the ability fired (a remote player's input never reaches a third
+## machine) and being invisible is not a thing a client may get wrong. One is the rule, the other is
+## the picture of it; they meet here so there is one definition of what being faded does.
+##
+## CARRYING THE BANNER REFUSES IT OUTRIGHT (GDD section 2). Carriers are visible, full stop -- the
+## same rule `grass_camouflage.gd` enforces for grass and the reason the banner rides on a pole over
+## your head. A Sneak that could steal the flag and vanish with it would delete the handoff play
+## that the whole class spread was built to produce.
+func set_faded(seconds: float) -> void:
+	if seconds > 0.0 and (is_carrying() or _scruffed):
+		return
+	_fade_left = maxf(0.0, seconds)
+
+
+## The veil's own clock, and the material swap at each end of it.
+##
+## THE MATERIAL IS SWAPPED ON THE EDGES ONLY, not held on for the whole ability. `material_override`
+## is written on every mesh in the model, so doing it per frame would be a handful of writes sixty
+## times a second to say a thing that changed twice.
+func _tick_veil(delta: float) -> void:
+	# The banner can arrive DURING a fade -- picking it up is not a keypress this ability sees -- so
+	# the carrier rule is enforced here as well as at the door. Same for going down.
+	if _fade_left > 0.0 and (is_carrying() or _scruffed):
+		_fade_left = 0.0
+	_fade_left = maxf(0.0, _fade_left - delta)
+
+	var wanted := 1.0 if _fade_left > 0.0 else 0.0
+	# The common case, and the reason this is cheap enough to run on every mouse every tick: not
+	# faded, no lens on, nothing to do. Three quarters of the mice in a match never leave this line.
+	if wanted <= 0.0 and _veil_material == null:
+		return
+	# Exponential chase, the same shape and roughly the same rate the grass fade uses. Deliberately
+	# not instant: a mouse that swaps between solid and glass between two frames reads as a draw
+	# error, and the quarter second it takes is the tell that says the ability just started.
+	_veil = lerpf(_veil, wanted, 1.0 - exp(-VEIL_RATE * delta))
+	if wanted > 0.0 and _veil_material == null:
+		_wear_veil()
+	if _veil_material != null:
+		_veil_material.set_shader_parameter(&"veil", _veil)
+		# Off at the far end rather than at `_fade_left` hitting zero, so the mouse finishes coming
+		# back before the lens is taken away. Removed the other way round it would snap solid.
+		if wanted <= 0.0 and _veil < 0.01:
+			_shed_veil()
+
+
+## How fast the veil arrives and leaves, per second, as an exponential chase.
+const VEIL_RATE: float = 8.0
+
+
+## Put the lens on every mesh in the model.
+##
+## THE SHADER IS LOADED ON DEMAND AND THE MATERIAL IS PER MOUSE. Per mouse because `body_color` and
+## `veil` are both per mouse; on demand because three quarters of the mice in a match are not Sneaks
+## and will never wear one, and a `preload` on this file would compile the shader on a headless
+## audit that has no renderer to compile it with.
+func _wear_veil() -> void:
+	if _visual == null:
+		return
+	var shader := load("res://art/shaders/fade_glass.gdshader") as Shader
+	if shader == null:
+		push_warning("fade: the veil shader would not load -- the Sneak stays solid")
+		return
+	_veil_material = ShaderMaterial.new()
+	_veil_material.shader = shader
+	_veil_material.set_shader_parameter(&"veil", _veil)
+	# Whatever the grass had this mouse at when the veil went up, so the two concealments compose
+	# instead of one resetting the other. See [method set_body_alpha].
+	_veil_material.set_shader_parameter(&"body_color", _body_material.albedo_color
+		if _body_material != null else team_color)
+	for node in _visual.find_children("*", "MeshInstance3D", true, false):
+		(node as MeshInstance3D).material_override = _veil_material
+
+
+## Back to being an ordinary mouse. The standard material is still there and still carries whatever
+## alpha the grass has been writing to it all along, so there is nothing to restore.
+func _shed_veil() -> void:
+	_veil_material = null
+	_veil = 0.0
+	if _visual == null:
+		return
+	for node in _visual.find_children("*", "MeshInstance3D", true, false):
+		(node as MeshInstance3D).material_override = _body_material
 
 
 ## Whether Scurry is off cooldown. Says nothing about whether the crew can afford it: the pool
@@ -642,12 +779,47 @@ func swing() -> bool:
 		return false
 	_swing_left = attack_swing
 	_swing_hit = false
+	# THE BACKSTAB IS DECIDED HERE AND SPENT IN `_resolve_swing`, a sixth of a second later, and the
+	# gap between those two moments is why it is latched rather than asked again at the end.
+	#
+	# WHAT THE PLAYER DID WAS STRIKE FROM CONCEALMENT. The swing itself is what breaks it: the mouse
+	# lunges, `grass_camouflage.gd` reads the movement and starts bringing the opacity back up, and
+	# by the time the blow lands the striker may well be over `reveal_opacity` again. Asked at the
+	# resolve, the bonus would be paid or withheld according to how fast the fade smoothing happened
+	# to run -- which is a physics detail, invisible on screen, and would make the passive feel
+	# random. Asked at the press, it is exactly the thing the player can see themselves doing.
+	_struck_unseen = unseen_damage > 1.0 and _is_unseen()
 	# Swept over the windup, so the ribbon finishes crossing the cone on the frame
 	# `_resolve_swing` fires rather than after it.
 	if _swing_arc != null:
 		_swing_arc.play(attack_windup)
 	swung.emit(self)
 	return true
+
+
+## Is this mouse concealed *right now*, by any means?
+##
+## ASKED OF `spotting.gd` RATHER THAN WORKED OUT HERE, which is the entire design of the backstab
+## and the reason it is three lines instead of thirty. The question "can I be seen" already has an
+## answer in this game, it is already the answer the enemy minimap draws from and the bots hunt by,
+## and it already covers all three ways a mouse gets concealed: standing still in cover, walking
+## Slow through it, and the Sneak's [Fade]. A second opinion computed on this side would be a fourth
+## definition of hidden that agrees with the other three until the day somebody tunes one of them.
+##
+## THAT SHARING IS ALSO WHAT MAKES THE PASSIVE TEACHABLE. The player has been reading their own
+## concealment off the grass since M2 -- the bend IS the opacity (GDD section 8) -- so the tell for
+## "this swing will hurt" is a tell they already know how to read, and it is the same tell the
+## victim could have read about them. Nothing new goes on the HUD.
+##
+## FAILS CLOSED, unlike `Spotting.hidden` itself. No spotting node means no concealment model, and a
+## bonus that paid out in an arena with no way to be seen would be a bonus that pays out always --
+## in the headless audits especially, where mice are built by hand and every swing would quietly be
+## a backstab.
+func _is_unseen() -> bool:
+	var watch := get_tree().get_first_node_in_group(Spotting.SPOTTING_GROUP) as Spotting
+	if watch == null:
+		return false
+	return watch.hidden(self)
 
 
 ## Take a blow. `from` is where it came from, which is what turns damage into displacement.
@@ -776,6 +948,9 @@ func _scruff(by: Mouse) -> void:
 	_scruffed = true
 	_health = 0.0
 	_swing_left = 0.0
+	# The swing in the air is cancelled, so the ambush it was carrying goes with it. Left set, it
+	# would be spent by the FIRST swing of the next life -- a backstab collected by respawning.
+	_struck_unseen = false
 	_cooldown_left = 0.0
 	# The swing is cancelled, so the swipe drawing it has to go with it on the same frame.
 	if _swing_arc != null:
@@ -784,6 +959,12 @@ func _scruff(by: Mouse) -> void:
 	# rest of it, or the safest moment to spend a cheese would be the one just before you lose
 	# the fight -- and the cheese stays spent either way.
 	_boost_left = 0.0
+	# And so does the veil, for the same reason and one more: a scruffed mouse is laid on its side
+	# and its banner scattered around it, which is a very legible picture of something that has just
+	# happened *here* -- and an invisible one would be a Sneak going down in complete silence. The
+	# lens still takes its quarter second to come off, so what you see is the mouse resolving out of
+	# the air as it falls, which is the right moment to be given it back.
+	_fade_left = 0.0
 	velocity = Vector3.ZERO
 	_knock = Vector3.ZERO
 	_wish = Vector3.ZERO
@@ -824,6 +1005,17 @@ func revive_at(place: Vector3, facing: float = 0.0) -> void:
 func _resolve_swing() -> void:
 	var forward := get_facing_direction()
 	var limit := deg_to_rad(attack_arc_degrees) * 0.5
+	# THE BACKSTAB (GDD section 4). Read once for the whole cone rather than per target, because it
+	# is a fact about the striker and not about who it caught -- a swing that lands on two mice was
+	# one ambush, and paying full price on the first and a discount on the second would be the same
+	# blow costing two different amounts.
+	#
+	# AND IT IS SPENT HERE, whether or not anything was in the cone. A miss burns the ambush exactly
+	# as a hit does, which is right: the mouse has broken cover either way, and a Sneak allowed to
+	# swing at air until something walked into it would be holding the bonus rather than choosing a
+	# moment to use it.
+	var damage := attack_damage * (unseen_damage if _struck_unseen else 1.0)
+	_struck_unseen = false
 	for node in get_tree().get_nodes_in_group(MOUSE_GROUP):
 		var other := node as Mouse
 		if other == null or other == self or other.team == team or other.is_scruffed():
@@ -839,7 +1031,7 @@ func _resolve_swing() -> void:
 			continue
 		if to_them.length_squared() > 0.0001 and forward.angle_to(to_them.normalized()) > limit:
 			continue
-		other.take_hit(attack_damage, global_position, attack_knockback, self)
+		other.take_hit(damage, global_position, attack_knockback, self)
 
 	_resolve_swing_on_breakables(forward, limit)
 
@@ -994,6 +1186,18 @@ func apply_pose(at: Vector3, facing: float, flags: int, health: int) -> void:
 	# first pose would pin the wrong word on screen for the whole six seconds.
 	_buried = down and (flags & Snapshot.Flag.BURIED) != 0
 
+	# THE VEIL ON A SHORT LEASE, RENEWED BY EVERY POSE. The bit is a *state* and not a duration --
+	# there is no room in the byte for the seconds and no reason to send them, since a client has
+	# nothing to do with the number. So each snapshot buys a fraction of a second of veil and the
+	# next one buys it again. Written this way rather than as a bool the pose sets directly for one
+	# reason: if the packets stop, the mouse stops being invisible. A stuck-on veil after a
+	# disconnect would leave a permanently invisible mouse standing in the yard, which is the worst
+	# failure this bit could have and the only one a lease cannot produce.
+	if (flags & Snapshot.Flag.FADED) != 0:
+		set_faded(FADE_POSE_HOLD)
+	else:
+		set_faded(0.0)
+
 	# A TELEPORT, NOT A GLIDE, when the gap is absurd. Respawns put a mouse most of an arena away
 	# and interpolating across that draws it skating through the yard at fifty metres a second --
 	# which reads as a bug in the movement rather than as a respawn.
@@ -1004,6 +1208,12 @@ func apply_pose(at: Vector3, facing: float, flags: int, health: int) -> void:
 		global_position = at
 		_face_instantly(facing)
 
+
+## How long a pose's FADED bit keeps a puppet's veil up. Comfortably more than the 1/30s between
+## snapshots -- so an ordinary dropped packet does not flicker the ability -- and comfortably less
+## than a person would notice a Sneak lingering, so a mouse whose machine went quiet resolves back
+## into view rather than haunting the yard.
+const FADE_POSE_HOLD: float = 0.4
 
 ## Metres of disagreement past which a puppet stops interpolating and simply appears. Roughly a
 ## body length times ten -- comfortably more than a bad frame of lag at sprint speed, comfortably
@@ -1041,6 +1251,11 @@ func _tick_timers(delta: float) -> void:
 	# pickup the DIRECTOR decides becomes possible -- and a client that let it stall would grey out
 	# a cache its own server was perfectly willing to let it take from.
 	_wedge_wait = maxf(0.0, _wedge_wait - delta)
+	# ABOVE THE PUPPET GUARD, like the clocks and unlike the rules. A remote Sneak's veil has to go
+	# up and come down on every machine that can see it, and the bit that says so arrives in the
+	# pose -- so this end runs the picture on a short lease and lets each snapshot renew it. See
+	# `apply_pose` and [constant FADE_POSE_HOLD].
+	_tick_veil(delta)
 
 	if _swing_left > 0.0:
 		_swing_left = maxf(0.0, _swing_left - delta)

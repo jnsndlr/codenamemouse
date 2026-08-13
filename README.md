@@ -654,7 +654,10 @@ Open the project in Godot 4.7+ and press F5, or:
 | **F / R** | Sink a shaft down / break one up |
 | **C** | Change class — **only while standing in your own nest**, selector slides up |
 | **Q** | **Cave-in** (Brute, underground) — bring down the tunnel cell you are pointing at. The cell is boxed while you aim, warm when it will fire and cold while it cools. **Stomp** (Brute, on the lawn) — put a foot through whatever is beneath you: a small patch of the layer below, one cell of the layer under that, and nothing deeper. It has no cursor and it always goes off, even over bare ground. |
-| **X** | **Barricade** (Engineer) — wedge a boulder into the open cell you are pointing at |
+| **Q** | **Sonar** (Sneak) — sound the layer below, or rub out enemy cant at arm's reach. For **five seconds afterwards the pulse also comes back off mice**, wherever they are hiding and whatever layer they are on: they go on your crew's map, and you get a ring drawn over each of them. |
+| **Q** | **Shore up** (Engineer, hold) / **Second Wind** (Generalist) |
+| **V** | **Fade** (Sneak) — **ten seconds of glass.** You are not faded out, you are a lens: the ground behind you keeps being drawn where you stand, bent by the shape of a mouse. Nearly perfect on flat ground and findable against anything patterned, which is the counterplay. Refused while carrying the banner, and beaten at arm's length. **Slam** (Brute) / **Throw the banner** (Generalist) |
+| **X** | **Barricade** (Engineer) — wedge a boulder into the open cell you are pointing at. **Kick up dust** (Sneak) — a four-metre cloud at your feet for one second that nobody can see through, including you. |
 | **Arrows** | Turn the view a quarter at a time |
 | **Escape** | Pause — freezes the match, not just the view |
 | **P** | Screenshot, saved beside the log file. Not `F2`: macOS gives the top row to brightness and volume by default, so a function key photographs nothing on somebody else's Mac. |
@@ -781,7 +784,11 @@ spends most of its runtime waiting on purpose: it kills a host and then sits out
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/cheese_audit.gd
 ```
 
-**Run all ten before cutting a build.** An exported release template does not accept `--script`,
+```bash
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --script tools/sneak_audit.gd
+```
+
+**Run all eleven before cutting a build.** An exported release template does not accept `--script`,
 so none of them can ever run against the `.app` — the honest procedure is to run them on the same
 commit the export is built from and then smoke-test the binary by hand. A build that inherits
 confidence the audits didn't actually give it is the failure this whole project keeps warning about.
@@ -911,6 +918,26 @@ earth, because the stomp's entire design is that those two must be indistinguish
 they caught a dust cloud that had closed into a beige disc over the mouse, a crew colour that was
 a one-pixel hairline against pale ground, and a success message printed under the word **BLOCKED**
 — none of which any headless check in this project could have failed on.
+
+`fade_shot.gd` and `dust_shot.gd` are the Sneak's, and they are the sharpest case yet of that rule,
+because **an ability whose subject is visibility has no headless test at all.** Every rule in both
+can be asserted without a renderer — the cooldown, the ten seconds, the radius, whether
+`spotting.gd` drops the contact — and not one of those is the ability. Both probes therefore had to
+be *composed* before they said anything:
+
+- `fade_shot` photographs the same veil twice: on flat ground, where a working lens is very nearly
+  perfect, and over a **black-and-white test card**, where it has to visibly kink the bars. A lens
+  is invisible in what it does not bend, so the first two attempts — the patio rim, then a nest pad
+  — proved nothing twice: one backed onto a wall of grass, and the other had four bots standing on
+  it. It also caught the veil never going up at all, because the probe had copied `slam_shot`'s
+  `set_physics_process(false)` and the veil's clock lives on the physics tick; the photograph looked
+  plausible and was of the old translucent mouse.
+- `dust_shot` puts one mouse inside the cloud and one just outside it, and **measures each against
+  the ground beside it in the same frame**. Its first metric compared each frame against clear air,
+  which sounds equivalent and is not: dust over a mouse changes a pixel by about as much as dust
+  over grass does, so a fully hidden mouse and a bare patch of lawn both scored 21% and the metric
+  called the ability broken while the screenshot showed it working. It now reads 100% hidden inside
+  and single digits outside, which is the claim stated as a number.
 
 ```bash
 /Applications/Godot.app/Contents/MacOS/Godot --path . --script tools/screenshot_probe.gd

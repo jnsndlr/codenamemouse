@@ -323,7 +323,7 @@ The asymmetry here is the best thing in the system:
 | **In your own tunnel** | **Lit far ahead** — your crew hung the lamps, and the map shows the whole floor plan |
 | **In an enemy tunnel** | **Unlit**, and mapped by direct line of sight only. You are crawling blind. |
 | **On the surface** | Nothing underground, unless revealed — except a shaft mouth, which is a hole in the lawn |
-| **Sneak sonar active** | **Q** briefly traces nearby geometry exactly one layer below, then leaves one shared cant mark |
+| **Sneak sonar active** | **Q** briefly traces nearby geometry exactly one layer below, then leaves one shared cant mark — and `[ADDED]` for five seconds also finds **mice**, on any layer, however well hidden (§4) |
 
 **The darkness is the fog** `[DECIDED]`. Rather than occluding an enemy corridor or veiling it,
 nothing lights it: a lamp is a thing a crew hung in its own network, so theirs is a hole you
@@ -682,11 +682,124 @@ without these.
 |---|---|
 | Fantasy | The one you don't see until it's too late |
 | Stats | **Lowest health**, fastest, **highest burst damage** |
-| **Unique capability** | **Sonar** — briefly sounds one layer below and leaves contestable thieves' cant for the team. `[REVISED]` **Built (M5), extended (M8a)** — the echo and the mark now name **whose corridor** was found, not merely that one is there. |
-| Ability | *Fade* — hard to see while moving slowly; broken by attacking or sprinting. Still to build. |
+| **Unique capability** | **Sonar** — briefly sounds one layer below and leaves contestable thieves' cant for the team. `[REVISED]` **Built (M5), extended (M8a), extended again (M8b)** — the echo and the mark name **whose corridor** was found, and the pulse now comes back off **bodies** as well as earth for five seconds. |
+| Ability | `[REVISED]` *Fade* — **V, ten seconds of glass.** Built (M8b), and a timed ability rather than the passive this line used to describe. |
+| Ability | `[ADDED]` *Dust screen* — **X, a four-metre cloud for one second** that nobody can see through, including you. Built (M8b). |
+| Passive | `[ADDED]` *Backstab* — a swing struck while concealed does **double** damage. Built (M8b). |
 | Carries | **1 wedge** of cheese `[ADDED]` |
 | Weakness | Dies to anything that touches them. Loses every fair fight. |
 | Role | Scouting, assassin, counter-Engineer, cache raider |
+
+> `[ADDED]` **Three abilities, and they are three different verbs.** The Sneak is the only class
+> with more than two, which reads as favouritism until you ask what each is *for*. They are the
+> three moments of one loop, and no two of them can do each other's job:
+>
+> | | | |
+> |---|---|---|
+> | **Q** sonar | *before* | What is under this ground, and who is near me |
+> | **V** fade | *during* | Cross ground you could not otherwise cross |
+> | **X** dust | *after* | It has gone wrong and you are leaving |
+>
+> A class made entirely of *not being seen* needs a second and a third answer to being seen anyway,
+> and the Brute has had two since M8 for a much smaller reason. What the count actually reflects is
+> that the other three classes each do something to the *world* — dig it, seal it, carry the flag
+> across it — and the Sneak's whole subject is its own visibility, which is a smaller thing to be
+> about and therefore needs more of the verbs to cover.
+
+> `[REVISED]` **Fade is ten seconds on a cooldown, not a stance — and that is a real change of
+> design rather than a number.** The original entry above was a passive: hard to see while moving
+> slowly, broken by attacking or sprinting. Written down next to §8, that is very nearly the grass
+> model with the Sneak's name on it — and the grass model already applies to the Sneak. Two systems
+> both meaning *go slowly and be harder to see* would have left the class ability doing nothing a
+> patch of lawn does not already do, and doing it worse, because a lawn does not run out.
+>
+> Ten seconds on a cooldown is a different verb: a **decision**, made at a moment, with a clock on
+> it. What the Sneak buys is not concealment — the grass sells that to everybody — but concealment
+> **in the open and underground**, where nobody else can have it, for long enough to cross a lane.
+> And because it is spent rather than held, the counterplay is real: an enemy that suspects a Sneak
+> is faded can wait, and the ability ends.
+>
+> **It is glass, not transparency, and the difference is the whole counterplay.** The mouse is drawn
+> as a lens: the lawn behind it keeps being drawn where it stands, bent by the shape of a mouse.
+> Against flat ground it is very nearly perfect — correctly, since there is nothing for the
+> distortion to bite on. **Moving across a boundary is what gives it away**, because a straight edge
+> dragged through a lens visibly kinks. That tell costs the player nothing to learn and rewards the
+> thing §8 already rewards: looking at the ground rather than at the mice.
+>
+> A simple fade to zero alpha was the one-line version and would have been the wrong ability. A
+> mouse at zero alpha is *gone* — no observation to make, no flicker to catch, and the counterplay
+> is hope. §8's argument that concealment never reaches zero applies here in full: **a thing that
+> cannot be found by looking is not hidden, it is absent.**
+>
+> **Carrying the banner refuses it outright** (§2), the same rule the grass enforces. A Sneak that
+> could steal the flag and vanish with it deletes the handoff play the whole class spread was built
+> to produce.
+
+> `[OPEN]` **Fade does not break on attacking or sprinting**, which is the one part of the original
+> that was dropped rather than reshaped. Ten flat seconds is the version that got built because it
+> can be tuned with a single number; break conditions are a second design. **This is the first thing
+> to try if a faded Sneak turns out to be able to walk into a nest and stand there** — and the
+> backstab below makes attack-breaks-fade rather elegant, since the blow would land with the bonus
+> and reveal you on the follow-through.
+
+> `[ADDED]` **Backstab: a swing struck from concealment does double damage — and it is a passive,
+> not part of Fade.** The Sneak already had the best burst in the game as a *stat* — 34 against a
+> Generalist's 26 — which is true whether it plays like an assassin or charges down a corridor. This
+> is the same idea with a **decision** in it: the damage arrives only if you were not seen coming.
+>
+> **What counts as concealed is the same predicate the minimap draws and the bots hunt by**, so the
+> bonus lands from deep grass, from a Slow walk in cover, and from behind Fade — for exactly the
+> reason the player can already see on screen. That sharing is what makes it teachable without a
+> single new thing on the HUD: the bend in the grass **is** the opacity (§8), so the tell for *this
+> swing will hurt* is a tell the player already knows how to read, and it is the same tell the
+> victim could have read about them.
+>
+> **At 68 it is two thirds of a mouse and expressly not a one-shot.** The ambushed mouse gets a
+> turn, and the Sneak that opened is now standing in the open next to somebody who knows exactly
+> where it is. It is latched when you press the button rather than when the blow lands — the swing
+> itself breaks concealment, and paying out on the timing of a fade curve would make the passive
+> feel random.
+
+> `[ADDED]` **The dust screen is the panic button, and one second is the whole balance.** Four
+> metres, one second, and it hides everything inside it — thrown at your feet rather than aimed,
+> because the cursor is the steering wheel (§9) and aiming means turning to look at what you are
+> throwing, which is precisely what somebody running away cannot afford.
+>
+> **The number was chosen against spotting's memory, not against a feeling.** A contact does not
+> disappear when the cloud goes up: it goes stale and stays pinned where you last were, fading over
+> fifteen seconds. So the dust does not buy an escape, it buys **one second in which the other mouse
+> has to guess which way you went** — and everything after that is the ordinary business of having
+> broken line of sight. A screen long enough to actually lose somebody in would be a different and
+> much worse ability.
+>
+> **It hides your enemy from you too**, and that is a feature rather than something to engineer
+> around. The cloud is geometry in the world; it does not know who threw it. A Sneak that pops it
+> and stays to fight is fighting blind, which is what makes it an exit rather than a duelling tool —
+> and why it needs no cost beyond its cooldown.
+
+> `[ADDED]` **Listen is folded into Q rather than being a fourth key.** For five seconds after a
+> scan, the pulse also comes back off **bodies**: mice inside the same radius the floor plan uses
+> become contacts for the whole crew — minimap and all — and the Sneak alone gets a ring drawn over
+> each of them in the world.
+>
+> **A Sneak pressing Q was already asking one question**, and the honest reading of a pulse of sound
+> is that it comes back off anything in its way rather than off empty space only. Folding it in
+> costs no key, no cooldown and no HUD, and it makes the scan worth pressing in the two places it
+> previously did nothing at all: standing over bedrock, and standing somewhere whose floor plan you
+> already know.
+>
+> **It ignores concealment, line of sight and the plane**, each of which is a deliberate hole in a
+> rule held absolutely everywhere else. Concealment, because finding what cannot be seen is the
+> ability — above all *another faded Sneak*, which nothing else in the game can find at range. Line
+> of sight, because sound goes round things, and a pulse stopped by a boulder would be a second pair
+> of eyes rather than a different sense. The plane, because Q has always been the one thing that
+> reaches through a floor — hearing the mouse walking down there is the same claim as hearing the
+> corridor it is walking in.
+>
+> **What keeps it fair is the range and the clock**, not those tests. Five seconds against the
+> outline's thirty, because a corridor stays where it was put and a mouse does not — so it answers
+> *is anyone near me right now*, which a scout should be able to answer, and never *where is
+> everybody*, which is the question §3 spent a milestone making sure nothing could ask.
 
 > `[REVISED]` **Cant names the crew, and that is what turned a note into an order.** Until M8a a
 > mark said *"a way runs beneath this place"* and stopped — a fine thing for a scout to write and
@@ -726,7 +839,7 @@ without these.
 > answering during the half second the answer is still travelling, and the echo is what a Sneak is
 > supposed to read.
 
-**Concealment model `[DECIDED]`: camouflage while stationary.** Octopus-style — a shader
+**Concealment model `[SUPERSEDED]`: camouflage while stationary.** Octopus-style — a shader
 samples the surrounding terrain and blends the Sneak into it. Effectiveness scales with
 cover quality: strongest in shadow and tall grass, weak in open dirt. **Moving breaks it.**
 
@@ -734,6 +847,24 @@ This makes the Sneak an *ambush* class rather than a roaming invisible threat: s
 blend, wait, burst. It's fair to play against (a stationary enemy is findable, and
 movement always reveals) and it rewards map knowledge — knowing which patches of shadow
 are worth waiting in.
+
+> `[SUPERSEDED at M8b]` **Kept above because it is where two of the shipped pieces came from, and
+> the split between them is the useful part of the record.** This paragraph describes one thing and
+> the build has three, because *stop, blend, wait, burst* turned out to be a loop rather than a
+> mechanic — and each clause of it went somewhere different:
+>
+> - *Stop, blend* is **the grass** (§8), which every class gets, which arrived at M2, and which is
+>   the reason this entry could not also be the Sneak's ability: it was already built and already
+>   applied to the Sneak.
+> - *Blend*, in the octopus sense of sampling the terrain, is **Fade** — and it is a lens rather
+>   than a tint, because a shader that blends toward the ground's average colour can only be
+>   convincing against ground that has one.
+> - *Burst* is **the backstab**, which is where "scales with cover quality" actually landed. The
+>   ambush is not paid for by being harder to see; it is paid for by the blow at the end of it.
+>
+> **The one line here that did not survive is "effectiveness scales with cover quality."** Fade is
+> flat, and deliberately: a class ability whose strength depends on where you are standing is a
+> class ability the map decides, and the Sneak already has the grass for that.
 
 ### Juggernaut — the hired rat `[SPECIAL]`
 
@@ -1263,6 +1394,12 @@ All four are core, but they don't arrive at once. Recommended order:
 > Corking is still geometry rather than code (§4). `[REVISED]` *Slam* has since been built, as have
 > Second Wind, the Engineer's shoring and the Generalist's banner toss — **the Sneak's *Fade* is now
 > the only ability §4 names that nothing implements.**
+>
+> `[REVISED at M8b]` **And now nothing is.** Fade is built, along with a dust screen and a backstab
+> that §4 did not name at all, which is the more interesting half of the note: the class that was
+> finished last is the one that turned out to need three abilities rather than one, and it took
+> building the other three to see why. **A class whose subject is its own visibility has less to
+> work with than one that digs**, so it needs more verbs to be a whole seat rather than fewer.
 
 ---
 
@@ -1295,6 +1432,24 @@ All four are core, but they don't arrive at once. Recommended order:
 12. `[ADDED]` **Is the banner toss ever thrown to a team mate?** (§4, §5) The whole design rests on
     it being a pass. If in practice it is only ever thrown forward past a cork and then walked to,
     it is a leap with extra steps and the fumble clock needs to be longer.
+13. `[ADDED]` **Should Fade break on attacking or sprinting?** (§4) The original passive said it
+    should and the built ability does not. Ten flat seconds is one number to tune; break conditions
+    are a second design. **The thing to watch is a faded Sneak walking into a nest and simply
+    standing there** — if that happens, attack-breaks-fade is the first thing to try, and it reads
+    well next to the backstab: the blow lands with the bonus and reveals you on the follow-through.
+14. `[ADDED]` **Is a metre and a half the right range to find a faded Sneak at?** (§4) It is the only
+    distance term in the whole concealment model and it is what stops the veil being unbeatable by
+    bots. Too short and walking into somebody does not find them; too long and Fade stops working in
+    exactly the close quarters it is pressed for. Watch whether a defender ever finds one by
+    accident — that is the reading it is tuned for, rather than by searching.
+15. `[ADDED]` **Four metres of dust — a screen, or a wall?** (§4) A starting number, and the one most
+    likely to move. It is a little under half of sight range. If a Sneak can reliably cover a whole
+    lane or a nest mouth with it, the radius is the dial, not the second.
+16. `[ADDED]` **Does the listen ever find anybody worth finding?** (§4) It is deliberately a mild
+    buff on an existing key — five seconds, and only as far as the floor plan reaches. If in practice
+    it never reveals anything a Sneak had not already guessed, the honest fix is a longer window
+    rather than a wider one: range is what would turn it into a crew sweep, and the clock is what
+    keeps it a sounding.
 
 **Resolved:** cursor steers and W/S/A/D move relative to facing · sprint is free,
 per-class stamina · sprint on double-tap W, Shift is Slow · cheese buys Scurry, not
@@ -1303,7 +1458,12 @@ flag cannot enter tunnels · dig via continuous drive on a snapped grid ·
 primary attack on left click, digging moved to the ability button (right click) ·
 carriers are visible because the banner rides above their head, and concealment switches off ·
 breaching is accidental unless sonar-marked · networks interleave at junctions · water
-flows from sources with current and breath · Sneak camouflages while stationary ·
+flows from sources with current and breath · ~~Sneak camouflages while stationary~~ →
+**Fade is a timed ability on V, ten seconds of glass, and the stationary camouflage it
+replaced is the grass every class already has** (§4, §8) · **a swing struck from concealment
+does double damage, by the same predicate the minimap and the bots read** (§4) ·
+**the Sneak's dust screen is thrown at its own feet, not aimed** (§4) ·
+**the sonar's listen is folded into Q rather than being a fourth key** (§3, §4) ·
 tall grass bends to movement · per-class flag carry penalties · obstructions are
 per-plane · maps are seeded from fixed anchors · shared + signature world events ·
 class switching free at own nest · zero cheese = 20s respawn · one currency ·
