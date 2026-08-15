@@ -45,6 +45,15 @@ signal dig_noted(note: String)
 ## than rescanning: a dig changes one cell out of five thousand, and a graph that rebuilds itself
 ## to learn that is a graph nobody can afford to keep current.
 signal cell_opened(plane: int, cell: Vector2i)
+## A stroke of tunnel was cut, or removed. The geometry's own news, alongside the cell signals
+## rather than instead of them.
+##
+## BOTH KINDS EXIST BECAUSE BOTH QUESTIONS DO. Everything that reasons about a PLACE -- the fog,
+## the minimap, sonar, the routing graph as it stands -- wants the cells, and gets them. The wire
+## is the one thing that has to reproduce the world's SHAPE on another machine, and a cell can no
+## longer tell it that: two clients given the same cells would draw different tunnels.
+signal segment_opened(plane: int, id: int)
+signal segment_closed(plane: int, id: int)
 signal shaft_opened(plane: int, cell: Vector2i)
 ## A cell was brought down. The one thing that makes the network get SMALLER, so it is the one
 ## thing every cache built on top of it has to hear about.
@@ -86,9 +95,63 @@ const CELL: float = TunnelChunks.CELL
 ## Largest height change you can walk over. Every floor is flush with every other floor now,
 ## so nothing in the network ever exceeds it -- kept because props and map geometry will.
 const STEP_TOLERANCE: float = 0.18
-## Half-width of the dug mask, in cells. Comfortably past `half_extent_cells` so a tunnel can
-## never reach a cell the cutaway has no texel for.
+## Half-width of the dug field, in METRES. Comfortably past `half_extent_cells` so a tunnel can
+## never reach ground the cutaway has no texel for.
 const MASK_HALF_CELLS: int = 64
+
+## Side of the dug field in texels. At 8 per metre over 64m each way this is 1024 -- a megabyte
+## of R8 per plane, four in total, which buys a wall that is straight at any angle.
+const FIELD_TEXELS: int = MASK_HALF_CELLS * 2 * TunnelContour.TEXELS_PER_METRE
+## Texel index of world zero.
+const FIELD_HALF_TEXELS: int = MASK_HALF_CELLS * TunnelContour.TEXELS_PER_METRE
+## Chunks across the field. The rebuild unit; see [TunnelContour].
+const FIELD_CHUNKS: int = FIELD_TEXELS / TunnelContour.CHUNK_TEXELS
+
+## How long one stroke of digging is, and how wide the corridor it leaves. Unchanged from the
+## cell the tunnel used to be built out of, deliberately: dig pacing, the Engineer's reach and
+## every bot timing were tuned against a metre, and the point of this change is the ANGLE.
+const SEG_LENGTH: float = 1.0
+const SEG_WIDTH: float = 1.0
+const SEG_HALF_WIDTH: float = SEG_WIDTH * 0.5
+
+## Directions a segment may point. 64 steps is 5.6 degrees -- past the point where a chain of
+## them reads as faceted, and small enough to be one byte on the wire.
+##
+## QUANTISED AT ALL because the angle has to survive a round trip through the network and come
+## back bit-identical: a segment's identity is its origin and its angle (see [method segment_id]),
+## and a float that arrives a millionth off is a second segment sitting inside the first one.
+const ANGLE_STEPS: int = 64
+
+## Fixed point for a segment's origin: sixteenths of a metre. Fine enough that the start of a
+## stroke lands where the player pointed, coarse enough to pack into the id.
+const ORIGIN_SCALE: float = 16.0
+## Packing for [method segment_id]. Twelve bits per axis covers the field's 64m each way at
+## sixteenths, with the bias making the stored halves unsigned.
+const ID_BIAS: int = 2048
+const ID_MASK: int = 4095
+
+## How deep inside the tunnel a spot has to be before a mouse can stand on it: the body's own
+## radius (see [Mouse.body_radius], 0.16) plus a little margin.
+const STANDING_CLEARANCE: float = 0.18
+
+## How far from a cell's centre to go looking for somewhere to stand, and how finely.
+##
+## A CELL IS CLAIMED IF THE TUNNEL PASSES THROUGH IT, NOT IF IT COVERS THE EXACT CENTRE, and
+## getting that distinction wrong is what made the first curved tunnel come out as a dotted line.
+## A corridor one metre wide, on a grid of one-metre cells, at an angle that is not a multiple of
+## ninety degrees, simply cannot cover every cell centre along its path -- the geometry does not
+## allow it. Sixteen metres of curve claimed NINE cells in six disconnected pieces: the fog had
+## holes in it, the minimap drew dashes, and every one of those cells was, individually, correct.
+##
+## So the index answers "does the tunnel come through this square", and the places that care where
+## a mouse actually STANDS ask [method standing_point] for the spot rather than assuming the
+## middle. Two questions, two answers, instead of one answer serving neither.
+##
+## Stopping short of the cell's full half-width is deliberate: a corridor that merely clips a
+## corner has not meaningfully arrived in that cell, and claiming it would swell every diagonal
+## tunnel to two cells wide on the minimap.
+const CELL_PROBE_REACH: float = 0.4
+const CELL_PROBE_STEPS: int = 5
 
 ## Bit 1 is the world: ground, arena walls, props, rocks. Everything a mouse collides with
 ## regardless of depth.
@@ -213,7 +276,33 @@ const SIDES: Array[Vector2i] = [
 ## Hard ceiling, so a large network can't quietly turn into a thousand-light scene.
 @export var lamp_budget: int = 64
 
-## plane -> {cell: true}. Every dug cell is flat walkable floor; there are no other kinds.
+## plane -> {segment id: true}. What has actually been dug, and the only thing here that is not
+## derived from something else.
+##
+## THE ID IS THE SEGMENT. It packs the origin and the angle (see [method segment_id]), so there is
+## no record to keep beside it and no allocation to synchronise -- a client that receives an
+## origin and an angle computes the identical key without being told it. That is what lets the
+## wire's already-told diff and the fog's forget path work exactly as they did with cells.
+var _segments: Array[Dictionary] = []
+## plane -> {cell: {segment id: true}}: which segments pass through each coarse cell.
+##
+## THE REVERSE INDEX, and it earns its keep twice. It is what makes `_cells` removable exactly --
+## a cell stops being dug when the LAST segment through it goes, which a plain flag could not tell
+## you and a count could only tell you if every add and remove were perfectly paired. And it is
+## what the dig cursor asks, every frame, to find which segments are near where you are pointing;
+## without it, free branching would mean scanning every segment on the plane per frame.
+var _cell_segments: Array[Dictionary] = []
+## plane -> {cell: true}. Which coarse cells any segment passes through.
+##
+## `[REVISED]` DERIVED NOW, AND KEPT ANYWAY. This used to be the world; it is now an index over
+## it, maintained in lockstep with `_cell_segments` by [method _occupy] and nothing else. It stays
+## because it is what the rest of the game asks about -- the fog, the minimap, sonar, barricades,
+## shoring and the wire all reason about a PLACE, and a metre is the right size for a place. Only
+## the geometry needed to stop being square.
+##
+## IT IS A CONSERVATIVE SUPERSET of the walkable floor: a segment at 30 degrees clips the corner
+## of cells whose far side is still earth. That is invisible to everything listed above, and it is
+## precisely why bot routing must not stay on it -- see the stage 2 note on [TunnelGraph].
 var _cells: Array[Dictionary] = []
 ## plane -> {cell: true}, meaning a shaft descends from `plane` to `plane + 1` at that cell.
 ##
@@ -265,7 +354,26 @@ var _obstructed: Array[Dictionary] = []
 ## let an Engineer with time on its paws build a route no Brute could ever answer, and GDD section
 ## 5 is explicit that every answer in the web costs something and none of them is absolute.
 var _shored: Array[Dictionary] = []
-var _grids: Array[GridMap] = []
+## plane -> {chunk key: {"floors":..., "walls":..., "stone":..., "collision":...}}. The contoured
+## geometry of each 4m square, cached so a dig re-contours only what it touched.
+##
+## A CACHE RATHER THAN A SCENE NODE PER CHUNK, which is the cheap half of this design. The
+## expensive part of a rebuild is marching squares, and that is what the chunking makes local; the
+## concatenation of a few dozen cached triangle arrays into one mesh per plane is a native memcpy
+## and costs nothing measurable. Keeping one mesh instance per plane means the node graph, the
+## per-plane materials, the focus visibility rules and the collision body are all exactly as they
+## were -- so a bug in this work cannot express itself as a scene that no longer matches the
+## twenty other files that walk it.
+var _chunk_cache: Array[Dictionary] = []
+## plane -> {chunk key: true}: chunks whose cache is stale. Flushed by [method _rebuild_walls].
+var _dirty_chunks: Array[Dictionary] = []
+## The contoured floor of each plane. This is what the GridMap used to draw, one tile at a time.
+var _floors: Array[MeshInstance3D] = []
+## Shaft and entrance marks, one small mesh instance each, parented per plane.
+var _marks: Array[Node3D] = []
+var _mark_nodes: Array[Dictionary] = []
+var _shaft_mesh: ArrayMesh
+var _entrance_mesh: ArrayMesh
 var _walls: Array[MeshInstance3D] = []
 ## The faces of the wall that turned out to be stone. Drawn separately from the earth walls only
 ## so they can carry a different material -- geometrically they are the same quads.
@@ -314,6 +422,11 @@ var _puppet: bool = false
 ## build, so there is no reason for them to wait for a renderer.
 func _init() -> void:
 	for plane in range(PLANE_COUNT):
+		_segments.append({})
+		_cell_segments.append({})
+		_chunk_cache.append({})
+		_dirty_chunks.append({})
+		_mark_nodes.append({})
 		_cells.append({})
 		_shafts.append({})
 		_rock.append({})
@@ -327,6 +440,12 @@ func _init() -> void:
 
 func _ready() -> void:
 	add_to_group(NETWORK_GROUP)
+	# One mesh each, shared by every mark on every plane. They carry their own material and are
+	# never dimmed individually -- a mark is only ever drawn on the focused plane anyway.
+	var mark_material := _make_material(shaft_down_color, false)
+	_shaft_mesh = TunnelChunks.shaft_mark(mark_material)
+	_entrance_mesh = TunnelChunks.entrance_mark(mark_material)
+
 	for plane in range(PLANE_COUNT):
 		var floor_material := _make_material(floor_color)
 		var wall_material := _make_material(wall_color)
@@ -334,30 +453,25 @@ func _ready() -> void:
 		_wall_materials.append(wall_material)
 		_rock_materials.append(_make_rock_material())
 
-		var mask := Image.create_empty(
-			MASK_HALF_CELLS * 2, MASK_HALF_CELLS * 2, false, Image.FORMAT_R8
-		)
+		# Zero is "far outside the tunnel" once encoded, so an empty plane is a field of solid
+		# earth without anything having to say so.
+		var mask := Image.create_empty(FIELD_TEXELS, FIELD_TEXELS, false, Image.FORMAT_R8)
 		mask.fill(Color(0.0, 0.0, 0.0, 1.0))
 		_mask_images.append(mask)
 		_mask_textures.append(ImageTexture.create_from_image(mask))
 
-		var grid := GridMap.new()
-		grid.name = "Plane%d" % plane
-		grid.cell_size = Vector3(CELL, SPACING, CELL)
-		# Godot centres cells on ALL THREE axes by default, so map_to_local(0,0,0) comes
-		# back as (0.5, 0.75, 0.5) rather than the origin. Left on, every tile rendered
-		# half a cell off in X and Z and -- far worse -- half a plane-spacing ABOVE the
-		# collision floor this class generates. Turning centring off makes cell (x,0,z)
-		# mean exactly (x, 0, z), matching the wall and collision maths.
-		grid.cell_center_x = false
-		grid.cell_center_y = false
-		grid.cell_center_z = false
-		grid.mesh_library = TunnelChunks.build(
-			floor_material, _make_material(shaft_down_color, false)
-		)
-		grid.position = Vector3(0.0, plane_y(plane), 0.0)
-		add_child(grid)
-		_grids.append(grid)
+		var floor_mesh := MeshInstance3D.new()
+		floor_mesh.name = "Floor%d" % plane
+		floor_mesh.position = Vector3(0.0, plane_y(plane), 0.0)
+		floor_mesh.material_override = floor_material
+		add_child(floor_mesh)
+		_floors.append(floor_mesh)
+
+		var marks := Node3D.new()
+		marks.name = "Marks%d" % plane
+		marks.position = Vector3(0.0, plane_y(plane), 0.0)
+		add_child(marks)
+		_marks.append(marks)
 
 		var wall := MeshInstance3D.new()
 		wall.name = "Walls%d" % plane
@@ -444,6 +558,393 @@ func plane_at_height(y: float) -> int:
 ## Whether a cell is inside the diggable arena at all.
 func in_bounds(cell: Vector2i) -> bool:
 	return absi(cell.x) <= half_extent_cells and absi(cell.y) <= half_extent_cells
+
+
+# ------------------------------------------------------------------------- segments
+
+
+## A segment's identity, packed: where it starts and which way it points, and nothing else.
+##
+## ORIGIN SNAPPED TO SIXTEENTHS FIRST, which is what makes the id a real identity rather than a
+## hash. Two digs at the same place must produce the same key or the second one lays a duplicate
+## segment inside the first -- invisible in the world, twice the geometry, and a cell that needs
+## un-digging twice before it closes. Snapping makes "the same place" a decidable question.
+static func segment_id(origin: Vector2, angle: int) -> int:
+	var x := clampi(roundi(origin.x * ORIGIN_SCALE) + ID_BIAS, 0, ID_MASK)
+	var y := clampi(roundi(origin.y * ORIGIN_SCALE) + ID_BIAS, 0, ID_MASK)
+	return (x << 18) | (y << 6) | (posmod(angle, ANGLE_STEPS) as int)
+
+
+static func segment_origin(id: int) -> Vector2:
+	return Vector2(
+		float(((id >> 18) & ID_MASK) - ID_BIAS) / ORIGIN_SCALE,
+		float(((id >> 6) & ID_MASK) - ID_BIAS) / ORIGIN_SCALE
+	)
+
+
+static func segment_angle(id: int) -> int:
+	return id & (ANGLE_STEPS - 1)
+
+
+## A segment's origin in sixteenths of a metre, which is how it travels.
+##
+## THE WIRE SENDS THE SNAPPED NUMBER, NOT THE FLOAT, and that is what makes a segment's identity
+## survive the trip. Sending a float would have the receiving end re-snap it, which is fine until
+## a value lands exactly on a boundary and the two machines round it opposite ways -- at which
+## point the client is drawing a stroke the server has never heard of, one sixteenth of a metre
+## from one it has.
+static func segment_fixed(id: int) -> Vector2i:
+	return Vector2i(((id >> 18) & ID_MASK) - ID_BIAS, ((id >> 6) & ID_MASK) - ID_BIAS)
+
+
+static func fixed_origin(fixed: Vector2i) -> Vector2:
+	return Vector2(float(fixed.x), float(fixed.y)) / ORIGIN_SCALE
+
+
+## Which way an angle index points, on the XZ plane.
+static func angle_direction(angle: int) -> Vector2:
+	var radians := TAU * float(posmod(angle, ANGLE_STEPS)) / float(ANGLE_STEPS)
+	return Vector2(cos(radians), sin(radians))
+
+
+## The nearest angle index to a direction. What the dig controller turns a cursor into.
+static func direction_angle(direction: Vector2) -> int:
+	if direction.length_squared() < 0.000001:
+		return 0
+	var step := roundi(direction.angle() / TAU * float(ANGLE_STEPS))
+	return posmod(step, ANGLE_STEPS) as int
+
+
+static func segment_end(id: int) -> Vector2:
+	return segment_origin(id) + angle_direction(segment_angle(id)) * SEG_LENGTH
+
+
+## Every segment on a plane, as ids.
+func segments(plane: int) -> Array:
+	return _segments[clampi(plane, 0, PLANE_COUNT - 1)].keys()
+
+
+func has_segment(plane: int, id: int) -> bool:
+	return plane >= 0 and plane < PLANE_COUNT and _segments[plane].has(id)
+
+
+func segment_count(plane: int) -> int:
+	return _segments[clampi(plane, 0, PLANE_COUNT - 1)].size()
+
+
+## The cells a stroke touches. The other direction from [method segments_in_cell], for anything
+## that has just cut one and needs to know what it now backs onto.
+func segment_cells(id: int) -> Array[Vector2i]:
+	return _segment_cells(id)
+
+
+## Would this stroke actually take any earth out?
+##
+## THE ONLY HONEST WAY TO ASK "IS THIS DIG WORTH ANYTHING", and the first version of this asked
+## something else entirely: whether the CELL the stroke ended in was already dug. That refused the
+## one stroke that matters most -- the one that joins two corridors -- because a joining stroke
+## always finishes inside the tunnel it is reaching for. Two corridors within a stroke of each
+## other could never be connected, at all, ever. You could stand a metre from your own tunnel and
+## the game would simply decline, with a cursor that vanished and no reason given.
+##
+## It was wrong twice over. Judging by the cell also refused strokes with real earth still in the
+## way, because a cell counts as dug when a corridor merely passes through it -- so a stroke aimed
+## across the untouched half of that square was turned down on the strength of the touched half.
+##
+## ANY EARTH AT ALL IS ENOUGH. There is no fraction to clear and no minimum bite: if the stroke's
+## body contains a single spot that is not already open, there is dirt there and digging it is
+## progress. The only thing this refuses is a stroke lying wholly inside tunnel that already
+## exists -- pointing back down your own corridor -- which really would do nothing.
+##
+## SAMPLED AT THE FIELD'S OWN RESOLUTION, which is what makes "any earth" a decidable question
+## rather than a matter of luck. A wall thinner than one texel is thinner than the world is stored,
+## and the contour has already merged the two sides of it -- so there is nothing left there to dig.
+func opens_ground(plane: int, origin: Vector2, angle: int) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return false
+	var direction := angle_direction(angle)
+	var across := Vector2(-direction.y, direction.x)
+	var along_steps := maxi(2, ceili(SEG_LENGTH / TunnelContour.TEXEL))
+	for i in range(along_steps + 1):
+		var spine := origin + direction * (SEG_LENGTH * float(i) / float(along_steps))
+		for offset: float in [0.0, -0.6, 0.6]:
+			if _is_earth(plane, spine + across * (SEG_HALF_WIDTH * offset)):
+				return true
+	return false
+
+
+## Is this spot solid ground -- neither already dug, nor stone?
+##
+## Rock counts as NOT earth here, which reads oddly until you remember what the question is for:
+## this decides whether there is anything to be gained by digging, and a seam is the one thing you
+## can point at all day and never move. A stroke whose only unopened part is stone is refused for
+## being stone (see [method dig_segment]), and it must not be offered on the way there either.
+func _is_earth(plane: int, point: Vector2) -> bool:
+	var cell := world_to_cell(Vector3(point.x, 0.0, point.y))
+	if _rock[plane].has(cell):
+		return false
+	for y in range(cell.y - 1, cell.y + 2):
+		for x in range(cell.x - 1, cell.x + 2):
+			for id: int in segments_in_cell(plane, Vector2i(x, y)):
+				var distance := TunnelContour.segment_distance(
+					point, segment_origin(id), segment_end(id), SEG_HALF_WIDTH
+				)
+				if distance <= 0.0:
+					return false
+	return true
+
+
+## The point on an existing stroke nearest to `at`, within `reach` of it, and the id it belongs to
+## -- or an empty array. What free branching is aimed with: you point at your own tunnel wall and
+## the stroke starts from the nearest bit of tunnel there actually is.
+##
+## SEARCHED THROUGH THE CELL INDEX rather than over every segment on the plane. A late-match plane
+## holds hundreds of strokes and this is asked every frame by every mouse being watched; scanning
+## them all would make the cursor the most expensive thing in the process.
+func nearest_segment_point(plane: int, at: Vector2, reach: float) -> Array:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return []
+	var best_distance := reach
+	var best: Array = []
+	var span := ceili(reach / CELL) + 1
+	var centre := world_to_cell(Vector3(at.x, 0.0, at.y))
+	for y in range(centre.y - span, centre.y + span + 1):
+		for x in range(centre.x - span, centre.x + span + 1):
+			for id: int in segments_in_cell(plane, Vector2i(x, y)):
+				var a := segment_origin(id)
+				var b := segment_end(id)
+				var along := b - a
+				var t := 0.0
+				if along.length_squared() > 0.000001:
+					t = clampf((at - a).dot(along) / along.length_squared(), 0.0, 1.0)
+				var point := a + along * t
+				var distance := at.distance_to(point)
+				if distance < best_distance:
+					best_distance = distance
+					best = [point, id]
+	return best
+
+
+## The segments passing through a cell, for anything that has to get from a place to the geometry.
+func segments_in_cell(plane: int, cell: Vector2i) -> Array:
+	if plane < 0 or plane >= PLANE_COUNT:
+		return []
+	var here: Variant = _cell_segments[plane].get(cell)
+	return [] if here == null else (here as Dictionary).keys()
+
+
+## Every cell the stroke opens somewhere standable. See [constant CELL_PROBE_REACH].
+func _segment_cells(id: int) -> Array[Vector2i]:
+	var a := segment_origin(id)
+	var b := segment_end(id)
+	var reach := SEG_HALF_WIDTH + CELL_PROBE_REACH
+	var low := Vector2i(
+		floori((minf(a.x, b.x) - reach) / CELL), floori((minf(a.y, b.y) - reach) / CELL)
+	)
+	var high := Vector2i(
+		ceili((maxf(a.x, b.x) + reach) / CELL), ceili((maxf(a.y, b.y) + reach) / CELL)
+	)
+	var found: Array[Vector2i] = []
+	for y in range(low.y, high.y + 1):
+		for x in range(low.x, high.x + 1):
+			var cell := Vector2i(x, y)
+			# FILTERED HERE RATHER THAN REFUSED IN `dig_segment`, and the difference matters at the
+			# edge of the map. A stroke's rounded end reaches half a width past its last endpoint,
+			# so the outermost legal stroke really does open a little standable ground inside the
+			# next square out. Refusing the stroke for it would make the boundary ring undiggable;
+			# claiming the cell would put the index outside the arena. The ground is there and the
+			# index simply does not name it -- which is exactly what `in_bounds` has always meant.
+			if not in_bounds(cell):
+				continue
+			if _probe_cell(cell, a, b)[1] <= -STANDING_CLEARANCE:
+				found.append(cell)
+	return found
+
+
+## The deepest-inside point of one stroke within one cell, as `[Vector2 point, float distance]`.
+##
+## A GRID SWEEP RATHER THAN AN EXACT CLOSEST-POINT SOLVE. The exact answer is the distance from a
+## capsule to an axis-aligned square, which is a fiddly piece of geometry with several cases and
+## exactly one purpose. Twenty-five samples give the same answer to within a few centimetres, and
+## being a few centimetres conservative here costs nothing -- it can only decline a cell the
+## corridor barely reaches, which is the direction [constant CELL_PROBE_REACH] is already leaning.
+##
+## THE END CAPS DO NOT CLAIM GROUND, and that one rule settles a whole family of problems at once.
+## A stroke is a metre of centreline with a half-metre round cap on each end, so its footprint is
+## two metres long -- and if the caps count, a single stroke claims the cell in front of it and the
+## cell behind it as well as its own. Everything that assumed a dig opens ONE cell then breaks
+## together: the count after a collapse, the tile that must stay shut when you are not holding the
+## button, and worst, a diagonal chain of strokes reports itself connected through cells that have
+## solid earth between them.
+##
+## The caps are there to make joints smooth -- two strokes meeting at an angle need no mitring if
+## their ends are round -- and that is all they are for. Territory belongs to the BODY. Rejecting
+## samples that fall past either end restores "one stroke, one cell's worth of corridor" without
+## costing a curve anything, because consecutive strokes chain end to end and their bodies cover
+## the whole path between them.
+static func _probe_cell(cell: Vector2i, a: Vector2, b: Vector2) -> Array:
+	var origin := Vector2(float(cell.x) * CELL, float(cell.y) * CELL)
+	var along := b - a
+	var length_squared := along.length_squared()
+	var best := 1000.0
+	var at := origin
+	var step := CELL_PROBE_REACH * 2.0 / float(CELL_PROBE_STEPS - 1)
+	for j in range(CELL_PROBE_STEPS):
+		for i in range(CELL_PROBE_STEPS):
+			var point := origin + Vector2(
+				-CELL_PROBE_REACH + float(i) * step, -CELL_PROBE_REACH + float(j) * step
+			)
+			if length_squared > 0.000001:
+				var t := (point - a).dot(along) / length_squared
+				if t < 0.0 or t > 1.0:
+					continue
+			var distance := TunnelContour.segment_distance(point, a, b, SEG_HALF_WIDTH)
+			if distance < best:
+				best = distance
+				at = point
+	return [at, best]
+
+
+## Where in this cell a mouse would actually be standing -- the spot furthest from any wall.
+##
+## WHAT THE CENTRE USED TO BE ASSUMED TO BE. A cell is in the index because the tunnel comes
+## through it, which on anything but an axis-aligned corridor does not mean the tunnel covers the
+## middle of it. Anything placing a body, casting a ray for floor, or measuring headroom wants
+## this rather than [method cell_to_world]; anything merely NAMING the cell -- a minimap square, a
+## sonar ping, a fog entry -- is right to keep using the centre.
+func standing_point(plane: int, cell: Vector2i) -> Vector3:
+	var best := 1000.0
+	var at := Vector2(float(cell.x) * CELL, float(cell.y) * CELL)
+	for id: int in segments_in_cell(plane, cell):
+		var probe := _probe_cell(cell, segment_origin(id), segment_end(id))
+		if (probe[1] as float) < best:
+			best = probe[1]
+			at = probe[0]
+	return Vector3(at.x, plane_y(plane), at.y)
+
+
+## Put a segment into the books: the segment set, the reverse index, the derived cell set, and
+## the chunks whose geometry it just changed.
+##
+## Returns the cells that became dug BECAUSE OF THIS SEGMENT, so the caller can announce them.
+## Cells already covered by a neighbouring segment are not news and must not be re-announced --
+## `cell_opened` is what the routing graph and the sight are built on, and a cell opened twice is
+## a graph point added twice.
+## TWO SETS OF CELLS, AND THEY ARE NOT THE SAME SET, which is the correction that made curved
+## tunnels actually work. `_cell_segments` is a SPATIAL INDEX -- "which strokes are near here" --
+## and has to be generous, because it is how a chunk finds the strokes to contour and how the
+## cursor finds the tunnel you are pointing at. `_cells` is a claim about STANDING, and has to be
+## strict, because everything downstream treats a cell as a place a mouse can be.
+##
+## Sharing one threshold between them broke both ends at once. Strict for both, and a stroke that
+## threads between cell centres -- which happens constantly on a curve, where the tunnel does not
+## line up with the grid at all -- registered in no cell, so no chunk ever gathered it and its
+## geometry was never drawn. Loose for both, and the ring of cells around every corridor became
+## walkable ground the fog uncovered and bots routed through.
+func _occupy(plane: int, id: int) -> Array[Vector2i]:
+	for cell: Vector2i in _near_cells(id):
+		var here: Variant = _cell_segments[plane].get(cell)
+		if here == null:
+			here = {}
+			_cell_segments[plane][cell] = here
+		(here as Dictionary)[id] = true
+	var fresh: Array[Vector2i] = []
+	for cell: Vector2i in _segment_cells(id):
+		if not _cells[plane].has(cell):
+			_cells[plane][cell] = true
+			fresh.append(cell)
+	_touch(plane, id)
+	return fresh
+
+
+## The reverse: take a segment out, and report the cells that stopped being dug entirely.
+func _vacate(plane: int, id: int) -> Array[Vector2i]:
+	# THE INDEX FIRST, so that the standing test below cannot see the stroke being removed.
+	for cell: Vector2i in _near_cells(id):
+		var here: Variant = _cell_segments[plane].get(cell)
+		if here == null:
+			continue
+		var users := here as Dictionary
+		users.erase(id)
+		if users.is_empty():
+			_cell_segments[plane].erase(cell)
+
+	var emptied: Array[Vector2i] = []
+	for cell: Vector2i in _segment_cells(id):
+		# THE LAST STROKE OUT CLOSES THE CELL. This is the whole reason the index stores a set of
+		# ids rather than a flag: with a flag there is no way to tell "nothing reaches here any
+		# more" from "one of the three that did has gone", and the corridor would either linger
+		# after a cave-in or vanish a metre either side of it.
+		if _cells[plane].has(cell) and not _still_stood_in(plane, cell):
+			_cells[plane].erase(cell)
+			emptied.append(cell)
+	_touch(plane, id)
+	return emptied
+
+
+## Does any remaining stroke still make this cell somewhere you can stand?
+func _still_stood_in(plane: int, cell: Vector2i) -> bool:
+	return not _segments_standing_in(plane, cell).is_empty()
+
+
+## The strokes that actually make this cell somewhere you can stand -- the subset of the spatial
+## index whose bodies reach it. See [method _segment_cells], which asks the same question the
+## other way round.
+func _segments_standing_in(plane: int, cell: Vector2i) -> Array[int]:
+	var found: Array[int] = []
+	for id: int in segments_in_cell(plane, cell):
+		var reach: float = _probe_cell(cell, segment_origin(id), segment_end(id))[1]
+		if reach <= -STANDING_CLEARANCE:
+			found.append(id)
+	return found
+
+
+## Every cell a stroke comes near enough to be worth considering: the spatial index's question,
+## not the standing one. Generous on purpose -- a stroke missing from a cell here is a stroke a
+## chunk never contours and a cursor never finds.
+func _near_cells(id: int) -> Array[Vector2i]:
+	var a := segment_origin(id)
+	var b := segment_end(id)
+	var reach := SEG_HALF_WIDTH + CELL * 0.7072
+	var low := Vector2i(
+		floori((minf(a.x, b.x) - reach) / CELL), floori((minf(a.y, b.y) - reach) / CELL)
+	)
+	var high := Vector2i(
+		ceili((maxf(a.x, b.x) + reach) / CELL), ceili((maxf(a.y, b.y) + reach) / CELL)
+	)
+	var found: Array[Vector2i] = []
+	for y in range(low.y, high.y + 1):
+		for x in range(low.x, high.x + 1):
+			var centre := Vector2(float(x) * CELL, float(y) * CELL)
+			if TunnelContour.segment_distance(centre, a, b, SEG_HALF_WIDTH) <= CELL * 0.7072:
+				found.append(Vector2i(x, y))
+	return found
+
+
+## Mark every chunk a segment's outline could fall in as needing re-contouring.
+func _touch(plane: int, id: int) -> void:
+	var a := segment_origin(id)
+	var b := segment_end(id)
+	# Grown by the half-width plus a texel, so the chunk holding the far side of a rounded end is
+	# included. Missing one leaves a notch of un-rebuilt wall that only appears at some angles.
+	var reach := SEG_HALF_WIDTH + TunnelContour.TEXEL * 2.0
+	var low := _chunk_at(Vector2(minf(a.x, b.x) - reach, minf(a.y, b.y) - reach))
+	var high := _chunk_at(Vector2(maxf(a.x, b.x) + reach, maxf(a.y, b.y) + reach))
+	for cy in range(low.y, high.y + 1):
+		for cx in range(low.x, high.x + 1):
+			if cx < 0 or cy < 0 or cx >= FIELD_CHUNKS or cy >= FIELD_CHUNKS:
+				continue
+			_dirty_chunks[plane][cy * FIELD_CHUNKS + cx] = true
+
+
+## Which chunk a world point falls in.
+func _chunk_at(point: Vector2) -> Vector2i:
+	return Vector2i(
+		floori((point.x * TunnelContour.TEXELS_PER_METRE + float(FIELD_HALF_TEXELS))
+			/ float(TunnelContour.CHUNK_TEXELS)),
+		floori((point.y * TunnelContour.TEXELS_PER_METRE + float(FIELD_HALF_TEXELS))
+			/ float(TunnelContour.CHUNK_TEXELS))
+	)
 
 
 # ------------------------------------------------------------------------- collision
@@ -792,13 +1293,14 @@ func _learn_tunnel_cell(plane: int, cell: Vector2i, team: int) -> void:
 		return
 	_tunnel_known[plane][cell] = after
 	# The viewing crew just gained a cell it did not have -- a junction an enemy broke into, or a
-	# landing a shaft dropped onto ground that was already open. `dig` punches its own texel, but
-	# neither of those goes through `dig`, and a cell that is on your map and not in your cutaway
-	# is a corridor you can route through and cannot see.
+	# landing a shaft dropped onto ground that was already open. `dig_segment` dirties its own
+	# chunks, but neither of those goes through it, and a cell that is on your map and not in your
+	# cutaway is a corridor you can route through and cannot see.
 	if _view_team >= 0 and _cells[plane].has(cell):
 		var eye := 1 << _view_team
 		if before & eye == 0 and after & eye != 0:
-			_mark_mask(plane, cell, true)
+			for id: int in segments_in_cell(plane, cell):
+				_touch(plane, id)
 	tunnel_revealed.emit(plane, bits)
 
 
@@ -920,33 +1422,100 @@ func can_stand(plane: int, cell: Vector2i) -> bool:
 # ------------------------------------------------------------------------- digging
 
 
-## Cut a floor cell. Returns false if it was already dug -- so callers can tell a fresh
-## segment from a no-op without re-querying -- and also if it was refused outright.
-func dig(plane: int, cell: Vector2i, team: int = -1) -> bool:
+## Cut one stroke of tunnel: a capsule [constant SEG_LENGTH] long and [constant SEG_WIDTH] wide,
+## starting at `origin` and running along `angle`.
+##
+## THE ONE PLACE EARTH OPENS. Returns false if the stroke was already there -- so callers can tell
+## a fresh cut from a no-op without re-querying -- and also if it was refused outright.
+##
+## ROCK IS CHECKED ALONG THE WHOLE STROKE, not at a single point, which is the one rule that had
+## to grow a dimension. A metre of tunnel at a free angle can clip the corner of a seam without
+## either of its ends being inside it, and a stroke that quietly cut through stone would make the
+## seam a suggestion. Refused whole for now; stopping short at the stone is stage 3's job, and is
+## the better answer.
+func dig_segment(plane: int, origin: Vector2, angle: int, team: int = -1) -> bool:
 	if _puppet:
 		return false
-	if plane <= 0 or plane >= PLANE_COUNT or _cells[plane].has(cell):
+	if plane <= 0 or plane >= PLANE_COUNT:
 		return false
-	if not in_bounds(cell):
+	var id := segment_id(origin, angle)
+	if _segments[plane].has(id):
 		return false
-	# Rock (GDD section 3). Said out loud, because a tile that refuses to open with no explanation
-	# is indistinguishable from a dig control that has stopped working -- which is the exact
-	# lesson the entrance key taught this file once already.
-	if _rock[plane].has(cell):
-		dig_refused.emit("solid rock -- go round it, or go under it")
+
+	# BOUNDS ARE GEOMETRY, ASKED IN METRES. Asked as cells it was wrong in both directions: cell
+	# `world_to_cell(37.5)` rounds to 38, so testing the endpoints' cells made the outermost legal
+	# ring undiggable and a boundary shaft landed in solid earth -- and testing every touched cell
+	# did the same thing for the same reason. The diggable ground really is a square of side
+	# `half_extent_cells + 0.5` metres, because cell 37 owns out to 37.5, so that is what to say.
+	var limit := float(half_extent_cells) * CELL + CELL * 0.5
+	var far := segment_end(id)
+	if maxf(absf(origin.x), absf(origin.y)) > limit:
 		return false
-	_cells[plane][cell] = true
-	_learn_tunnel_cell(plane, cell, team)
-	_mark_mask(plane, cell, true)
-	_refresh_cell(plane, cell)
+	if maxf(absf(far.x), absf(far.y)) > limit:
+		return false
+
+	# ROCK IS ASKED OF THE CELLS THE STROKE WOULD MAKE WALKABLE, which is the meaningful question:
+	# you cannot turn stone into floor. Asked of anything looser it refused the corridor you are
+	# MEANT to be able to run alongside a seam, because a stroke's rounded end reaches into the
+	# neighbouring square without making any of it walkable.
+	#
+	# Said out loud, because ground that refuses to open with no explanation is indistinguishable
+	# from a dig control that has stopped working -- the exact lesson the entrance key taught this
+	# file once already.
+	var cells := _segment_cells(id)
+	for cell: Vector2i in cells:
+		if _rock[plane].has(cell):
+			dig_refused.emit("solid rock -- go round it, or go under it")
+			return false
+
+	# A stroke that would take no earth out is a no-op, and saying so here rather than only in the
+	# controller is what keeps `dig`'s old contract -- "false if it was already dug" -- true for
+	# bots and for every audit scenario that builds a network by naming cells twice.
+	#
+	# AFTER THE STONE, AND THAT ORDER IS LOAD-BEARING. `opens_ground` counts rock as nothing to be
+	# gained, quite correctly -- so asked first it swallows a dig aimed squarely at a seam and
+	# returns a silent false, and the player holds the button on rock and is told nothing. Which is
+	# the exact failure the seam's spoken refusal exists to prevent, reintroduced by a reordering.
+	if not opens_ground(plane, origin, angle):
+		return false
+
+	_segments[plane][id] = true
+	for cell: Vector2i in _occupy(plane, id):
+		_learn_tunnel_cell(plane, cell, team)
 	_rebuild_walls(plane)
 	# A corridor lights itself as it is cut. This used to wait for the next focus change, which
 	# meant digging away from your last lamp ran out of light and stayed dark until you climbed a
 	# shaft and came back down -- survivable while every cell was lit anyway, and not survivable
 	# now that a lit cell is what tells your own network apart from theirs.
 	_relight(plane)
-	cell_opened.emit(plane, cell)
+	for cell: Vector2i in cells:
+		if _cells[plane].has(cell):
+			cell_opened.emit(plane, cell)
+	segment_opened.emit(plane, id)
 	return true
+
+
+## Cut a stroke centred on a cell, pointing along whichever axis joins it to tunnel it already
+## touches. The cell-shaped door into [method dig_segment].
+##
+## KEPT SO THE CELL-SPEAKING CALLERS SURVIVE THE CHANGE OF UNIT. Bots choose a neighbouring cell
+## to dig (see [BotDigger]), and every audit scenario in the project builds its network by naming
+## cells; rewriting all of them in the same commit as the geometry would mean a failure could be
+## in either, with nothing trustworthy left to bisect against. They move to angles in stage 2.
+##
+## THE ANGLE IS INFERRED FROM WHAT IS ALREADY THERE, which is what makes a run of these come out
+## as a straight corridor rather than a string of discs: a stroke laid from the dug neighbour
+## through the new cell overlaps the one before it exactly as a chained stroke would.
+func dig(plane: int, cell: Vector2i, team: int = -1) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return false
+	var heading := Vector2(1.0, 0.0)
+	for side: Vector2i in SIDES:
+		if _cells[plane].has(cell + side):
+			heading = Vector2(float(-side.x), float(-side.y))
+			break
+	var centre := Vector2(float(cell.x) * CELL, float(cell.y) * CELL)
+	return dig_segment(plane, centre - heading * (SEG_LENGTH * 0.5), direction_angle(heading), team)
 
 
 ## Bring a cell down: the floor closes, the walls seal around it, and it is earth again.
@@ -1044,9 +1613,9 @@ func collapse_shaft(plane: int, cell: Vector2i) -> bool:
 
 	if plane == 0:
 		# No cell to erase up here -- the lawn is not dug, it is walked on. What goes is the
-		# ENTRANCE tile and the point the routing graph hangs on it, which is the only reason a
+		# ENTRANCE mark and the point the routing graph hangs on it, which is the only reason a
 		# bot believes it can cross between navmesh and network at this spot.
-		_grids[0].set_cell_item(Vector3i(cell.x, 0, cell.y), GridMap.INVALID_CELL_ITEM)
+		_refresh_cell(0, cell)
 		cell_collapsed.emit(0, cell)
 	elif _cells[plane].has(cell):
 		_take_cell(plane, cell)
@@ -1100,17 +1669,48 @@ func collapse_footprint(plane: int, cell: Vector2i) -> Array:
 ## The cell erased and everything cached over it told. Shared by the plain collapse and by the
 ## shaft one, which does this twice -- deliberately WITHOUT the wall rebuild and the relight, since
 ## those are per-plane and doing them per-cell would rebuild the same mesh twice for one shaft.
+## `[REVISED]` A CELL IS TAKEN BY TAKING THE STROKES THROUGH IT, which is the one place the change
+## of unit is visible from outside this file. A cell is no longer a thing that can be removed on
+## its own -- it is the shadow of the segments crossing it -- so bringing one down means bringing
+## those down, and a stroke a metre long generally shades two or three cells. A cave-in therefore
+## takes a slightly wider bite than it used to.
+##
+## THAT IS THE HONEST BEHAVIOUR RATHER THAN A COMPROMISE, and it is worth being clear which. The
+## alternative -- clipping segments so exactly one cell's worth disappears -- would leave strokes
+## of a length nothing else in the system believes in, and the first thing to break would be the
+## wire, where a segment's identity IS its origin and angle. Stage 2 gives collapse a segment to
+## aim at, at which point the Brute is aiming at the thing that actually comes down.
 func _take_cell(plane: int, cell: Vector2i) -> void:
-	_cells[plane].erase(cell)
-	_tunnel_known[plane].erase(cell)
+	# THE STROKES THAT FLOOR THIS CELL, not every stroke the spatial index lists near it. Those are
+	# two different sets -- `_cell_segments` is deliberately generous so that chunks and the cursor
+	# find everything nearby -- and taking the generous one meant a cave-in aimed at one cell
+	# brought down its neighbours either side as well.
+	for id: int in _segments_standing_in(plane, cell):
+		_drop_segment(plane, id)
 	# Belt and braces: `collapse` refuses a shored cell before it ever reaches here, so this only
 	# fires for a cell taken as the far end of something else -- a shaft's landing, say. Timbers
 	# recorded against earth that no longer exists would be timbers an Engineer could never spend
 	# and a Brute could never break, and the cell might be dug again later.
 	_shored[plane].erase(cell)
-	_grids[plane].set_cell_item(Vector3i(cell.x, 0, cell.y), GridMap.INVALID_CELL_ITEM)
-	_mark_mask(plane, cell, false)
+	# Unconditionally, even if some other stroke still shades this cell. The caller asked for this
+	# cell to stop being anybody's, and `_vacate` has already told everything cached over it about
+	# whichever cells actually emptied.
+	if _cells[plane].has(cell):
+		return
+	_tunnel_known[plane].erase(cell)
 	cell_collapsed.emit(plane, cell)
+
+
+## One stroke out of the world, and everything derived from it told.
+func _drop_segment(plane: int, id: int) -> void:
+	if not _segments[plane].has(id):
+		return
+	_segments[plane].erase(id)
+	for emptied: Vector2i in _vacate(plane, id):
+		_tunnel_known[plane].erase(emptied)
+		_shored[plane].erase(emptied)
+		cell_collapsed.emit(plane, emptied)
+	segment_closed.emit(plane, id)
 
 
 # ------------------------------------------------------------------- what the wire is allowed to say
@@ -1128,27 +1728,38 @@ func set_puppet(on: bool) -> void:
 	_puppet = on
 
 
-## A cell that exists somewhere else, with the knowledge bits it was sent with.
+## A stroke that exists somewhere else, with the knowledge bits it was sent with.
+##
+## `[REVISED]` A SEGMENT RATHER THAN A CELL, and this is the entry that forced the wire to change
+## shape. A client told only which cells are dug cannot draw the tunnel: the same set of cells is
+## produced by strokes at a dozen different angles, so the two machines would agree on where the
+## corridor is and disagree about what it looks like -- and the client's collision mesh, built
+## from its own geometry, would disagree with the server about where you can walk.
 ##
 ## The bits are taken rather than derived. `_learn_tunnel_cell` has junction rules -- breaking into
 ## an enemy corridor makes the new cell shared -- and re-running them here against a partial copy
 ## of the world would reach a different answer from the server's for the same cell. There is one
 ## place that decides who knows what, and it is not this end.
-func adopt_cell(plane: int, cell: Vector2i, bits: int) -> bool:
-	if plane <= 0 or plane >= PLANE_COUNT or not in_bounds(cell):
+func adopt_segment(plane: int, origin: Vector2, angle: int, bits: int) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT:
 		return false
-	var fresh := not _cells[plane].has(cell)
+	var id := segment_id(origin, angle)
+	var fresh := not _segments[plane].has(id)
 	if fresh:
-		_cells[plane][cell] = true
-		_mark_mask(plane, cell, true)
-		_refresh_cell(plane, cell)
+		_segments[plane][id] = true
+		_occupy(plane, id)
 		_rebuild_walls(plane)
 		_relight(plane)
-	if int(_tunnel_known[plane].get(cell, 0)) != bits:
-		_tunnel_known[plane][cell] = bits
-		tunnel_revealed.emit(plane, bits)
+	for cell: Vector2i in _segment_cells(id):
+		if not _cells[plane].has(cell):
+			continue
+		if int(_tunnel_known[plane].get(cell, 0)) != bits:
+			_tunnel_known[plane][cell] = bits
+			tunnel_revealed.emit(plane, bits)
+		if fresh:
+			cell_opened.emit(plane, cell)
 	if fresh:
-		cell_opened.emit(plane, cell)
+		segment_opened.emit(plane, id)
 	return fresh
 
 
@@ -1218,19 +1829,23 @@ func forget_shoring(plane: int, cell: Vector2i) -> bool:
 ## It is a rule on a host and a fact on a client, which is why it is here rather than in
 ## `collapse`: collapsing refuses on a shaft cell, and forgetting a shaft you glimpsed has to
 ## work.
-func forget_cell(plane: int, cell: Vector2i) -> bool:
-	if plane <= 0 or plane >= PLANE_COUNT or not _cells[plane].has(cell):
+func forget_segment(plane: int, origin: Vector2, angle: int) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT:
 		return false
-	_cells[plane].erase(cell)
-	_tunnel_known[plane].erase(cell)
-	_shafts[plane].erase(cell)
-	_shaft_known[plane].erase(cell)
-	forget_shoring(plane, cell)
-	_grids[plane].set_cell_item(Vector3i(cell.x, 0, cell.y), GridMap.INVALID_CELL_ITEM)
-	_mark_mask(plane, cell, false)
+	var id := segment_id(origin, angle)
+	if not _segments[plane].has(id):
+		return false
+	# Whatever cells this leaves empty take their shoring and their shaft record with them. Done
+	# through the same `_drop_segment` a collapse uses, so there is one description of what it
+	# means for a stroke to stop existing rather than a host's and a client's.
+	for cell: Vector2i in _segment_cells(id):
+		if _shafts[plane].has(cell):
+			_shafts[plane].erase(cell)
+			_shaft_known[plane].erase(cell)
+		forget_shoring(plane, cell)
+	_drop_segment(plane, id)
 	_rebuild_walls(plane)
 	_relight(plane)
-	cell_collapsed.emit(plane, cell)
 	return true
 
 
@@ -1250,7 +1865,7 @@ func forget_shaft(plane: int, cell: Vector2i) -> bool:
 	_shafts[plane].erase(cell)
 	_shaft_known[plane].erase(cell)
 	if plane == 0:
-		_grids[0].set_cell_item(Vector3i(cell.x, 0, cell.y), GridMap.INVALID_CELL_ITEM)
+		_refresh_cell(0, cell)
 		cell_collapsed.emit(0, cell)
 	else:
 		_refresh_cell(plane, cell)
@@ -1452,7 +2067,8 @@ func set_focus_plane(plane: int) -> void:
 		# actually in. What you want to see is your tunnel. Where the layer above joins yours
 		# is announced by the light falling down the shaft, which needs no floor plan.
 		var focused := index == _focus
-		_grids[index].visible = focused
+		_floors[index].visible = focused
+		_marks[index].visible = focused
 		_walls[index].visible = focused
 		_rock_faces[index].visible = focused
 		_rock_caps[index].visible = focused
@@ -1467,21 +2083,31 @@ func get_focus_plane() -> int:
 	return _focus
 
 
-## The tile a cell should be showing: plain floor, or marked with the way out.
+## The mark a cell should be showing, or none.
+##
+## `[REVISED]` ONLY SHAFTS LEAVE A MARK NOW. There used to be a third case here -- plain dug floor
+## -- because the floor was a tile and a cell had to be told to show one. The floor is contoured
+## out of the dug field now and needs nobody's permission to exist, so this is down to the one
+## question it was always really asking: is there a way out of this cell?
 func _refresh_cell(plane: int, cell: Vector2i) -> void:
 	if plane < 0 or plane >= PLANE_COUNT:
 		return
-	var item := TunnelChunks.FLOOR
-	if plane == 0:
-		# The lawn is already the floor up here. A surface entrance is a mark on it, nothing more.
-		if not has_shaft_down(0, cell):
-			return
-		item = TunnelChunks.ENTRANCE
-	elif has_shaft_down(plane, cell):
-		item = TunnelChunks.SHAFT_DOWN
-	elif not _cells[plane].has(cell):
+	var wanted := has_shaft_down(plane, cell)
+	var existing: Variant = _mark_nodes[plane].get(cell)
+	if wanted == (existing != null):
 		return
-	_grids[plane].set_cell_item(Vector3i(cell.x, 0, cell.y), item)
+	if not wanted:
+		(existing as Node3D).queue_free()
+		_mark_nodes[plane].erase(cell)
+		return
+	var mark := MeshInstance3D.new()
+	# The lawn is already the floor up here, so a surface entrance is a scuff laid straight on the
+	# turf and needs the larger lift to win the depth fight with it.
+	mark.mesh = _entrance_mesh if plane == 0 else _shaft_mesh
+	mark.position = Vector3(float(cell.x) * CELL, 0.0, float(cell.y) * CELL)
+	mark.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_marks[plane].add_child(mark)
+	_mark_nodes[plane][cell] = mark
 
 
 ## The earth you look down through to see `plane`, sitting one spacing above its floor.
@@ -1502,8 +2128,10 @@ func _build_lid(plane: int) -> void:
 	# for that layer's floor tiles, and those aren't drawn any more -- cutting anyway would
 	# punch holes in your ceiling showing nothing behind them.
 	material.set_shader_parameter("cut_above", false)
-	material.set_shader_parameter("cell_size", CELL)
-	material.set_shader_parameter("mask_half_cells", float(MASK_HALF_CELLS))
+	material.set_shader_parameter("field_half_metres", float(MASK_HALF_CELLS))
+	material.set_shader_parameter(
+		"field_texels_per_metre", float(TunnelContour.TEXELS_PER_METRE)
+	)
 	material.set_shader_parameter("albedo_color", lid_color)
 	material.set_shader_parameter("dirt", DirtTexture.shared())
 	material.set_shader_parameter("dirt_tile", DirtTexture.WORLD_TILE)
@@ -1556,55 +2184,62 @@ func _mask_wants(plane: int, cell: Vector2i) -> bool:
 	return is_tunnel_known(plane, cell, _view_team) or _glimpsed[plane].has(cell)
 
 
+## The same question about a STROKE, which is what the field is actually built out of.
+##
+## ASKED AT THE STROKE'S MIDPOINT rather than of every cell it touches, and the granularity that
+## buys is exactly the granularity the rule already had: a segment is a metre long and a cell is a
+## metre across, so this cannot reveal more than a cell's worth of corridor beyond what
+## `_mask_wants` would have. Asking of every cell and taking the union would leak instead -- one
+## glimpsed cell at the end of a stroke would uncover the whole metre leading up to it.
+func _segment_wants(plane: int, id: int) -> bool:
+	if _view_team < 0:
+		return true
+	var middle := segment_origin(id).lerp(segment_end(id), 0.5)
+	return _mask_wants(plane, world_to_cell(Vector3(middle.x, 0.0, middle.y)))
+
+
 ## Is the earth over this cell actually open, as the shader will read it?
 ##
-## Asked of the MASK rather than recomputed from the same inputs, deliberately. The whole failure
+## Asked of the FIELD rather than recomputed from the same inputs, deliberately. The whole failure
 ## this exists to catch is the drawn world disagreeing with the rule -- a check that recomputed
 ## `_mask_wants` would agree with itself no matter what the texture said, and the texture is what
 ## the player sees.
+##
+## SAMPLED WHERE THE TUNNEL IS IN THIS CELL, not at the middle of the square -- the same
+## correction [method standing_point] exists for, and needed here for the same reason. The
+## question every caller is really asking is "can this crew see into this cell", and a corridor
+## crossing a cell at an angle can leave the exact centre under solid earth while the tunnel
+## beside it is plainly open. Asked at the centre, nine cells of a curved corridor reported
+## themselves dug and not cut away, which is the shape of a real fog bug and was not one.
+##
+## A cell with no tunnel in it falls back to its centre, which is the right place to ask about
+## ground nobody has dug.
 func is_cut_away(plane: int, cell: Vector2i) -> bool:
 	if plane < 0 or plane >= _mask_images.size():
 		return false
-	var x := cell.x + MASK_HALF_CELLS
-	var y := cell.y + MASK_HALF_CELLS
-	if x < 0 or y < 0 or x >= MASK_HALF_CELLS * 2 or y >= MASK_HALF_CELLS * 2:
+	var at := standing_point(plane, cell)
+	var x := roundi(at.x * TunnelContour.TEXELS_PER_METRE) + FIELD_HALF_TEXELS
+	var y := roundi(at.z * TunnelContour.TEXELS_PER_METRE) + FIELD_HALF_TEXELS
+	if x < 0 or y < 0 or x >= FIELD_TEXELS or y >= FIELD_TEXELS:
 		return false
-	return _mask_images[plane].get_pixel(x, y).r > 0.5
-
-
-## Punch or heal one texel. The entire cost of keeping the cutaway in sync -- no mesh, no CSG,
-## no rebuild.
-func _mark_mask(plane: int, cell: Vector2i, dug: bool) -> void:
-	var x := cell.x + MASK_HALF_CELLS
-	var y := cell.y + MASK_HALF_CELLS
-	if x < 0 or y < 0 or x >= MASK_HALF_CELLS * 2 or y >= MASK_HALF_CELLS * 2:
-		return
-	var show := dug and _mask_wants(plane, cell)
-	_mask_images[plane].set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0) if show else Color(0, 0, 0, 1))
-	_mask_textures[plane].update(_mask_images[plane])
+	return _mask_images[plane].get_pixel(x, y).r > TunnelContour.SURFACE
 
 
 ## Redraw a whole plane's cutaway from scratch, for when who is looking -- or what they can see --
 ## changes rather than what has been dug.
 ##
-## Whole rather than incremental, and cheap enough to be: `fill` is one native memset and the loop
-## touches only the cells that ARE visible, which is tens to low hundreds. The alternative is
-## diffing two sets to find the handful of texels that changed, which is more code to get wrong in
-## a place where being wrong means leaking a corridor.
+## `[REVISED]` DONE BY DIRTYING EVERY OCCUPIED CHUNK rather than by walking cells, because the
+## cutaway is no longer a set of texels that can be flipped one at a time -- it is a distance
+## field, and the value at a texel depends on every stroke near it. Marking the chunks and letting
+## the ordinary rebuild run is the same code path a dig takes, which is the point: there is one
+## description of how the field is computed, so a fog change and a dig cannot disagree about it.
 func _rebuild_mask(plane: int) -> void:
 	if plane < 0 or plane >= _mask_images.size():
 		return
-	var image := _mask_images[plane]
-	image.fill(Color(0.0, 0.0, 0.0, 1.0))
-	for cell: Vector2i in _cells[plane]:
-		if not _mask_wants(plane, cell):
-			continue
-		var x := cell.x + MASK_HALF_CELLS
-		var y := cell.y + MASK_HALF_CELLS
-		if x < 0 or y < 0 or x >= MASK_HALF_CELLS * 2 or y >= MASK_HALF_CELLS * 2:
-			continue
-		image.set_pixel(x, y, Color(1.0, 0.0, 0.0, 1.0))
-	_mask_textures[plane].update(image)
+	_mask_images[plane].fill(Color(0.0, 0.0, 0.0, 1.0))
+	for key: int in _chunk_cache[plane]:
+		_dirty_chunks[plane][key] = true
+	_rebuild_walls(plane)
 
 
 ## What the viewing crew can currently make out of somebody else's network on this plane. Pushed
@@ -1918,72 +2553,42 @@ func _rebuild_rock_caps(plane: int) -> void:
 ## Wonderfully dull now that every cell is flat. A neighbour is either dug or it isn't; there
 ## is no half-height edge to work out, no orientation to read back, and no cross-plane opening
 ## to remember. All of that existed to serve ramps.
+## Bring a plane's drawn and collided geometry back in step with its segments.
+##
+## `[REVISED]` TWO STEPS NOW, AND ONLY THE FIRST IS EXPENSIVE. Re-contouring is done per 4m chunk
+## and only for chunks a dig actually touched; assembling the plane's meshes is a concatenation of
+## cached triangle arrays, which is native and costs nothing worth measuring. The old version
+## walked every dug cell on every dig, which was affordable at a metre per cell and would not be
+## at 12.5cm -- a plane's field is a million texels, and marching all of them to learn that one
+## stroke moved is the version of this that drops a frame every time you dig.
+##
+## THE WHOLE PLANE IS STILL ONE MESH, deliberately. The chunk is a unit of WORK, not a unit of
+## scene: one mesh instance per plane keeps the focus rules, the per-plane materials, the dimming
+## and the single collision body exactly as the rest of the file already expects them.
 func _rebuild_walls(plane: int) -> void:
-	var cells: Dictionary = _cells[plane]
-	var walls := SurfaceTool.new()
-	walls.begin(Mesh.PRIMITIVE_TRIANGLES)
-	# A second surface for the faces that turn out to be stone. Same quads, same collision, drawn
-	# apart only so they can be a different material -- which is the entire user interface for
-	# rock: you dig into a seam, the corridor ends in grey, and nothing has to explain itself.
-	var stone := SurfaceTool.new()
-	stone.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for key: int in _dirty_chunks[plane]:
+		_rebuild_chunk(plane, key)
+	_dirty_chunks[plane].clear()
 
+	var floors := PackedVector3Array()
+	var walls := PackedVector3Array()
+	var stone := PackedVector3Array()
 	var collision := PackedVector3Array()
-	var half := CELL * 0.5
-	var faces := 0
-	var stone_faces := 0
-	var top := _wall_top(plane)
-	var barrier := _barrier_top(plane)
+	for key: int in _chunk_cache[plane]:
+		var chunk: Dictionary = _chunk_cache[plane][key]
+		floors.append_array(chunk["floors"])
+		walls.append_array(chunk["walls"])
+		stone.append_array(chunk["stone"])
+		collision.append_array(chunk["collision"])
 
-	for cell: Vector2i in cells:
-		var centre := Vector3(cell.x * CELL, 0.0, cell.y * CELL)
-
-		_collide_quad(collision,
-			centre + Vector3(-half, 0.0, -half), centre + Vector3(half, 0.0, -half),
-			centre + Vector3(half, 0.0, half), centre + Vector3(-half, 0.0, half))
-
-		for side: Vector2i in SIDES:
-			if cells.has(cell + side):
-				continue
-
-			# The shared edge between this cell and the missing neighbour.
-			var outward := Vector3(side.x, 0.0, side.y)
-			var along := Vector3(side.y, 0.0, -side.x)
-			var edge := centre + outward * half
-			var a := edge - along * half
-			var b := edge + along * half
-
-			# Drawn to the lid, collided to well above it. Two heights, two jobs -- and safe
-			# to differ now that each plane collides only with its own occupant.
-			var up := Vector3(0.0, top, 0.0)
-			if _rock[plane].has(cell + side):
-				_quad(stone, a, b, b + up, a + up)
-				stone_faces += 1
-			else:
-				_quad(walls, a, b, b + up, a + up)
-				faces += 1
-			_collide_quad(collision,
-				a, b, Vector3(b.x, barrier, b.z), Vector3(a.x, barrier, a.z))
-
-	var mesh: ArrayMesh = null
-	if faces > 0:
-		walls.generate_normals()
-		mesh = walls.commit()
-		mesh.surface_set_material(0, _wall_materials[plane])
-
-	_walls[plane].mesh = mesh
-
-	var stone_mesh: ArrayMesh = null
-	if stone_faces > 0:
-		stone.generate_normals()
-		stone_mesh = stone.commit()
-		stone_mesh.surface_set_material(0, _rock_materials[plane])
-	_rock_faces[plane].mesh = stone_mesh
+	_floors[plane].mesh = _commit(floors, _floor_materials[plane])
+	_walls[plane].mesh = _commit(walls, _wall_materials[plane])
+	_rock_faces[plane].mesh = _commit(stone, _rock_materials[plane])
 
 	var body_shape: ConcavePolygonShape3D = null
 	if not collision.is_empty():
 		body_shape = ConcavePolygonShape3D.new()
-		# Double-sided, so a quad emitted with the wrong winding still collides. Winding
+		# Double-sided, so a triangle emitted with the wrong winding still collides. Winding
 		# is easy to get backwards and produces a floor you silently fall through, which
 		# is a miserable thing to debug for zero benefit on static level geometry.
 		body_shape.backface_collision = true
@@ -1991,6 +2596,142 @@ func _rebuild_walls(plane: int) -> void:
 	_shapes[plane].shape = body_shape
 
 	_relight(plane)
+
+
+## Triangles into a mesh with a material, or null if there are none. Null rather than an empty
+## mesh because an empty ArrayMesh still costs a draw call and still asks the renderer questions.
+func _commit(triangles: PackedVector3Array, material: Material) -> ArrayMesh:
+	if triangles.is_empty():
+		return null
+	var tool := SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for vertex: Vector3 in triangles:
+		tool.add_vertex(vertex)
+	tool.generate_normals()
+	var mesh := tool.commit()
+	mesh.surface_set_material(0, material)
+	return mesh
+
+
+## Re-contour one 4m square: its geometry, and its share of the crew's cutaway.
+##
+## THE FIELD IS REBUILT FROM THE SEGMENTS RATHER THAN EDITED IN PLACE, which makes digging and
+## un-digging the same operation. A distance field unions by `min`, so adding a stroke is cheap to
+## patch in -- but REMOVING one cannot be undone the same way, and a version that patched on the
+## way in and rebuilt on the way out would have two descriptions of the same shape and a class of
+## bug that only appears after a cave-in.
+##
+## TWO FIELDS OUT OF ONE PASS. `shape` is every stroke and is what the world is built from;
+## `seen` is only the strokes the viewing crew may know about and is what the lid discards
+## against. They differ on a host -- where the network holds both crews' tunnels and the player
+## may see one crew's -- and are identical on a client, which is only ever sent its own. Building
+## them together costs one extra array and keeps the fog impossible to forget.
+func _rebuild_chunk(plane: int, key: int) -> void:
+	var cx := key % FIELD_CHUNKS
+	var cy := key / FIELD_CHUNKS
+	var n := TunnelContour.CHUNK_TEXELS
+	var span := n + 1
+	var base_x := cx * n - FIELD_HALF_TEXELS
+	var base_y := cy * n - FIELD_HALF_TEXELS
+	var origin := Vector2(
+		float(base_x) / float(TunnelContour.TEXELS_PER_METRE),
+		float(base_y) / float(TunnelContour.TEXELS_PER_METRE)
+	)
+
+	var shape := PackedFloat32Array()
+	shape.resize(span * span)
+	var seen := PackedFloat32Array()
+	seen.resize(span * span)
+
+	var found := {}
+	# The chunk's cells plus a ring, because a stroke whose centre is in the next chunk can still
+	# reach across the border. `_segment_cells` is conservative in the same direction, so anything
+	# whose capsule touches this square is registered in one of these cells.
+	var low := Vector2i(floori(origin.x) - 1, floori(origin.y) - 1)
+	var high := Vector2i(
+		ceili(origin.x + TunnelContour.CHUNK_METRES) + 1,
+		ceili(origin.y + TunnelContour.CHUNK_METRES) + 1
+	)
+	for y in range(low.y, high.y + 1):
+		for x in range(low.x, high.x + 1):
+			for id: int in segments_in_cell(plane, Vector2i(x, y)):
+				found[id] = true
+
+	for id: int in found:
+		var a := segment_origin(id)
+		var b := segment_end(id)
+		var visible := _segment_wants(plane, id)
+		# Only the texels this stroke could possibly change. Sampling the whole chunk against
+		# every stroke in it is eight times the work for the same answer.
+		var reach := SEG_HALF_WIDTH + TunnelContour.SDF_RANGE
+		var i0 := maxi(0, floori((minf(a.x, b.x) - reach) * TunnelContour.TEXELS_PER_METRE) - base_x)
+		var i1 := mini(n, ceili((maxf(a.x, b.x) + reach) * TunnelContour.TEXELS_PER_METRE) - base_x)
+		var j0 := maxi(0, floori((minf(a.y, b.y) - reach) * TunnelContour.TEXELS_PER_METRE) - base_y)
+		var j1 := mini(n, ceili((maxf(a.y, b.y) + reach) * TunnelContour.TEXELS_PER_METRE) - base_y)
+		for j in range(j0, j1 + 1):
+			var row := j * span
+			for i in range(i0, i1 + 1):
+				var at := origin + Vector2(float(i), float(j)) * TunnelContour.TEXEL
+				var value := TunnelContour.encode(
+					TunnelContour.segment_distance(at, a, b, SEG_HALF_WIDTH)
+				)
+				if value > shape[row + i]:
+					shape[row + i] = value
+				if visible and value > seen[row + i]:
+					seen[row + i] = value
+
+	var contour := TunnelContour.new()
+	contour.build(shape, n, origin, _wall_top(plane), _barrier_top(plane))
+
+	var walls := PackedVector3Array()
+	var stone := PackedVector3Array()
+	_split_stone(plane, contour.walls, walls, stone)
+
+	_chunk_cache[plane][key] = {
+		"floors": contour.floors,
+		"walls": walls,
+		"stone": stone,
+		"collision": contour.collision,
+	}
+	_blit(plane, seen, span, base_x, base_y, n)
+
+
+## Sort wall triangles into earth and stone by what is standing behind them.
+##
+## THE ENTIRE USER INTERFACE FOR ROCK: you dig into a seam, the corridor ends in grey, and nothing
+## has to explain itself. Same geometry, same collision, split only so the two can carry different
+## materials -- exactly as the cell version did, asked per wall face instead of per cell side.
+func _split_stone(
+	plane: int, source: PackedVector3Array, earth: PackedVector3Array, stone: PackedVector3Array
+) -> void:
+	for t in range(0, source.size(), 6):
+		var a := source[t]
+		var b := source[t + 1]
+		# A step from the middle of the face AWAY from the corridor, far enough to land in the
+		# neighbouring cell rather than back in this one.
+		var outward := -(b - a).cross(Vector3.UP).normalized()
+		var behind := (a + b) * 0.5 + outward * (CELL * 0.6)
+		var into := stone if _rock[plane].has(world_to_cell(behind)) else earth
+		for k in range(6):
+			into.append(source[t + k])
+
+
+## Write a chunk's visible field into the image the lid samples.
+func _blit(
+	plane: int, values: PackedFloat32Array, span: int, base_x: int, base_y: int, n: int
+) -> void:
+	var image := _mask_images[plane]
+	for j in range(n):
+		var y := base_y + j + FIELD_HALF_TEXELS
+		if y < 0 or y >= FIELD_TEXELS:
+			continue
+		for i in range(n):
+			var x := base_x + i + FIELD_HALF_TEXELS
+			if x < 0 or x >= FIELD_TEXELS:
+				continue
+			var v := values[j * span + i]
+			image.set_pixel(x, y, Color(v, 0.0, 0.0, 1.0))
+	_mask_textures[plane].update(image)
 
 
 ## Rebuild a plane's lamps and beams, if it is the one being looked at. Off-focus planes are
@@ -2007,11 +2748,6 @@ func _wall_top(plane: int) -> float:
 
 func _barrier_top(plane: int) -> float:
 	return 0.0 if plane == 0 else maxf(wall_height, barrier_height)
-
-
-func _collide_quad(out: PackedVector3Array, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
-	for vertex: Vector3 in [a, b, c, a, c, d]:
-		out.append(vertex)
 
 
 func _quad(t: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:

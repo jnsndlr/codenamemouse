@@ -29,10 +29,18 @@ extends RefCounted
 
 ## What one entry of the packet is about.
 enum Kind {
-	CELL,     ## Dug floor, with its knowledge bits.
+	## One stroke of dug tunnel -- an origin and an angle -- with its knowledge bits.
+	##
+	## `[REVISED]` A SEGMENT, WHERE THIS USED TO BE A CELL. Cells cannot describe the world any
+	## more: the same set of them is produced by strokes at a dozen different angles, so two
+	## machines given the cells would agree about where the corridor runs and draw different
+	## tunnels -- and, worse, build different collision out of them, so the client would disagree
+	## with the server about where a mouse can walk. The origin rides in the same two signed
+	## shorts the cell did, in sixteenths of a metre, and the angle is the byte this grew by.
+	SEGMENT,
 	SHAFT,    ## A shaft descending from this plane, with its knowledge bits.
 	ROCK,     ## A seam this crew has found. The stone itself is generated, not sent.
-	FORGET,   ## A cell that has aged out of the fog and must leave the client's world.
+	FORGET,   ## A stroke that has aged out of the fog and must leave the client's world.
 	## A shaft that is GONE -- the Brute filled it in. Its own kind rather than a FORGET on the
 	## cell, because a shaft is recorded at the UPPER of the two planes it joins: the FORGET
 	## entries for the two cells it came down with name planes the shaft is not stored under, and
@@ -50,8 +58,14 @@ enum Kind {
 	UNSHORED,
 }
 
-## Plane, x, y, kind, bits. Cells are signed and can exceed a byte in a large arena.
-const ENTRY_SIZE: int = 1 + 2 + 2 + 1 + 1
+## Kind, plane, x, y, extra, bits. Coordinates are signed and can exceed a byte in a large arena.
+##
+## `extra` IS THE ANGLE, and only a SEGMENT uses it -- every other kind sends a zero there. One
+## wasted byte on the handful of shaft, rock and shoring entries a match produces was much the
+## better trade against packing the angle into the spare bits of the coordinates, which would have
+## made the two fields mean different things depending on the kind and put a shift-and-mask
+## between every reader and the number it wanted.
+const ENTRY_SIZE: int = 1 + 1 + 2 + 2 + 1 + 1
 
 ## How many entries may go in one packet.
 ##
@@ -93,7 +107,7 @@ func batch(peer: int, side: int) -> Array:
 	var wanted: Dictionary = {}
 
 	for plane: int in range(1, TunnelNetwork.PLANE_COUNT):
-		_gather_cells(side, plane, wanted)
+		_gather_segments(side, plane, wanted)
 		_gather_shafts(side, plane, wanted)
 		_gather_rock(side, plane, wanted)
 		_gather_shoring(side, plane, wanted)
@@ -124,7 +138,7 @@ func batch(peer: int, side: int) -> Array:
 			if wanted.has(key):
 				continue
 			var entry: Array = _unkey(key)
-			if entry[0] == Kind.CELL:
+			if entry[0] == Kind.SEGMENT:
 				entry[0] = Kind.FORGET
 			elif entry[0] == Kind.SHAFT:
 				entry[0] = Kind.FORGET_SHAFT
@@ -145,16 +159,25 @@ func batch(peer: int, side: int) -> Array:
 	return out
 
 
-## Every dug cell this crew may know about, own or glimpsed, with the bits to record it under.
+## Every stroke of tunnel this crew may know about, own or glimpsed, with the bits to record it
+## under.
 ##
-## THE BITS ARE THE SERVER'S OWN. A cell a crew can merely SEE is not a cell it owns, so it travels
+## THE BITS ARE THE SERVER'S OWN. Ground a crew can merely SEE is not ground it owns, so it travels
 ## with the owner's bits and the client records it exactly as the host has it — which is what makes
 ## the client's minimap draw a glimpse as a glimpse rather than as one of its own corridors.
-func _gather_cells(side: int, plane: int, into: Dictionary) -> void:
-	for cell: Vector2i in _network.dug_cells(plane):
+##
+## GATED AT THE STROKE'S MIDPOINT, matching `TunnelNetwork._segment_wants` -- the same question the
+## cutaway asks, so what a client is SENT and what the ground would show it can never disagree. A
+## stroke is a metre and a cell is a metre, so this is the granularity the rule always had.
+func _gather_segments(side: int, plane: int, into: Dictionary) -> void:
+	for id: int in _network.segments(plane):
+		var middle := TunnelNetwork.segment_origin(id).lerp(TunnelNetwork.segment_end(id), 0.5)
+		var cell := _network.world_to_cell(Vector3(middle.x, 0.0, middle.y))
 		if not _sight.knows(side, plane, cell):
 			continue
-		into[_key(Kind.CELL, plane, cell)] = _network.tunnel_known_bits(plane, cell)
+		into[_key(Kind.SEGMENT, plane, TunnelNetwork.segment_fixed(id), TunnelNetwork.segment_angle(id))] = (
+			_network.tunnel_known_bits(plane, cell)
+		)
 
 
 func _gather_shafts(side: int, plane: int, into: Dictionary) -> void:
@@ -183,10 +206,19 @@ func _gather_rock(side: int, plane: int, into: Dictionary) -> void:
 		into[_key(Kind.ROCK, plane, cell)] = _network.rock_known_bits(plane, cell)
 
 
-func _key(kind: int, plane: int, cell: Vector2i) -> String:
-	return "%d:%d:%d:%d" % [kind, plane, cell.x, cell.y]
+## `extra` carries a segment's angle and is zero for every other kind. Part of the KEY rather than
+## of the value, because two strokes from the same origin at different angles are two different
+## things -- folding the angle into the payload would have the diff treat a turn as an edit to the
+## stroke that was already there, and the client would never be told about one of them.
+func _key(kind: int, plane: int, cell: Vector2i, extra: int = 0) -> String:
+	return "%d:%d:%d:%d:%d" % [kind, plane, cell.x, cell.y, extra]
 
 
 func _unkey(key: String) -> Array:
 	var parts := key.split(":")
-	return [parts[0].to_int(), parts[1].to_int(), Vector2i(parts[2].to_int(), parts[3].to_int())]
+	return [
+		parts[0].to_int(),
+		parts[1].to_int(),
+		Vector2i(parts[2].to_int(), parts[3].to_int()),
+		parts[4].to_int(),
+	]

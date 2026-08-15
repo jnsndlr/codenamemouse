@@ -52,6 +52,11 @@ func _ready() -> void:
 
 
 ## Park the cursor on `cell` of `plane`, `progress` of the way through. Vector2i.MAX hides it.
+##
+## STILL CELL-SHAPED, AND STILL USED. Digging stopped being square, but the two other things that
+## borrow this cursor did not: a Brute brings down a cell (see [CaveIn]) and an Engineer braces one
+## (see [ShoreUp]), and both are properties of a PLACE rather than strokes with a direction. They
+## keep this door; digging uses [method show_stroke].
 func show_at(
 	network: TunnelNetwork, plane: int, cell: Vector2i, progress: float, digging: bool
 ) -> void:
@@ -60,8 +65,40 @@ func show_at(
 		return
 
 	visible = true
-	_fit(network.wall_height)
+	_fit_cell(network.wall_height)
 	global_position = network.cell_to_world(plane, cell)
+	rotation = Vector3.ZERO
+	_material.set_shader_parameter("edge_color", digging_color if digging else hover_color)
+	_material.set_shader_parameter("progress", clampf(progress, 0.0, 1.0))
+	_material.set_shader_parameter("pulse", 0.0 if digging else 1.0)
+
+
+## Park the cursor on the stroke `id` would cut, `progress` of the way through. -1 hides it.
+##
+## `[REVISED]` THIS ONE TURNS. The box used to be axis-aligned because the thing it described was a
+## cell; what a dig describes is a STROKE, which has a direction, and a cursor that stayed square
+## while the tunnel it promised came out at 20 degrees would be lying about the one property the
+## player is choosing. Rotating it is also the only preview of the angle there is -- you find out
+## which way the stroke will go by pointing, and the box is what tells you.
+func show_stroke(
+	network: TunnelNetwork, plane: int, id: int, progress: float, digging: bool
+) -> void:
+	if id < 0:
+		visible = false
+		return
+
+	visible = true
+	_fit_stroke(network.wall_height)
+	var origin := TunnelNetwork.segment_origin(id)
+	var heading := TunnelNetwork.angle_direction(TunnelNetwork.segment_angle(id))
+	# Parked at the stroke's MIDDLE, because the box is centred on its own origin. The stroke
+	# itself starts inside the tunnel you are branching from, so the near half of the box overlaps
+	# ground that is already open -- which reads correctly: it is the far half you are buying.
+	var middle := origin + heading * (TunnelNetwork.SEG_LENGTH * 0.5)
+	global_position = Vector3(middle.x, network.plane_y(plane), middle.y)
+	# Godot's -Z is forward, and the stroke's heading is an XZ vector; the negation is what keeps
+	# the box pointing along the tunnel rather than across it.
+	rotation = Vector3(0.0, atan2(-heading.y, heading.x) - PI * 0.5, 0.0)
 	_material.set_shader_parameter("edge_color", digging_color if digging else hover_color)
 	_material.set_shader_parameter("progress", clampf(progress, 0.0, 1.0))
 	# The hover pulse and the rising flood are the same channel of attention. Leaving the pulse
@@ -77,25 +114,42 @@ func show_blocked(network: TunnelNetwork, plane: int, cell: Vector2i) -> void:
 		return
 
 	visible = true
-	_fit(network.wall_height)
+	_fit_cell(network.wall_height)
 	global_position = network.cell_to_world(plane, cell)
+	# Square again, deliberately: what this describes is a cubic metre of STONE, which is still a
+	# cell-shaped thing and is not going anywhere. Leaving it turned would suggest the seam had an
+	# orientation you could work with.
+	rotation = Vector3.ZERO
 	_material.set_shader_parameter("edge_color", blocked_color)
 	_material.set_shader_parameter("progress", 0.0)
 	_material.set_shader_parameter("pulse", 0.0)
 
 
-## Size the box to the seam being cut: one cell across, and as tall as the plane's walls, so it
-## reaches from the floor the block sits on to the lid it holds up.
+## Size the box to a cubic metre of ground: one cell across, and as tall as the plane's walls, so
+## it reaches from the floor the block sits on to the lid it holds up.
 ##
 ## Read off the network rather than baked in, because wall_height is an exported dial and a
 ## cursor that disagreed with it would draw the wrong volume with no visible cause.
-func _fit(height: float) -> void:
-	if is_equal_approx(height, _height):
+func _fit_cell(height: float) -> void:
+	_fit(Vector3(TunnelChunks.CELL, height, TunnelChunks.CELL))
+
+
+## The same, sized to a stroke: width across, length along -- and length is Z, because that is the
+## axis [method show_stroke] turns to face down the tunnel. Read off the segment constants rather
+## than off the cell, so that if a stroke ever stops being exactly a metre the box does not
+## quietly keep claiming it is.
+func _fit_stroke(height: float) -> void:
+	_fit(Vector3(TunnelNetwork.SEG_WIDTH, height, TunnelNetwork.SEG_LENGTH))
+
+
+## Cached on the SIZE rather than on the height alone, since two callers now want two different
+## boxes off the same wall height -- keyed on height only, the first shape to be drawn would have
+## stuck and the other would silently borrow it.
+func _fit(size: Vector3) -> void:
+	if _box.size.is_equal_approx(size):
 		return
-	_height = height
-	_box.size = Vector3(TunnelChunks.CELL, height, TunnelChunks.CELL)
-	# The mesh is centred on its own origin; lift it so the cube's underside sits on the floor.
-	_mesh.position = Vector3(0.0, height * 0.5, 0.0)
-	_material.set_shader_parameter(
-		"half_extent", Vector3(TunnelChunks.CELL * 0.5, height * 0.5, TunnelChunks.CELL * 0.5)
-	)
+	_height = size.y
+	_box.size = size
+	# The mesh is centred on its own origin; lift it so the box's underside sits on the floor.
+	_mesh.position = Vector3(0.0, size.y * 0.5, 0.0)
+	_material.set_shader_parameter("half_extent", size * 0.5)

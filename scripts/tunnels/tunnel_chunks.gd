@@ -1,25 +1,22 @@
 class_name TunnelChunks
 extends RefCounted
-## Builds the tunnel MeshLibrary at runtime.
+## The dimensions every part of the underground agrees on, and the marks laid on its floor.
 ##
-## Built in code rather than authored as a .tres because at M2 the chunk shapes are the
-## thing under test -- see the implementation plan. Changing a tunnel's proportions should
-## be editing a constant here and pressing play, not round-tripping through the editor.
-## Once the shapes settle, bake this to a real MeshLibrary asset and delete the generator.
+## `[REVISED]` THE TILES ARE GONE, and with them the MeshLibrary this file used to build. Tunnels
+## are no longer a set of square cells: a segment is a capsule at a free angle, and the floor and
+## walls are contoured out of the union of them (see [TunnelContour]). There is no per-cell slab
+## left to instance, so what remains here is the numbers -- [constant CELL],
+## [constant PLANE_SPACING] -- and the two flat marks that still sit at a POINT rather than
+## filling a square.
 ##
-## THREE TILES, and all three are flat. Ramps are gone: vertical transit is now a shaft you
-## step into with a keypress, so no tile ever has to be walked up. That deleted the entire
-## sloped-geometry problem -- the two-cell split, the orientation index, the flank walls, the
-## per-face height arithmetic -- and with it every bug that came from a floor that wasn't level.
+## [constant CELL] outliving the tiles is not an oversight. The coarse cell survives as the unit
+## the game's *knowledge* is kept in -- who has seen what, what the minimap draws, what sonar
+## pings -- and as the index that finds which segments are near a spot. It stopped being the unit
+## the world is SHAPED in, which is the whole of the change.
 ##
-## A shaft is NOT a hole. The floor stays solid and the tile just carries a mark, because
-## falling down a shaft you meant to walk past is not a mechanic anyone asked for and a real
-## hole in the collision mesh is how you end up outside the world.
-
-## Only DOWN gets a tile. A shaft you can climb is announced by the shaft of daylight falling
-## out of it instead -- see TunnelNetwork's light rays. A second painted square could only ever
-## say "something is here"; a beam says where it comes from and lights the floor it lands on.
-enum { FLOOR, SHAFT_DOWN, ENTRANCE }
+## A shaft is NOT a hole. The floor stays solid and simply carries a mark, because falling down a
+## shaft you meant to walk past is not a mechanic anyone asked for and a real hole in the
+## collision mesh is how you end up outside the world.
 
 const CELL: float = 1.0
 ## Vertical gap between planes, and therefore HOW DEEP EVERY TRENCH IS -- a layer's floor
@@ -53,70 +50,30 @@ const MARKER_LIFT: float = 0.006
 const ENTRANCE_LIFT: float = 0.02
 
 
-## One library PER PLANE, each with its own material instances. GridMap is a plain Node3D
-## with no material_override, so giving each plane a separately dimmable look means handing
-## each one its own copy of the meshes. Three copies of three small meshes is nothing.
-static func build(floor_material: Material, down_material: Material) -> MeshLibrary:
-	var library := MeshLibrary.new()
-	_add(library, FLOOR, "floor", _slab(), floor_material, null)
-	_add(library, SHAFT_DOWN, "shaft_down", _slab(), floor_material, down_material)
-
-	# The surface entrance is a MARK ONLY, with no slab under it. Plane 0's floor height is
-	# exactly the lawn's, so a tile with a slab would z-fight the grass across its whole face.
-	# It also happens to be what GDD section 3 asks for -- entrances should be subtle to the
-	# enemy, and a scuff in the turf is a great deal subtler than a doorway.
-	var mark := ArrayMesh.new()
-	_marker(mark, ENTRANCE_LIFT)
-	mark.surface_set_material(0, down_material)
-	library.create_item(ENTRANCE)
-	library.set_item_name(ENTRANCE, "entrance")
-	library.set_item_mesh(ENTRANCE, mark)
-	return library
-
-
-static func _add(
-	library: MeshLibrary, id: int, name: String, mesh: ArrayMesh,
-	floor_material: Material, marker: Material
-) -> void:
-	mesh.surface_set_material(0, floor_material)
-	if marker != null:
-		_marker(mesh, MARKER_LIFT)
-		mesh.surface_set_material(1, marker)
-	library.create_item(id)
-	library.set_item_name(id, name)
-	library.set_item_mesh(id, mesh)
-	# Deliberately NO item shapes. Setting them produced valid shapes that never became
-	# bodies in the physics world -- a raycast at a placed floor cell hit nothing, and the
-	# player fell straight through. tunnel_network generates collision itself from the same
-	# cell data. Leaving shapes here too would risk doubling up if that ever starts working.
-
-
-## A flat slab whose top sits exactly at the plane's own Y, hanging FLOOR_THICKNESS below.
+## The mark inlaid on the floor where a shaft goes down, as a mesh of its own.
 ##
-## The top being exactly at the plane coordinate is load-bearing: depth readouts, cell
-## lookups, wall bases and the lid above all assume the walkable surface and the plane
-## number are the same height.
-static func _slab() -> ArrayMesh:
-	var t := SurfaceTool.new()
-	t.begin(Mesh.PRIMITIVE_TRIANGLES)
+## A MESH RATHER THAN A MeshLibrary ITEM, since the floor stopped being tiles. The tunnel floor is
+## now contoured out of the dug field (see [TunnelContour]), so there is no per-cell slab left to
+## hang a second surface off -- and a shaft is in any case a thing at a POINT rather than a
+## property of a square. One of these is instanced per shaft and parked at its centre.
+static func shaft_mark(material: Material) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	_marker(mesh, MARKER_LIFT)
+	mesh.surface_set_material(0, material)
+	return mesh
 
-	var half := CELL * 0.5
-	var top := [
-		Vector3(-half, 0.0, -half), Vector3(half, 0.0, -half),
-		Vector3(half, 0.0, half), Vector3(-half, 0.0, half),
-	]
-	var bottom := []
-	for corner: Vector3 in top:
-		bottom.append(corner - Vector3(0.0, FLOOR_THICKNESS, 0.0))
 
-	_quad(t, top[0], top[1], top[2], top[3])
-	_quad(t, bottom[3], bottom[2], bottom[1], bottom[0])
-	for i in range(4):
-		var j := (i + 1) % 4
-		_quad(t, top[j], top[i], bottom[i], bottom[j])
-
-	t.generate_normals()
-	return t.commit()
+## The same, for the mouth seen from the lawn.
+##
+## STILL A MARK ONLY, with no slab under it. Plane 0's floor height is exactly the lawn's, so
+## anything with thickness would z-fight the grass across its whole face. It also happens to be
+## what GDD section 3 asks for -- entrances should be subtle to the enemy, and a scuff in the turf
+## is a great deal subtler than a doorway.
+static func entrance_mark(material: Material) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	_marker(mesh, ENTRANCE_LIFT)
+	mesh.surface_set_material(0, material)
+	return mesh
 
 
 ## The square inlaid on a shaft tile, added as a second surface so it can carry its own
@@ -158,8 +115,3 @@ static func _marker(mesh: ArrayMesh, lift: float) -> void:
 static func _rim(scale: float, index: int, radius: float, lift: float) -> Vector3:
 	var angle := TAU * float(index) / float(MARKER_SEGMENTS)
 	return Vector3(cos(angle) * radius * scale, lift, sin(angle) * radius * scale)
-
-
-static func _quad(t: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
-	for vertex: Vector3 in [a, b, c, a, c, d]:
-		t.add_vertex(vertex)

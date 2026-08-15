@@ -437,6 +437,29 @@ func _check_routing() -> void:
 	if not graph.route(1, Vector2i(3, 0), 1, Vector2i(3, 4)).is_empty():
 		_fail("ROUTING", "a route was found between two corridors that do not connect")
 
+	# AND THEY CAN BE JOINED, which is the other half of the same rule and the half that was
+	# broken. The joining stroke necessarily FINISHES inside the corridor it is reaching for, and
+	# an earlier version of the aim refused a stroke on exactly that ground -- so two tunnels a
+	# stroke apart could never be connected, at all. The symptom in play was a cursor that simply
+	# vanished as you closed the last metre, with nothing said and nothing to be done about it.
+	#
+	# Driven through the NETWORK rather than the controls, because what is under test is the rule
+	# about earth; `_check_dig_flow` is where the button is.
+	var gap_from := Vector2(3.0, 1.0)
+	var joined := false
+	for i in range(4):
+		if not _network.dig_segment(1, gap_from, TunnelNetwork.ANGLE_STEPS / 4, Team.BLUE):
+			break
+		gap_from = TunnelNetwork.segment_end(
+			TunnelNetwork.segment_id(gap_from, TunnelNetwork.ANGLE_STEPS / 4)
+		)
+		graph = _network.graph()
+		if not graph.route(1, Vector2i(3, 0), 1, Vector2i(3, 4)).is_empty():
+			joined = true
+			break
+	if not joined:
+		_fail("ROUTING", "two corridors four cells apart could not be joined by digging between them")
+
 	# THE DIAGONAL. A staircase of corner-touching cells is not walkable and must not be
 	# routable -- and the two cells at the ends of it are four cells apart in plan view, so a
 	# graph that answers at all here is answering through solid earth.
@@ -1382,6 +1405,9 @@ func _audit(label: String) -> void:
 	_check_floor_physics()
 	_check_headroom()
 	_check_containment()
+	_check_index_exact()
+	_check_no_interior_faces()
+	_check_contour_matches_field()
 
 	var counts: Array = []
 	var shafts := 0
@@ -1396,6 +1422,120 @@ func _audit(label: String) -> void:
 	for finding: String in _findings:
 		print("   FAIL %s" % finding)
 	_total_failures += _findings.size()
+
+
+## The occupancy index says exactly what the segments say.
+##
+## THE BUG CLASS THIS EXISTS FOR is the one the whole hybrid design rests on. Cells are no longer
+## the world -- they are a derived index over the strokes, maintained incrementally by `_occupy`
+## and `_vacate` as things are dug and brought down. Incremental caches drift, and this one drifts
+## silently: a cell left in the index after the last stroke through it is gone is a corridor the
+## fog still uncovers, the minimap still draws and a bot will still route through, over ground
+## that is solid. Nothing looks wrong until somebody walks into it.
+##
+## Recomputed from scratch and compared, which is the only check that cannot share the bug.
+func _check_index_exact() -> void:
+	for plane in range(TunnelNetwork.PLANE_COUNT):
+		var wanted := {}
+		for id: int in _network.segments(plane):
+			for cell: Vector2i in _network.segment_cells(id):
+				wanted[cell] = true
+
+		var held := {}
+		for cell: Vector2i in _network.dug_cells(plane):
+			held[cell] = true
+
+		for cell: Vector2i in wanted:
+			if not held.has(cell):
+				_fail("INDEX_EXACT", "plane %d %v is under a stroke and not in the index"
+					% [plane, cell])
+				return
+		for cell: Vector2i in held:
+			if not wanted.has(cell):
+				_fail("INDEX_EXACT", "plane %d %v is in the index with no stroke under it"
+					% [plane, cell])
+				return
+
+		# The reverse index has to agree too, and it is the one that decides when a cell CLOSES.
+		# A stale id left in a cell's set keeps that cell open forever after a cave-in.
+		for cell: Vector2i in held:
+			for id: int in _network.segments_in_cell(plane, cell):
+				if not _network.has_segment(plane, id):
+					_fail("INDEX_EXACT", "plane %d %v still lists a stroke that is gone"
+						% [plane, cell])
+					return
+
+
+## Every wall face stands exactly where earth meets air.
+##
+## THE ARTIFACT CONTOURING EXISTS TO PREVENT is a fin: a wall left standing across a corridor where
+## two strokes overlap, which is what per-stroke geometry would produce at every bend and every
+## branch. Contouring the union structurally cannot make one, so what is worth checking is that the
+## union is what got contoured -- a chunk built from a stale stroke set, or one stroke missed off a
+## chunk's gather, leaves a wall hanging in open tunnel and nothing else would notice.
+##
+## ASKED AS A DISTANCE RATHER THAN AS "IS THERE TUNNEL ON BOTH SIDES", which was the first version
+## of this check and produced two false alarms immediately. Stepping a fixed distance either side
+## calls a genuinely THIN wall of earth -- two corridors passing close, which the scenarios build
+## deliberately -- a fin, because the step lands inside the tunnel on the far side. Distance to the
+## nearest stroke surface has no such ambiguity: on a true outline it is zero however thin the
+## earth behind it, and a fin is buried well inside a stroke and reads strongly negative.
+func _check_no_interior_faces() -> void:
+	for plane in range(1, TunnelNetwork.PLANE_COUNT):
+		var walls := (_network._walls[plane] as MeshInstance3D).mesh as ArrayMesh
+		if walls == null:
+			continue
+		var faces: PackedVector3Array = walls.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+		for t in range(0, faces.size(), 6):
+			var middle := (faces[t] + faces[t + 1]) * 0.5
+			var at := Vector2(middle.x, middle.z)
+			var distance := _distance_to_tunnel(plane, at)
+			# One texel of slack. The contour interpolates the crossing point along a texel edge,
+			# so a face can sit a fraction of a texel off the true surface and be perfectly correct.
+			if distance < -TunnelContour.TEXEL:
+				_fail("NO_INTERIOR_FACES",
+					"plane %d has a wall at %.2f,%.2f standing %.2fm inside the tunnel"
+					% [plane, middle.x, middle.z, -distance])
+				return
+
+
+## Distance from a point to the nearest stroke surface: negative inside, zero on the wall.
+##
+## Only the strokes registered NEAR the point are considered, through the cell index. Scanning
+## every stroke on the plane is what the first version did, and on the 441-cell scenario that is
+## several million distance evaluations for one check.
+func _distance_to_tunnel(plane: int, at: Vector2) -> float:
+	var best := 1000.0
+	var centre := _network.world_to_cell(Vector3(at.x, 0.0, at.y))
+	for y in range(centre.y - 2, centre.y + 3):
+		for x in range(centre.x - 2, centre.x + 3):
+			for id: int in _network.segments_in_cell(plane, Vector2i(x, y)):
+				best = minf(best, TunnelContour.segment_distance(
+					at, TunnelNetwork.segment_origin(id), TunnelNetwork.segment_end(id),
+					TunnelNetwork.SEG_HALF_WIDTH
+				))
+	return best
+
+
+## What the lid discards agrees with what the floor is built from.
+##
+## THE DRAWN WORLD AND THE WALKED WORLD ARE TWO ARTEFACTS OFF ONE FIELD -- the cutaway texture the
+## shader samples, and the contour the collision mesh is built from -- and the failure mode when
+## they disagree is the nastiest kind: everything looks right and you cannot walk where you can
+## plainly see. Checked at cell centres through `is_cut_away`, which reads the actual texture
+## rather than recomputing the rule, so this compares the picture against the geometry.
+##
+## Only meaningful with no crew filter applied. Under a viewing crew the cutaway is deliberately
+## SMALLER than the world -- that is the fog -- so a mismatch there is the feature working.
+func _check_contour_matches_field() -> void:
+	if _network._view_team >= 0:
+		return
+	for plane in range(1, TunnelNetwork.PLANE_COUNT):
+		for cell: Vector2i in _network.dug_cells(plane):
+			if not _network.is_cut_away(plane, cell):
+				_fail("CONTOUR_MATCHES_FIELD",
+					"plane %d %v is dug and the earth above it is not cut away" % [plane, cell])
+				return
 
 
 func _fail(check: String, detail: String) -> void:
@@ -1532,7 +1672,11 @@ func _check_floor_physics() -> void:
 	for plane in range(1, TunnelNetwork.PLANE_COUNT):
 		for cell: Vector2i in _network._cells[plane]:
 			var top := _network.plane_y(plane)
-			var at := Vector3(cell.x * TunnelNetwork.CELL, top, cell.y * TunnelNetwork.CELL)
+			# WHERE THE TUNNEL ACTUALLY IS IN THIS CELL, not the middle of the square. A corridor
+			# a metre wide running at an angle across a metre grid does not cover every cell
+			# centre it passes through -- so a ray dropped at the centre can miss floor that is
+			# plainly there, twenty centimetres away. See TunnelNetwork.standing_point.
+			var at := _network.standing_point(plane, cell)
 			var query := PhysicsRayQueryParameters3D.create(
 				at + Vector3.UP * 0.3, at + Vector3.DOWN * 0.3
 			)
@@ -1563,9 +1707,9 @@ func _check_headroom() -> void:
 	for plane in range(1, TunnelNetwork.PLANE_COUNT):
 		probe.collision_mask = _mask_for(plane)
 		for cell: Vector2i in _network._cells[plane]:
-			var feet := Vector3(
-				cell.x * TunnelNetwork.CELL, _network.plane_y(plane), cell.y * TunnelNetwork.CELL
-			)
+			# The spot in this cell a mouse would stand on, which on an angled corridor is not the
+			# centre of the square. See _check_floor_physics.
+			var feet := _network.standing_point(plane, cell)
 			probe.transform = Transform3D(Basis(), feet + Vector3.UP * (0.2 + STAND_EPSILON))
 			probe.motion = Vector3.ZERO
 			if not _space.intersect_shape(probe, 1).is_empty():
@@ -1596,9 +1740,10 @@ func _check_containment() -> void:
 		# ignored here, it genuinely cannot touch a mouse standing on this one.
 		probe.collision_mask = _mask_for(plane)
 		for cell: Vector2i in _network._cells[plane]:
-			var floor_at := Vector3(
-				cell.x * TunnelNetwork.CELL, _network.plane_y(plane), cell.y * TunnelNetwork.CELL
-			)
+			# Started from where the tunnel actually is in this cell rather than from the middle
+			# of the square. See _check_floor_physics -- and note that this check then SLIDES the
+			# capsule eight ways from here, so it still explores the whole cell and beyond.
+			var floor_at := _network.standing_point(plane, cell)
 			var stand: Variant = _clear_stance(probe, floor_at)
 			if stand == null:
 				unprobed.append("plane %d %v (blocked by %s)" % [

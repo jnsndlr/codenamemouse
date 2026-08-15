@@ -88,8 +88,10 @@ func _cut_the_ground() -> void:
 	# just a mark laid on top of it. So there is nothing coplanar up here to make room for.
 	_slab_material.set_shader_parameter("cut_above", false)
 	_slab_material.set_shader_parameter("dug_above", _network.dug_mask(0))
-	_slab_material.set_shader_parameter("cell_size", TunnelNetwork.CELL)
-	_slab_material.set_shader_parameter("mask_half_cells", float(_network.mask_half_cells()))
+	_slab_material.set_shader_parameter("field_half_metres", float(_network.mask_half_cells()))
+	_slab_material.set_shader_parameter(
+		"field_texels_per_metre", float(TunnelContour.TEXELS_PER_METRE)
+	)
 	_slab_material.set_shader_parameter(
 		"albedo_color", source.albedo_color if source != null else Color(0.44, 0.42, 0.31)
 	)

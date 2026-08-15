@@ -18,8 +18,15 @@ render_mode depth_draw_opaque, cull_back, diffuse_burley;
 // own floor tiles get drawn in that space, so the lid has to move aside or the two z-fight
 // along the whole length of every corridor.
 
-uniform sampler2D dug_here : filter_nearest, repeat_disable;
-uniform sampler2D dug_above : filter_nearest, repeat_disable;
+// LINEAR, NOT NEAREST, and that one word is most of what makes an angled tunnel read as angled
+// from above. The field these sample is a signed distance (see TunnelContour), so interpolating
+// between texels interpolates the DISTANCE and the 0.5 crossing lands on the true surface --
+// the same trick the contour uses to put a wall on a straight line instead of a staircase. With
+// nearest sampling the hole in the lid would step in 12.5cm blocks around a corridor whose walls
+// are smooth, which is worse than the old whole-cell steps: it reads as a rendering fault rather
+// than as a grid.
+uniform sampler2D dug_here : filter_linear, repeat_disable;
+uniform sampler2D dug_above : filter_linear, repeat_disable;
 uniform bool cut_above = true;
 // Whether to cut at all. The ground has to CLOSE UP when the player is standing on it: left
 // cutting, the whole tunnel network was legible as a black trench snaking across the lawn from
@@ -27,8 +34,12 @@ uniform bool cut_above = true;
 // (GDD section 3 -- entrances are meant to be visually subtle). You only see into a layer once
 // you are in it.
 uniform bool cutting = true;
-uniform float cell_size = 1.0;
-uniform float mask_half_cells = 64.0;
+// Half-extent of the dug field in METRES, and how many texels it stores per metre. Together
+// they give the field's pixel size; kept as two numbers because the network exports the extent
+// and TunnelContour owns the resolution, and a single baked-in size would silently go wrong the
+// day either moves.
+uniform float field_half_metres = 64.0;
+uniform float field_texels_per_metre = 8.0;
 
 uniform vec3 albedo_color : source_color = vec3(0.26, 0.19, 0.14);
 // The same grain every other earth surface uses (scripts/rendering/dirt_texture.gd), mapped in
@@ -50,12 +61,17 @@ void vertex() {
 	world_position = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 
-// Matches TunnelNetwork.world_to_cell exactly: cell (x,z) owns world [x-0.5, x+0.5]. If these
-// two ever disagree the holes land half a cell off the tunnels they belong to.
+// Matches TunnelNetwork's field addressing exactly: texel i holds the distance sampled at world
+// (i - half) / texels_per_metre. If these two ever disagree the holes land off the tunnels they
+// belong to -- which used to be half a cell and would now be a smaller, subtler, harder-to-spot
+// fraction of a metre, so it is worth stating the mapping in one line in both places.
+//
+// The half-texel is what makes LINEAR filtering land correctly: a texel's stored value belongs at
+// its CENTRE, and sampling without the offset shifts the whole cutaway half a texel north-west.
 bool sample_mask(sampler2D mask, vec2 xz) {
-	vec2 cell = floor(xz / cell_size + 0.5);
-	vec2 uv = (cell + vec2(mask_half_cells)) / (mask_half_cells * 2.0);
-	return texture(mask, uv).r > 0.5;
+	float size = field_half_metres * field_texels_per_metre * 2.0;
+	vec2 texel = xz * field_texels_per_metre + vec2(field_half_metres * field_texels_per_metre);
+	return texture(mask, (texel + vec2(0.5)) / size).r > 0.5;
 }
 
 void fragment() {

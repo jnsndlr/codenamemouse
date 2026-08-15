@@ -1178,7 +1178,9 @@ func _send_earth() -> void:
 			out.put_u8(entry[1])
 			out.put_16(entry[2].x)
 			out.put_16(entry[2].y)
+			# The angle, for a SEGMENT; zero for everything else. See TunnelView.ENTRY_SIZE.
 			out.put_u8(entry[3])
+			out.put_u8(entry[4])
 		_transport.send(peer, out.data_array, true)
 		_earth_sent += batch.size()
 
@@ -1195,19 +1197,22 @@ func _apply_earth(bytes: PackedByteArray) -> void:
 	for i: int in range(count):
 		var kind := into.get_u8()
 		var plane := into.get_u8()
-		var cell := Vector2i(into.get_16(), into.get_16())
+		# Sixteenths of a metre for a SEGMENT, a plain cell for every other kind. Which of the two
+		# it is depends entirely on `kind`, so the reading of it lives inside the match below.
+		var at := Vector2i(into.get_16(), into.get_16())
+		var extra := into.get_u8()
 		var bits := into.get_u8()
 		match kind:
-			TunnelView.Kind.CELL:
-				_tunnels.adopt_cell(plane, cell, bits)
+			TunnelView.Kind.SEGMENT:
+				_tunnels.adopt_segment(plane, TunnelNetwork.fixed_origin(at), extra, bits)
 			TunnelView.Kind.SHAFT:
-				_tunnels.adopt_shaft(plane, cell, bits)
+				_tunnels.adopt_shaft(plane, at, bits)
 			TunnelView.Kind.ROCK:
-				_tunnels.adopt_rock(plane, cell, bits)
+				_tunnels.adopt_rock(plane, at, bits)
 			TunnelView.Kind.FORGET:
-				_tunnels.forget_cell(plane, cell)
+				_tunnels.forget_segment(plane, TunnelNetwork.fixed_origin(at), extra)
 			TunnelView.Kind.FORGET_SHAFT:
-				_tunnels.forget_shaft(plane, cell)
+				_tunnels.forget_shaft(plane, at)
 			TunnelView.Kind.SHORED:
 				# THE BOOK FIRST, THEN THE PROP, and the prop is placed here rather than left to
 				# the ability -- the same shape [BarricadeRock.reproduce] has, and for the same
@@ -1216,10 +1221,10 @@ func _apply_earth(bytes: PackedByteArray) -> void:
 				# because timbers free themselves off `shoring_broke` and `forget_shoring` emits
 				# it -- so there is one place that decides when they come down and two that decide
 				# when they go up, which is the right way round.
-				if _tunnels.adopt_shoring(plane, cell):
-					Shoring.place(_tunnels, plane, cell)
+				if _tunnels.adopt_shoring(plane, at):
+					Shoring.place(_tunnels, plane, at)
 			TunnelView.Kind.UNSHORED:
-				_tunnels.forget_shoring(plane, cell)
+				_tunnels.forget_shoring(plane, at)
 		_earth_taken += 1
 
 

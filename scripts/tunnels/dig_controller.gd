@@ -34,7 +34,10 @@ extends MouseControl
 @export var arrival_lift: float = 0.05
 
 var _plane: int = 0
-var _target: Vector2i = Vector2i.MAX
+## The stroke being aimed at, as a segment id, or -1 for none. An id rather than a cell since the
+## unit of digging stopped being square -- and an id rather than an origin-and-angle pair because
+## it has to be comparable in one `!=` to notice the aim moving.
+var _target: int = -1
 var _progress: float = 0.0
 ## Built on the first frame anybody is looking at this mouse, and never on the other nine. Ten
 ## shader-material cursors for one pair of eyes is nine wasted meshes in every match.
@@ -127,7 +130,7 @@ func _physics_process(delta: float) -> void:
 ## off a tile abandons it -- progress is a property of the tile you are pointing at, not of how
 ## long the button has been down.
 func _update_dig(frame: InputFrame, delta: float) -> void:
-	var wanted := _aimed_cell()
+	var wanted := _aimed_id()
 	if wanted != _target:
 		_target = wanted
 		_progress = 0.0
@@ -140,28 +143,36 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 	# the cursor simply vanishes over it -- which is what "out of reach" and "not adjacent" and
 	# "already dug" all look like, and the player is left to guess which of the four they have hit.
 	# Pressing on it says so out loud, once per press, through the network's own refusal.
-	if _target == Vector2i.MAX:
+	if _target < 0:
 		var rock := _blocked_cell()
 		if rock != Vector2i.MAX:
 			if frame.is_pressed(InputFrame.Action.DIG):
-				_network.dig(_plane, rock, _player.team)
+				# Said out loud through the network's own refusal, which is what tells the player
+				# the controls are working and the ground is not.
+				_network.dig_refused.emit("solid rock -- go round it, or go under it")
 				_learn_vein(rock)
 			_show_blocked(rock)
 			_progress = 0.0
 			return
 
-	var digging := _target != Vector2i.MAX and held
+	var digging := _target >= 0 and held
 	if digging:
 		_progress += delta * _dig_rate() / maxf(dig_seconds, 0.01)
 		if _progress >= 1.0:
 			if acts():
-				if _network.dig(_plane, _target, _player.team):
+				var cut := _target
+				if _network.dig_segment(
+					_plane,
+					TunnelNetwork.segment_origin(cut),
+					TunnelNetwork.segment_angle(cut),
+					_player.team
+				):
 					_cut += 1
-				_learn_exposed(_target)
+				_learn_exposed(cut)
 				_progress = 0.0
-				# Re-aim immediately: the cell just opened, so it is no longer a valid target and
+				# Re-aim immediately: the stroke just landed, so it is no longer a valid target and
 				# holding the button should move on to the next one rather than stall.
-				_target = _aimed_cell()
+				_target = _aimed_id()
 			else:
 				# A PUPPET HOLDS THE BAR FULL RATHER THAN RESTARTING IT. The cell is the server's
 				# to cut and arrives on the next earth tick, at which point `_aimed_cell` stops
@@ -172,7 +183,7 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 	elif not held:
 		_progress = 0.0
 
-	_show(_target, _progress, _target != Vector2i.MAX and held)
+	_show(_target, _progress, _target >= 0 and held)
 
 
 ## Running into a seam teaches your crew where it goes (GDD section 3).
@@ -194,9 +205,10 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 ##
 ## Both paths reveal now. Running into it head-on still works and is what a player does when they
 ## want to know how far it goes; exposing the face is what actually happens.
-func _learn_exposed(cell: Vector2i) -> void:
-	for side: Vector2i in TunnelNetwork.SIDES:
-		_learn_vein(cell + side)
+func _learn_exposed(id: int) -> void:
+	for cell: Vector2i in _network.segment_cells(id):
+		for side: Vector2i in TunnelNetwork.SIDES:
+			_learn_vein(cell + side)
 
 
 ## ON THE PRESS, not on the hover. Pointing at rock already greys the cursor, and that is the right
@@ -218,11 +230,11 @@ func _learn_vein(cell: Vector2i) -> void:
 ## puppet -- its rules resolve on the host -- but the reach and adjacency rules are exactly what
 ## the cursor exists to teach, and they are the same rules on both machines. What a client must
 ## not do is *cut*, and it cannot: the network refuses it.
-func _show(cell: Vector2i, progress: float, digging: bool) -> void:
+func _show(id: int, progress: float, digging: bool) -> void:
 	var cursor := _cursor_for()
 	if cursor == null:
 		return
-	cursor.show_at(_network, _plane, cell, progress, digging)
+	cursor.show_stroke(_network, _plane, id, progress, digging)
 
 
 func _show_blocked(cell: Vector2i) -> void:
@@ -237,7 +249,7 @@ func _cursor_for() -> DigCursor:
 		if _cursor != null:
 			# Hidden through its own door rather than by setting `visible`, so there is one place
 			# that decides what an absent target looks like.
-			_cursor.show_at(_network, _plane, Vector2i.MAX, 0.0, false)
+			_cursor.show_stroke(_network, _plane, -1, 0.0, false)
 		return null
 	if _cursor == null and _network != null:
 		# Parented to the network rather than to this node, so it sits in tunnel space -- a control
@@ -263,51 +275,101 @@ func _dig_rate() -> float:
 	return maxf(0.01, _player.get_dig_speed()) if _player != null else 1.0
 
 
-## The cell under the cursor, if it is one this player could legally open.
+## The stroke the cursor is asking for, as a segment id, or -1.
 ##
-## Must touch the tunnel you already have. Without that you could stand in one corridor and
-## carve an unconnected room across the arena, which is neither snake-like (GDD section 3) nor
-## something the reachability of the network could survive.
-func _aimed_cell() -> Vector2i:
+## `[REVISED]` FREE BRANCHING, WHICH IS THE WHOLE POINT OF THE CHANGE. This used to pick one of the
+## four cells beside a dug one; it now finds the nearest point on tunnel you already have and runs
+## a stroke from there toward the cursor, at whatever angle that is. Two consequences worth being
+## explicit about, because both are design and not accident:
+##
+## THE STROKE STARTS INSIDE THE EXISTING TUNNEL, not against its wall. Starting on the boundary
+## would leave the join to floating-point luck -- a stroke that begins a millimetre out is a
+## corridor with a seam of earth across it that you can see and cannot walk through. Beginning at
+## the centreline means the new capsule always overlaps the old one by half a width, so the union
+## is continuous by construction and connectivity is not something that can be got wrong.
+##
+## YOU CAN BRANCH ANYWHERE ALONG A CORRIDOR, not only at its end. That is a deliberate departure
+## from GDD section 3's "pivots off the end of the previous one" -- side passages are cheap now,
+## and a network is a tree rather than a snake. What it does NOT allow is a room: every stroke is
+## still one length, one width, and rooted in tunnel that already exists.
+func _aimed_id() -> int:
 	if _plane <= 0:
-		return Vector2i.MAX
+		return -1
 
-	var cell := _network.world_to_cell(_player.get_aim_point())
-	if _network.is_dug(_plane, cell) or not _network.in_bounds(cell):
-		return Vector2i.MAX
+	var aim := _player.get_aim_point()
+	var at := Vector2(aim.x, aim.z)
+	var root := _network.nearest_segment_point(_plane, at, dig_reach)
+	if root.is_empty():
+		return -1
 
-	var here := _network.world_to_cell(_player.global_position)
-	if Vector2(cell - here).length() > dig_reach:
-		return Vector2i.MAX
+	var from: Vector2 = root[0]
+	# Reach is measured from the MOUSE to where the cut happens, which is what keeps an Engineer
+	# standing still and vulnerable while it works (GDD section 3). Measuring to the cursor instead
+	# would let you stand back and reach along a corridor you are not in.
+	var here := _player.global_position
+	if Vector2(here.x, here.z).distance_to(from) > dig_reach:
+		return -1
 
-	if _network.is_rock(_plane, cell):
-		return Vector2i.MAX
+	var heading := at - from
+	if heading.length_squared() < 0.0001:
+		return -1
+	var id := TunnelNetwork.segment_id(from, TunnelNetwork.direction_angle(heading))
+	if _network.has_segment(_plane, id):
+		return -1
 
-	for side: Vector2i in TunnelNetwork.SIDES:
-		if _network.is_dug(_plane, cell + side):
-			return cell
-	return Vector2i.MAX
+	# Nothing to gain from a stroke lying wholly inside tunnel that is already open -- pointing
+	# back down your own corridor -- and the cursor should not sit there pulsing, promising it.
+	#
+	# ASKED OF THE EARTH, NOT OF THE END CELL. Judging by whether the stroke FINISHED in a dug cell
+	# refused the one dig that matters most: a stroke that joins two corridors always ends inside
+	# the one it is reaching for, so two tunnels within a stroke of each other could never be
+	# connected at all. See TunnelNetwork.opens_ground.
+	if not _network.opens_ground(_plane, from, TunnelNetwork.segment_angle(id)):
+		return -1
+	# MIRRORS `TunnelNetwork.dig_segment`'S OWN REFUSALS, and must keep doing so. A stroke this
+	# offers but the network would refuse is a cursor that pulses invitingly over ground that will
+	# never open -- and worse here than merely misleading, because falling through to `-1` is what
+	# hands the frame to the rock branch below. Without the stone test the seam got no cursor, no
+	# refusal and no reveal: the player held the button on rock and the game said nothing at all.
+	for cell: Vector2i in _network.segment_cells(id):
+		if not _network.in_bounds(cell) or _network.is_rock(_plane, cell):
+			return -1
+	return id
 
 
-## The cell under the cursor when it is rock you could otherwise have dug.
+## The cell a refused stroke ran into, when what stopped it was stone.
 ##
-## Everything `_aimed_cell` asks except "is it soft", so the cursor only calls a seam out where the
+## Everything `_aimed_id` asks except "is it soft", so the cursor only calls a seam out where the
 ## alternative really was a dig. A grey box lighting up over rock across the arena would say the
 ## seam mattered from there, and it doesn't -- you cannot reach it.
 func _blocked_cell() -> Vector2i:
 	if _plane <= 0:
 		return Vector2i.MAX
 
-	var cell := _network.world_to_cell(_player.get_aim_point())
-	if not _network.is_rock(_plane, cell) or not _network.in_bounds(cell):
+	var aim := _player.get_aim_point()
+	var at := Vector2(aim.x, aim.z)
+	var root := _network.nearest_segment_point(_plane, at, dig_reach)
+	if root.is_empty():
 		return Vector2i.MAX
 
-	var here := _network.world_to_cell(_player.global_position)
-	if Vector2(cell - here).length() > dig_reach:
+	var from: Vector2 = root[0]
+	var here := _player.global_position
+	if Vector2(here.x, here.z).distance_to(from) > dig_reach:
 		return Vector2i.MAX
 
-	for side: Vector2i in TunnelNetwork.SIDES:
-		if _network.is_dug(_plane, cell + side):
+	var heading := at - from
+	if heading.length_squared() < 0.0001:
+		return Vector2i.MAX
+
+	# Walked along the stroke it WOULD have cut, and the first stone on it is the one to name.
+	# A seam a stroke merely passes near is not what stopped you.
+	var id := TunnelNetwork.segment_id(from, TunnelNetwork.direction_angle(heading))
+	var a := TunnelNetwork.segment_origin(id)
+	var b := TunnelNetwork.segment_end(id)
+	for i in range(1, 9):
+		var point := a.lerp(b, float(i) / 8.0)
+		var cell := _network.world_to_cell(Vector3(point.x, 0.0, point.y))
+		if _network.is_rock(_plane, cell):
 			return cell
 	return Vector2i.MAX
 
@@ -335,7 +397,7 @@ func _take_shaft(_cell: Vector2i) -> void:
 	if arrived < 0:
 		return
 	_plane = arrived
-	_target = Vector2i.MAX
+	_target = -1
 	_progress = 0.0
 
 
@@ -351,7 +413,7 @@ func _resync_plane() -> void:
 		return
 	_plane = _network.plane_at_height(_player.global_position.y)
 	_apply_plane()
-	_target = Vector2i.MAX
+	_target = -1
 	_progress = 0.0
 
 
