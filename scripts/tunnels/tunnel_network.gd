@@ -180,6 +180,78 @@ const SIDES: Array[Vector2i] = [
 ## patch -- so the thing that is supposed to announce "a way out is HERE" stops saying where.
 @export var shaft_exclusion_cells: int = 1
 
+## The largest lump of earth, in metres across, that gets swallowed rather than left standing when
+## the strokes around it close in. Zero turns the cull off.
+##
+## OFF-GRID DIGGING LEAVES CRUMBS. Two strokes meeting at a shallow angle, or a bend cut back on
+## itself, pinch off scraps of earth a few texels across -- nubs and wafers in the middle of a
+## chamber, floor-height fins standing in an otherwise open room. They read as debris rather than
+## as terrain, and worse, most of them cannot be got rid of: [method opens_ground] samples a
+## prospective stroke down its spine at plus and minus 0.3m, and a scrap thinner than that sits
+## between the samples, so the dig is refused with nothing said. The ones you CAN clear take a
+## stroke lined up to the degree. Both readings are the same bug to a player -- ground that
+## ignores the dig button.
+##
+## SO THEY ARE NEVER MADE IN THE FIRST PLACE. Anything under this size is contoured as open from
+## the moment it is pinched off, which costs nothing in play -- earth this small is not cover, not
+## a route and not a wall -- and it means the geometry, the collision, the cutaway and the dig
+## rule all agree that there is nothing there.
+##
+## SIZED AT THE SPINE SAMPLES, not by eye. 0.75m is comfortably past the 0.6m the offset samples
+## span, so everything left standing is something a single well-aimed stroke can take out. Raising
+## it eats real pillars; lowering it starts leaving back the scraps this exists to prevent.
+##
+## THIS IS ALSO WHAT THE CULL COSTS. Every chunk samples this far past its own square (see
+## [method _cull_pad]) so that a scrap on a border can be measured whole from either side, so the
+## reach is paid for on every dig whether there is anything out there or not. Use
+## [member island_max_area] to be fussier WITHIN it; raise this only to reach bigger things.
+@export var island_max_span: float = 0.75
+
+## The largest FOOTPRINT, in square metres, that gets swallowed. Zero leaves the call to
+## [member island_max_span] alone.
+##
+## WHAT THE SPAN CANNOT SAY. A box around a lump measures the room it takes up, not how much earth
+## is in it, and at these sizes those come apart badly: a 0.7m sliver two texels thick and a solid
+## 0.7m post measure identically and are not remotely the same thing. The sliver is debris. The post
+## is a pillar you can hide behind, and if the strokes around it happen to close it off, it is the
+## most interesting thing in the room. This is the dial that tells them apart -- roughly 0.1 square
+## metres keeps anything with a bit of body to it and still takes the wafers.
+##
+## STRICTER, NEVER LOOSER, and that is a rule rather than a preference. The span is what makes the
+## verdict a property of the earth instead of a property of whichever chunk is asking: a scrap
+## clipped by a chunk's sampling window necessarily measures wider than the span and is kept, from
+## both sides, always. An area test that could swallow something the span would not have would lose
+## that -- a long thin snake has a small footprint and no bound at all on how far it wanders -- and
+## the failure it buys is half an island, culled by one chunk and left standing by its neighbour.
+## So this narrows what the span has already agreed to and cannot widen it.
+##
+## COUNTED IN SAMPLES, at 12.5cm apiece, so it is quantised in steps of about 0.016 square metres
+## and reads a hair small against the interpolated outline the contour actually draws. Fine for a
+## threshold; not a number to do arithmetic with.
+@export var island_max_area: float = 0.0
+
+## The thinnest earth allowed to stand anywhere, in metres. Zero turns the rule off.
+##
+## WHAT THE OTHER TWO CANNOT REACH, because both of them work on a lump of earth that has been cut
+## off from the rest, and the worst of what off-grid digging leaves is still ATTACHED. A stroke is a
+## capsule and a corridor is a chain of them; where two consecutive capsules meet at an angle, the
+## outside of the joint leaves a cusp of earth poking into the corridor, tapering to nothing. Cut a
+## long run and you get a row of them -- a sawtooth down one wall, every tooth joined to the bulk
+## earth at its base, every tooth invisible to a rule about islands.
+##
+## SO THIS ONE IS ABOUT SHAPE RATHER THAN SIZE. Earth survives here only where a disc of half this
+## width fits inside it: teeth, wafers and the tapering end of anything go, the bulk stays exactly
+## where it was, and no lump has to be cut off from anything for the rule to see it. Being a purely
+## local test it also needs no argument about chunk borders -- every chunk samples the little way
+## past its own square that the disc reaches, and two neighbours reading the same earth cannot
+## disagree about whether a disc fits in it.
+##
+## IT WILL ALSO OPEN A WALL. Two corridors dug closer together than this leave a divider too thin to
+## survive the rule, and the two become one room. That is the rule working rather than overreaching
+## -- a hand's width of earth is not cover and not a route, and leaving it standing is what made the
+## screenshots that started this -- but it is the reason to raise this one carefully.
+@export var earth_min_thickness: float = 0.5
+
 @export_group("Rock")
 ## Per-plane rock obstructions (GDD section 3). Solid seams scattered through the earth that stop
 ## horizontal digging, with A DIFFERENT LAYOUT ON EVERY PLANE -- which is the whole idea. Rock in
@@ -365,6 +437,12 @@ var _shored: Array[Dictionary] = []
 ## were -- so a bug in this work cannot express itself as a scene that no longer matches the
 ## twenty other files that walk it.
 var _chunk_cache: Array[Dictionary] = []
+
+## The disc [method _thin_earth] searches, flattened for one window width, each offset's length in
+## metres, and the width and radius the pair was built for.
+var _thin_offsets: PackedInt32Array = PackedInt32Array()
+var _thin_spans: PackedFloat32Array = PackedFloat32Array()
+var _thin_offsets_for: Vector2i = Vector2i(-1, -1)
 ## plane -> {chunk key: true}: chunks whose cache is stale. Flushed by [method _rebuild_walls].
 var _dirty_chunks: Array[Dictionary] = []
 ## The contoured floor of each plane. This is what the GridMap used to draw, one tile at a time.
@@ -679,9 +757,17 @@ func opens_ground(plane: int, origin: Vector2, angle: int) -> bool:
 ## this decides whether there is anything to be gained by digging, and a seam is the one thing you
 ## can point at all day and never move. A stroke whose only unopened part is stone is refused for
 ## being stone (see [method dig_segment]), and it must not be offered on the way there either.
+##
+## SWALLOWED ISLANDS COUNT AS NOT EARTH FOR THE SAME REASON. A scrap the contour has already opened
+## (see [member island_max_span]) still measures as solid against the strokes, because no stroke
+## went through it -- so asked of the segments alone this says there is ground there to take out,
+## the dig is allowed, and the player spends a stroke on a chamber floor and watches nothing happen.
+## Which is the very complaint the cull exists to answer, moved one step along.
 func _is_earth(plane: int, point: Vector2) -> bool:
 	var cell := world_to_cell(Vector3(point.x, 0.0, point.y))
 	if _rock[plane].has(cell):
+		return false
+	if _in_culled_island(plane, point):
 		return false
 	for y in range(cell.y - 1, cell.y + 2):
 		for x in range(cell.x - 1, cell.x + 2):
@@ -927,7 +1013,13 @@ func _touch(plane: int, id: int) -> void:
 	var b := segment_end(id)
 	# Grown by the half-width plus a texel, so the chunk holding the far side of a rounded end is
 	# included. Missing one leaves a notch of un-rebuilt wall that only appears at some angles.
-	var reach := SEG_HALF_WIDTH + TunnelContour.TEXEL * 2.0
+	#
+	# AND BY THE CULL'S REACH ON TOP OF THAT, because a stroke changes more than it touches now: the
+	# scrap it pinches off can be a whole island away, in a chunk this stroke never enters, and that
+	# chunk has to re-contour to notice its earth has become small enough to swallow.
+	var reach := (
+		SEG_HALF_WIDTH + TunnelContour.TEXEL * 2.0 + float(_cull_pad()) * TunnelContour.TEXEL
+	)
 	var low := _chunk_at(Vector2(minf(a.x, b.x) - reach, minf(a.y, b.y) - reach))
 	var high := _chunk_at(Vector2(maxf(a.x, b.x) + reach, maxf(a.y, b.y) + reach))
 	for cy in range(low.y, high.y + 1):
@@ -2626,6 +2718,12 @@ func _commit(triangles: PackedVector3Array, material: Material) -> ArrayMesh:
 ## against. They differ on a host -- where the network holds both crews' tunnels and the player
 ## may see one crew's -- and are identical on a client, which is only ever sent its own. Building
 ## them together costs one extra array and keeps the fog impossible to forget.
+##
+## `[REVISED]` AND THE SCRAPS ARE SWALLOWED BEFORE ANYTHING IS DRAWN. See [method _cull_islands]:
+## the union of the strokes is not quite the shape the world wants, because it leaves crumbs of
+## earth the size of a few texels that a player can neither use nor get rid of. Filtering the field
+## between composing it and contouring it is the one place that can be done once and be true of the
+## walls, the collision and the cutaway together.
 func _rebuild_chunk(plane: int, key: int) -> void:
 	var cx := key % FIELD_CHUNKS
 	var cy := key / FIELD_CHUNKS
@@ -2633,55 +2731,115 @@ func _rebuild_chunk(plane: int, key: int) -> void:
 	var span := n + 1
 	var base_x := cx * n - FIELD_HALF_TEXELS
 	var base_y := cy * n - FIELD_HALF_TEXELS
+
+	# SAMPLED WIDER THAN THE CHUNK IS CONTOURED, by exactly the island cull's reach. See
+	# [method _cull_islands]: deciding whether a scrap of earth is small enough to swallow means
+	# measuring the whole scrap, and a scrap sitting on a chunk border is only whole if the samples
+	# reach past that border. Contoured and blitted from the middle of the window as before.
+	var pad := _cull_pad()
+	var wide := span + pad * 2
+	var wide_x := base_x - pad
+	var wide_y := base_y - pad
 	var origin := Vector2(
-		float(base_x) / float(TunnelContour.TEXELS_PER_METRE),
-		float(base_y) / float(TunnelContour.TEXELS_PER_METRE)
+		float(wide_x) / float(TunnelContour.TEXELS_PER_METRE),
+		float(wide_y) / float(TunnelContour.TEXELS_PER_METRE)
 	)
+	var extent := float(wide - 1) * TunnelContour.TEXEL
 
 	var shape := PackedFloat32Array()
-	shape.resize(span * span)
+	shape.resize(wide * wide)
 	var seen := PackedFloat32Array()
-	seen.resize(span * span)
+	seen.resize(wide * wide)
 
 	var found := {}
-	# The chunk's cells plus a ring, because a stroke whose centre is in the next chunk can still
+	# The window's cells plus a ring, because a stroke whose centre is in the next chunk can still
 	# reach across the border. `_segment_cells` is conservative in the same direction, so anything
 	# whose capsule touches this square is registered in one of these cells.
 	var low := Vector2i(floori(origin.x) - 1, floori(origin.y) - 1)
-	var high := Vector2i(
-		ceili(origin.x + TunnelContour.CHUNK_METRES) + 1,
-		ceili(origin.y + TunnelContour.CHUNK_METRES) + 1
-	)
+	var high := Vector2i(ceili(origin.x + extent) + 1, ceili(origin.y + extent) + 1)
 	for y in range(low.y, high.y + 1):
 		for x in range(low.x, high.x + 1):
 			for id: int in segments_in_cell(plane, Vector2i(x, y)):
 				found[id] = true
 
+	## Whether any stroke in this window is one the viewing crew must not be shown. Almost always
+	## false -- a client is only ever sent its own tunnels -- and when it is false `seen` came out
+	## of the loop below identical to `shape`, so the cull can be run once and shared.
+	var hidden := false
+
 	for id: int in found:
 		var a := segment_origin(id)
 		var b := segment_end(id)
 		var visible := _segment_wants(plane, id)
-		# Only the texels this stroke could possibly change. Sampling the whole chunk against
-		# every stroke in it is eight times the work for the same answer.
-		var reach := SEG_HALF_WIDTH + TunnelContour.SDF_RANGE
-		var i0 := maxi(0, floori((minf(a.x, b.x) - reach) * TunnelContour.TEXELS_PER_METRE) - base_x)
-		var i1 := mini(n, ceili((maxf(a.x, b.x) + reach) * TunnelContour.TEXELS_PER_METRE) - base_x)
-		var j0 := maxi(0, floori((minf(a.y, b.y) - reach) * TunnelContour.TEXELS_PER_METRE) - base_y)
-		var j1 := mini(n, ceili((maxf(a.y, b.y) + reach) * TunnelContour.TEXELS_PER_METRE) - base_y)
-		for j in range(j0, j1 + 1):
-			var row := j * span
-			for i in range(i0, i1 + 1):
-				var at := origin + Vector2(float(i), float(j)) * TunnelContour.TEXEL
-				var value := TunnelContour.encode(
-					TunnelContour.segment_distance(at, a, b, SEG_HALF_WIDTH)
-				)
-				if value > shape[row + i]:
-					shape[row + i] = value
-				if visible and value > seen[row + i]:
-					seen[row + i] = value
+		if not visible:
+			hidden = true
+		# TWICE, OVER TWO DIFFERENT SQUARES, and the difference is what the values are FOR.
+		#
+		# Pass 0 is the field proper: the full metre of graded distance the contour interpolates its
+		# crossings from and the cutaway shades with, laid only over the samples that survive
+		# `_inner` -- there is no point grading a texel that is about to be thrown away.
+		#
+		# Pass 1 covers the whole padded window but reaches barely past the stroke itself, because
+		# all the rules want out there is thick earth, thin earth or tunnel, and all three of those
+		# are settled within a disc's radius of the capsule. Graded to the full range instead, the
+		# ring would cost as much as the chunk does: a stroke paints a 3m square at 12.5cm, so the
+		# strokes the wider gather picks up -- ones that never come near this chunk at all -- would
+		# each be five hundred samples of distance nobody reads. Same formula either way, so the two
+		# passes cannot disagree about a texel they both touch.
+		for pass_index in range(2):
+			var reach := SEG_HALF_WIDTH + (
+				TunnelContour.SDF_RANGE if pass_index == 0 else _thin_reach()
+			)
+			var low_i := pad if pass_index == 0 else 0
+			var high_i := wide - 1 - pad if pass_index == 0 else wide - 1
+			var i0 := maxi(
+				low_i, floori((minf(a.x, b.x) - reach) * TunnelContour.TEXELS_PER_METRE) - wide_x
+			)
+			var i1 := mini(
+				high_i, ceili((maxf(a.x, b.x) + reach) * TunnelContour.TEXELS_PER_METRE) - wide_x
+			)
+			var j0 := maxi(
+				low_i, floori((minf(a.y, b.y) - reach) * TunnelContour.TEXELS_PER_METRE) - wide_y
+			)
+			var j1 := mini(
+				high_i, ceili((maxf(a.y, b.y) + reach) * TunnelContour.TEXELS_PER_METRE) - wide_y
+			)
+			for j in range(j0, j1 + 1):
+				var row := j * wide
+				for i in range(i0, i1 + 1):
+					var at := origin + Vector2(float(i), float(j)) * TunnelContour.TEXEL
+					var value := TunnelContour.encode(
+						TunnelContour.segment_distance(at, a, b, SEG_HALF_WIDTH)
+					)
+					if value > shape[row + i]:
+						shape[row + i] = value
+					if visible and value > seen[row + i]:
+						seen[row + i] = value
+
+	# THINNED BEFORE THE ISLANDS ARE WALKED, and the order is not arbitrary. Shaving the teeth off a
+	# lump changes how big it measures, and shaving a neck through can part one lump into two -- so
+	# the island rule has to be looking at the earth that will actually be drawn, not at the earth
+	# before this ran.
+	_thin_earth(plane, shape, wide, origin)
+	var islands := _cull_islands(plane, shape, wide, origin, pad, n)
+	# The cutaway gets its own pass rather than the shape's answer: the crew's field is built out of
+	# fewer strokes, so its earth is a different shape, thin in different places and pinched off in
+	# different places. Sharing the verdict would cut a hole in the lid over ground that, as far as
+	# this crew has been told, nobody has dug.
+	if hidden:
+		_thin_earth(plane, seen, wide, origin)
+		_cull_islands(plane, seen, wide, origin, pad, n)
+	else:
+		seen = shape
 
 	var contour := TunnelContour.new()
-	contour.build(shape, n, origin, _wall_top(plane), _barrier_top(plane))
+	var chunk_origin := Vector2(
+		float(base_x) / float(TunnelContour.TEXELS_PER_METRE),
+		float(base_y) / float(TunnelContour.TEXELS_PER_METRE)
+	)
+	contour.build(
+		_inner(shape, wide, pad, span), n, chunk_origin, _wall_top(plane), _barrier_top(plane)
+	)
 
 	var walls := PackedVector3Array()
 	var stone := PackedVector3Array()
@@ -2692,8 +2850,411 @@ func _rebuild_chunk(plane: int, key: int) -> void:
 		"walls": walls,
 		"stone": stone,
 		"collision": contour.collision,
+		"islands": islands,
 	}
-	_blit(plane, seen, span, base_x, base_y, n)
+	_blit(plane, _inner(seen, wide, pad, span), span, base_x, base_y, n)
+
+
+## How far past its own square a chunk has to sample, in texels, for the two field rules to reach
+## the same verdicts from either side of a border.
+##
+## A TEXEL WIDER THAN THE BIGGEST ISLAND, and that one spare texel is the whole argument. An island
+## is culled only if it fits inside `island_max_span`; a scrap clipped by the window's edge has by
+## definition run at least that far out from the chunk, so it measures wider than the limit and is
+## kept. That makes "does it fit" a property of the earth rather than of which chunk is asking,
+## which is what stops two neighbouring chunks disagreeing and leaving half an island standing.
+##
+## PLUS THE THINNING'S OWN REACH, ON TOP, because the two rules run in that order and the island
+## walk must never see earth the thinning has not finished with. [method _thin_earth] can only work
+## where it can see a disc's width all round, so it leaves a rim of the window untouched -- and
+## stacking the reaches is what puts every island the cull could swallow inside the part that HAS
+## been thinned. Overlap them instead and a scrap gets measured with its teeth still on in one
+## chunk and shaved in the next.
+func _cull_pad() -> int:
+	var thin := _thin_search()
+	if island_max_span <= 0.0:
+		return thin
+	# The spare texel and the thinning's reach are the same spare, not two: what the island walk
+	# needs is that a scrap reaching the window's edge measures wider than the limit, and what the
+	# thinning needs is its search radius of clearance inside that edge. Anything at least that far
+	# from the rim is already more than a texel out.
+	return _cull_texels() + maxi(1, thin)
+
+
+## The cull limit in texels: how many samples across an island may measure and still be swallowed.
+func _cull_texels() -> int:
+	return maxi(1, ceili(island_max_span * float(TunnelContour.TEXELS_PER_METRE)))
+
+
+## Half [member earth_min_thickness] in texels -- the radius of the disc that has to fit inside a
+## piece of earth for it to be left standing.
+func _thickness_texels() -> int:
+	if earth_min_thickness <= 0.0:
+		return 0
+	return maxi(
+		1, ceili(earth_min_thickness * 0.5 * float(TunnelContour.TEXELS_PER_METRE))
+	)
+
+
+## How far [method _thin_earth] looks for solid earth, in texels.
+##
+## A TEXEL PAST THE DISC ITSELF, because the search answers two questions with one loop. Inside the
+## disc's radius it decides whether the earth stands at all; the ring beyond only ever produces a
+## negative answer, but it produces a GRADED one, and that grading is what puts the new edge
+## somewhere sensible instead of hard against the last sample that survived.
+func _thin_search() -> int:
+	var reach := _thickness_texels()
+	return 0 if reach <= 0 else reach + 1
+
+
+## How far past a stroke the coarse sampling pass has to reach for [method _thin_earth] to be able
+## to tell thick earth from thin: far enough that anything it leaves unpainted is genuinely further
+## off than the search could look rather than merely unvisited.
+func _thin_reach() -> float:
+	return float(_thin_search()) * TunnelContour.TEXEL + TunnelContour.TEXEL
+
+
+## The middle of a sampled window, at the size the contour and the cutaway expect.
+func _inner(values: PackedFloat32Array, wide: int, pad: int, span: int) -> PackedFloat32Array:
+	if pad == 0:
+		return values
+	var out := PackedFloat32Array()
+	out.resize(span * span)
+	for j in range(span):
+		var source := (j + pad) * wide + pad
+		var target := j * span
+		for i in range(span):
+			out[target + i] = values[source + i]
+	return out
+
+
+## Open out every piece of earth in the window too thin to be left standing, wherever it is and
+## whatever it is attached to.
+##
+## THE RULE IS "DOES A DISC FIT", which is the whole of it. Earth is kept where some disc of radius
+## `r` lies entirely in earth and covers the sample; everything else goes. That is a morphological
+## opening, and it is the right shape of question for this because it says nothing about how big a
+## piece is or whether it is joined to anything -- a cusp between two strokes and a wall between two
+## corridors fail it for the same reason and by the same amount.
+##
+## ASKED BACKWARDS, WHICH IS WHY IT IS AFFORDABLE. Written out, an opening is an erosion followed by
+## a dilation: two filtered passes over every sample in the window, which at 12.5cm in this language
+## is several milliseconds a chunk and quite out of the question. But the erosion's result is
+## already in the field -- a sample is SOLID exactly when its own depth reads `r` or more, one
+## comparison -- so all that is left is the dilation, and only samples SHALLOWER than `r` can be in
+## any doubt. Those are a two-texel rim along the walls rather than a window, and each is settled by
+## looking outward for the nearest solid sample, which for earth with anything behind it is the very
+## first look.
+##
+## THE WHOLE RIM IS REWRITTEN, NOT JUST THE PART THAT GOES, and the first attempt at this got that
+## wrong in a way worth recording. Removing a sample and leaving its neighbours alone leaves two
+## different fields meeting along the new edge: on one side the earth's own distance, up to `r`; on
+## the other, something just past the surface. The contour interpolates its crossing between the
+## two, and where two numbers on such different scales meet, the crossing snaps about from texel to
+## texel -- so a rule that should have shaved a smooth line off a wall instead left it looking
+## chewed. Both sides now carry the same quantity, the distance to solid earth measured from the
+## sample, and the edge comes out where the arithmetic says rather than where the grid does.
+##
+## WHICH COSTS NOTHING WHERE THE RULE DOES NOT BITE. `r` minus the distance to solid earth IS the
+## depth again, exactly, anywhere the field has a sensible gradient: step outward from a sample at
+## depth `d` and earth becomes solid after exactly `r - d`. So a straight wall, a curve, the inside
+## of a bend -- all rewritten to the values they already had, and only where no solid earth is
+## within reach does the answer change.
+##
+## THE SOLID SET NEVER MOVES WHILE THE SWEEP RUNS, which is what lets it write as it goes: only
+## shallow samples are written, and the write can never make one solid, so the set being searched
+## cannot gain or lose a member partway through. A pass in scan order gives the same field as a pass
+## in any other.
+##
+## ROCK IS NEVER THINNED, for the same reason it is never swallowed: to these samples the last
+## wafer of a seam is indistinguishable from a wafer of earth, and one of the two is meant to be
+## permanent.
+func _thin_earth(plane: int, values: PackedFloat32Array, wide: int, origin: Vector2) -> void:
+	var search := _thin_search()
+	if search <= 0:
+		return
+	var radius := earth_min_thickness * 0.5
+	# The value a sample reads at exactly the disc's radius. Deeper earth encodes LOWER, so "solid
+	# enough to stand on its own" is a single `<=`.
+	var solid := TunnelContour.encode(radius)
+	var disc := _thin_disc(wide, search)
+	var spans := _thin_spans
+
+	# Stopping the search's own reach short of the window's edge, because a sample nearer the edge
+	# than that cannot be asked the question -- the earth that would answer it was never sampled.
+	# The rim is left alone, and `_cull_pad` is what keeps it out of everything that reads this
+	# afterwards.
+	for j in range(search, wide - search):
+		var row := j * wide
+		for i in range(search, wide - search):
+			var at := row + i
+			var value := values[at]
+			if value > TunnelContour.SURFACE or value <= solid:
+				continue
+			var world := origin + Vector2(float(i), float(j)) * TunnelContour.TEXEL
+			if _rock[plane].has(world_to_cell(Vector3(world.x, 0.0, world.y))):
+				continue
+
+			var depth := TunnelContour.decode(value)
+			# Far enough that nothing found sets the sample well inside the tunnel, which is the
+			# right answer for the middle of a wafer with no solid earth anywhere near it.
+			var away := float(search) * TunnelContour.TEXEL + TunnelContour.TEXEL
+			for k in range(disc.size()):
+				var q := at + disc[k]
+				if values[q] > solid:
+					continue
+				# Between here and there the earth goes from `depth` to solid; the crossing is where
+				# it passes `radius`. Interpolated rather than taken as the whole step, because the
+				# step is 12.5cm and rounding every wall out to the nearest one of those is the
+				# staircase this whole field exists to avoid.
+				var there := TunnelContour.decode(values[q])
+				away = spans[k] * clampf(
+					(radius - depth) / maxf(there - depth, 0.000001), 0.0, 1.0
+				)
+				break
+			values[at] = TunnelContour.encode(radius - away)
+
+
+## Offsets into a window of the given width covering a disc of `reach` texels, nearest first and
+## without the centre, with [member _thin_spans] filled with each one's length in metres.
+##
+## NEAREST FIRST BECAUSE THE SEARCH STOPS AT THE FIRST HIT, and for the overwhelming majority of
+## samples -- a rim texel with the bulk of the map right behind it -- the first hit is the step
+## inward. Ordered any other way the same loop reads the whole disc to reach the same answer, and
+## reaches a WORSE one: the first solid sample found has to be the nearest, or the distance it
+## reports is not a distance.
+##
+## Cached, because it depends only on the window and the setting and is otherwise rebuilt a few
+## thousand times a dig.
+func _thin_disc(wide: int, reach: int) -> PackedInt32Array:
+	var key := Vector2i(wide, reach)
+	if _thin_offsets_for == key:
+		return _thin_offsets
+	var found: Array[Vector3i] = []
+	for dj in range(-reach, reach + 1):
+		for di in range(-reach, reach + 1):
+			var span := di * di + dj * dj
+			if span == 0 or span > reach * reach:
+				continue
+			found.append(Vector3i(span, di, dj))
+	found.sort_custom(func(a: Vector3i, b: Vector3i) -> bool: return a.x < b.x)
+	_thin_offsets = PackedInt32Array()
+	_thin_spans = PackedFloat32Array()
+	for entry: Vector3i in found:
+		_thin_offsets.append(entry.z * wide + entry.y)
+		_thin_spans.append(sqrt(float(entry.x)) * TunnelContour.TEXEL)
+	_thin_offsets_for = key
+	return _thin_offsets
+
+
+## Swallow every lump of earth in the window too small to be worth leaving standing, and report the
+## ones that overlap the chunk itself so the dig rule can be told they are gone.
+##
+## TWO TESTS, AND A LUMP HAS TO FAIL BOTH TO GO. [member island_max_span] is how far across it may
+## measure and is the one the sampling window is built around; [member island_max_area] is how much
+## earth it may actually contain, and only ever narrows what the span already allowed. See both for
+## why that order is the load-bearing one.
+##
+## DONE ON THE FIELD, NOT ON THE SEGMENTS, and that is the only place it can honestly go. An island
+## is not a thing anybody dug -- it is what is LEFT between things people dug, and it appears and
+## disappears as the strokes around it change. Recording it as state, or as some extra stroke laid
+## down to erase it, would give the world a second description of itself that a cave-in could put
+## out of step with the first. Recomputed here from the same samples the walls are contoured from,
+## it cannot disagree with them: undig the strokes and the island simply comes back.
+##
+## FOUR-CONNECTED EARTH. A scrap joined to the mainland only at a corner is joined by nothing a
+## mouse could stand on, so it counts as its own island and goes -- which is the common case at a
+## shallow join, and the case that looks worst.
+##
+## ROCK IS NEVER SWALLOWED. The field knows nothing about seams -- rock is enforced by refusing to
+## dig, so stone reads to these samples as earth nobody has got to yet. A nub standing in a rock
+## cell is the last of a seam and is meant to be permanent, so any island whose box touches one is
+## left exactly where it is.
+func _cull_islands(
+	plane: int, values: PackedFloat32Array, wide: int, origin: Vector2, pad: int, n: int
+) -> PackedFloat32Array:
+	var culled := PackedFloat32Array()
+	if island_max_span <= 0.0:
+		return culled
+	var limit := _cull_texels()
+
+	# Per texel: 0 not looked at, 1 walked as part of the lump in hand, 2 known to belong to
+	# something too big to swallow.
+	var state := PackedByteArray()
+	state.resize(wide * wide)
+	# The lump being walked, used as its own queue: a breadth-first fill reading from `head` and
+	# writing to the end needs no second array and no per-texel allocation.
+	var body := PackedInt32Array()
+	# The chunk's own square, for deciding which islands are worth reporting back.
+	var chunk := Rect2(
+		origin + Vector2(float(pad), float(pad)) * TunnelContour.TEXEL,
+		Vector2(float(n), float(n)) * TunnelContour.TEXEL
+	)
+
+	# STARTED FROM THE TUNNEL AND STEPPED OUTWARD, NEVER FROM INSIDE THE EARTH. Anything small
+	# enough to swallow is by definition within `limit` texels of open tunnel, so every island has a
+	# face on one -- and the alternative is starting somewhere in the middle of the map's undug bulk
+	# and walking it to prove what its size already said.
+	#
+	# ASKED OF THE TUNNEL TEXELS RATHER THAN OF THE EARTH ONES, which is the same set of starts for
+	# a fifth of the reads. Most of a window near the digging frontier is solid ground, and testing
+	# each of those four ways round to hear "no" is two thousand texels' worth of neighbours nobody
+	# needed; open tunnel is the scarce thing, so let the scarce thing do the asking.
+	var seeds := PackedInt32Array()
+	for j in range(wide):
+		var row := j * wide
+		for i in range(wide):
+			var here := row + i
+			if values[here] <= TunnelContour.SURFACE:
+				continue
+			if i > 0 and values[here - 1] <= TunnelContour.SURFACE:
+				seeds.append(here - 1)
+			if i < wide - 1 and values[here + 1] <= TunnelContour.SURFACE:
+				seeds.append(here + 1)
+			if j > 0 and values[here - wide] <= TunnelContour.SURFACE:
+				seeds.append(here - wide)
+			if j < wide - 1 and values[here + wide] <= TunnelContour.SURFACE:
+				seeds.append(here + wide)
+
+	# The same lump is reached from every texel of tunnel along its face, so most of these have been
+	# walked by the time they come up. `state` is what says so.
+	for start: int in seeds:
+		if state[start] != 0:
+			continue
+
+		body.clear()
+		body.append(start)
+		state[start] = 1
+		var head := 0
+		var min_x := wide
+		var max_x := -1
+		var min_y := wide
+		var max_y := -1
+		# GIVEN UP ON THE MOMENT IT MEASURES TOO BIG, which is what keeps this affordable: the walk
+		# is over a few dozen texels of scrap rather than over half a chunk of solid ground, and the
+		# bulk of the earth is dismissed in the first handful of steps every time. The texels walked
+		# so far are then marked as belonging to something big -- so the next start that runs into
+		# them gives up immediately instead of re-walking the same ground from another corner, and,
+		# more to the point, a HALF of a big lump can never be mistaken for a small whole one.
+		var rejected := false
+		while head < body.size() and not rejected:
+			var at := body[head]
+			head += 1
+			@warning_ignore("integer_division")
+			var y := at / wide
+			var x := at - y * wide
+			min_x = mini(min_x, x)
+			max_x = maxi(max_x, x)
+			min_y = mini(min_y, y)
+			max_y = maxi(max_y, y)
+			if max_x - min_x + 1 > limit or max_y - min_y + 1 > limit:
+				rejected = true
+				break
+			# Four neighbours, written out four times. A loop over an array of them is the same
+			# thing to read and allocates that array once per texel, in the one routine here that
+			# runs a few thousand times per dig.
+			if x > 0 and values[at - 1] <= TunnelContour.SURFACE:
+				if state[at - 1] == 2:
+					rejected = true
+				elif state[at - 1] == 0:
+					state[at - 1] = 1
+					body.append(at - 1)
+			if x < wide - 1 and values[at + 1] <= TunnelContour.SURFACE:
+				if state[at + 1] == 2:
+					rejected = true
+				elif state[at + 1] == 0:
+					state[at + 1] = 1
+					body.append(at + 1)
+			if y > 0 and values[at - wide] <= TunnelContour.SURFACE:
+				if state[at - wide] == 2:
+					rejected = true
+				elif state[at - wide] == 0:
+					state[at - wide] = 1
+					body.append(at - wide)
+			if y < wide - 1 and values[at + wide] <= TunnelContour.SURFACE:
+				if state[at + wide] == 2:
+					rejected = true
+				elif state[at + wide] == 0:
+					state[at + wide] = 1
+					body.append(at + wide)
+
+		if rejected:
+			for at: int in body:
+				state[at] = 2
+			continue
+
+		# Asked second because it is a read of a number the walk already has, where the span test
+		# above is what let the walk stop early. Nothing is marked either way: a lump kept for its
+		# footprint has been walked from end to end, so every texel of it is already spoken for and
+		# no later start can reach it.
+		if island_max_area > 0.0:
+			var area := float(body.size()) * TunnelContour.TEXEL * TunnelContour.TEXEL
+			if area > island_max_area:
+				continue
+
+		# In metres, grown by half a texel each way: the samples are the CORNERS of the marching
+		# squares cells, so the earth reaches half a cell past the outermost one that measured solid.
+		var half := TunnelContour.TEXEL * 0.5
+		var box := Rect2(
+			origin + Vector2(float(min_x), float(min_y)) * TunnelContour.TEXEL
+				- Vector2(half, half),
+			Vector2(float(max_x - min_x), float(max_y - min_y)) * TunnelContour.TEXEL
+				+ Vector2(half, half) * 2.0
+		)
+		if _box_hits_rock(plane, box):
+			continue
+
+		for at: int in body:
+			# Mirrored rather than flattened: the texel keeps the depth it had, on the other side of
+			# the surface. Flat fill would put a step in the field where the island was, which the
+			# cutaway shader reads as an edge; this leaves it smooth. The extra texel is what makes
+			# every sample in the island land strictly INSIDE, so no crossing is left behind for the
+			# contour to raise a hairline wall on.
+			values[at] = TunnelContour.encode(
+				-TunnelContour.decode(values[at]) - TunnelContour.TEXEL
+			)
+
+		# Only the ones the chunk itself covers. An island straddling a border is measured the same
+		# from both sides and recorded by both, which is what makes one lookup enough in `_is_earth`.
+		if not chunk.intersects(box):
+			continue
+		culled.append(box.position.x)
+		culled.append(box.position.y)
+		culled.append(box.end.x)
+		culled.append(box.end.y)
+
+	return culled
+
+
+## Does any cell this box touches hold rock?
+func _box_hits_rock(plane: int, box: Rect2) -> bool:
+	var low := world_to_cell(Vector3(box.position.x, 0.0, box.position.y))
+	var high := world_to_cell(Vector3(box.end.x, 0.0, box.end.y))
+	for y in range(low.y, high.y + 1):
+		for x in range(low.x, high.x + 1):
+			if _rock[plane].has(Vector2i(x, y)):
+				return true
+	return false
+
+
+## Is this spot inside a lump of earth the contour has already swallowed?
+##
+## ASKED OF ONE CHUNK, because [method _cull_islands] records an island in every chunk it overlaps.
+func _in_culled_island(plane: int, point: Vector2) -> bool:
+	var chunk := _chunk_at(point)
+	if chunk.x < 0 or chunk.y < 0 or chunk.x >= FIELD_CHUNKS or chunk.y >= FIELD_CHUNKS:
+		return false
+	var cached: Variant = _chunk_cache[plane].get(chunk.y * FIELD_CHUNKS + chunk.x)
+	if cached == null:
+		return false
+	var boxes: PackedFloat32Array = (cached as Dictionary)["islands"]
+	for b in range(0, boxes.size(), 4):
+		if (
+			point.x >= boxes[b] and point.x <= boxes[b + 2]
+			and point.y >= boxes[b + 1] and point.y <= boxes[b + 3]
+		):
+			return true
+	return false
 
 
 ## Sort wall triangles into earth and stone by what is standing behind them.
