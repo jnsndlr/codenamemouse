@@ -52,8 +52,6 @@ signal refused(reason: String)
 ## (see [method Banner.throw]), so a longer flight is a higher, slower arc over the same ground.
 @export var flight_seconds: float = 0.7
 
-var _cooldown_left: float = 0.0
-
 
 func _ready() -> void:
 	super()
@@ -63,14 +61,6 @@ func _ready() -> void:
 		set_physics_process(false)
 		return
 	refused.connect(explain)
-
-
-func _process(delta: float) -> void:
-	_cooldown_left = maxf(0.0, _cooldown_left - delta)
-
-
-func cooldown_left() -> float:
-	return _cooldown_left
 
 
 func is_ready() -> bool:

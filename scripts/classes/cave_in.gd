@@ -120,7 +120,6 @@ signal refused(reason: String)
 ## Brute upstairs feels: you are being rattled by something happening nearby, not doing it.
 @export_range(0.0, 1.0, 0.05) var tremor_shake: float = 0.35
 
-var _cooldown_left: float = 0.0
 ## Built on the first frame anybody is looking at this mouse, and never on the other nine.
 var _cursor: CollapseCursor
 
@@ -139,7 +138,9 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
-	_cooldown_left = maxf(0.0, _cooldown_left - delta)
+	# `super` FIRST: the cooldown lives in [MouseControl] now, and GDScript overrides rather than
+	# chains -- an override that forgets this line is an ability that never comes back.
+	super(delta)
 	_show_reach()
 
 
@@ -175,11 +176,6 @@ func _show_reach() -> void:
 		_cursor.show_target(_network, 0, Vector2i.MAX, false)
 		return
 	_cursor.show_target(_network, plane, target(), _cooldown_left <= 0.0)
-
-
-## 0 when ready, counting down otherwise. For a HUD that wants to draw the wait.
-func cooldown_left() -> float:
-	return _cooldown_left
 
 
 func is_ready() -> bool:

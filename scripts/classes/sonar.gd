@@ -101,7 +101,6 @@ var _pips: Dictionary = {}
 ## echo did -- see `_show_wave`.
 @export var wave_color: Color = Color(0.42, 0.92, 0.94, 0.8)
 
-var _cooldown_left: float = 0.0
 var _echo: MeshInstance3D
 var _echo_material: StandardMaterial3D
 var _echo_left: float = 0.0
@@ -122,7 +121,9 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
-	_cooldown_left = maxf(0.0, _cooldown_left - delta)
+	# `super` FIRST: the cooldown lives in [MouseControl] now, and GDScript overrides rather than
+	# chains -- an override that forgets this line is an ability that never comes back.
+	super(delta)
 	_echo_left = maxf(0.0, _echo_left - delta)
 	# ON EVERY MACHINE, like the cooldown and unlike the reveal. The listen's *effect* -- putting a
 	# contact in the crew's book -- resolves where the simulation is, in `spotting.gd`, which reads
@@ -167,10 +168,6 @@ func _echo_alpha() -> float:
 	var shimmer := maxf(0.0, 1.0 - lived / 1.5)
 	var going := clampf(_echo_left / 3.0, 0.0, 1.0)
 	return going * (0.78 + 0.22 * shimmer * sin(Time.get_ticks_msec() * 0.018))
-
-
-func cooldown_left() -> float:
-	return _cooldown_left
 
 
 ## Is this Sneak's pulse still coming back off bodies? Read by `spotting.gd`, which is what turns

@@ -52,7 +52,6 @@ signal refused(reason: String)
 ## a rock into a gap, not throwing it.
 @export var reach_cells: float = 1.6
 
-var _cooldown_left: float = 0.0
 ## Client-only authoritative count. A rock can remain standing in an enemy corridor after that
 ## corridor leaves this crew's fog, so visible replicas alone cannot always answer the supply HUD.
 var _replicated_standing: int = -1
@@ -67,14 +66,6 @@ func _ready() -> void:
 		return
 	# Refusals go to the local viewer and to nobody else -- see [MouseControl].
 	refused.connect(explain)
-
-
-func _process(delta: float) -> void:
-	_cooldown_left = maxf(0.0, _cooldown_left - delta)
-
-
-func cooldown_left() -> float:
-	return _cooldown_left
 
 
 ## How many more you could put down right now, ignoring the cooldown. For a HUD that wants to draw
@@ -156,8 +147,13 @@ func _physics_process(_delta: float) -> void:
 	if _player.is_scruffed():
 		return
 
+	# SILENT ON THE WRONG CLASS, exactly as [DustKick], [Slam], [BannerToss] and [Fade] are on the
+	# keys they share. This used to name the Engineer out loud, which was harmless for as long as X
+	# meant one thing -- and stopped being harmless the moment the Sneak's dust screen was put on
+	# the same key: a Sneak kicked up its cloud and was then told, on the same frame, that only an
+	# Engineer may set a barricade. A refusal is for a mouse that pressed its OWN class's key and
+	# got nothing; what another class's key does is not news this node should be breaking.
 	if _player.mouse_class != owner_class:
-		refused.emit("only the %s can set a barricade" % MouseClass.name_of(owner_class))
 		return
 	if _player.get_plane() <= 0:
 		refused.emit("nothing to wedge it against up here")

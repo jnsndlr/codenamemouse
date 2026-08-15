@@ -73,8 +73,6 @@ signal refused(reason: String)
 ## reason the trauma is lower: it is a body, not the earth.
 @export var shake_range: float = 8.0
 
-var _cooldown_left: float = 0.0
-
 
 func _ready() -> void:
 	super()
@@ -84,15 +82,6 @@ func _ready() -> void:
 		set_physics_process(false)
 		return
 	refused.connect(explain)
-
-
-func _process(delta: float) -> void:
-	_cooldown_left = maxf(0.0, _cooldown_left - delta)
-
-
-## 0 when ready, counting down otherwise. For a HUD that wants to draw the wait.
-func cooldown_left() -> float:
-	return _cooldown_left
 
 
 func is_ready() -> bool:

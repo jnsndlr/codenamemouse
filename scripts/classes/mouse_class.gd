@@ -28,11 +28,25 @@ const DEFINITIONS: Array[ClassDefinition] = [
 
 ## How many the swap point walks through.
 ##
-## All four are pickable, and **every class now answers Q**, which it did not until the shore-up
-## landed: the Brute caves in or stomps, the Sneak sounds, the Generalist takes a second wind, and
-## the Engineer puts timbers in. Two classes carry a second key as well -- the Engineer's barricade
-## on X, and V for the Brute's Slam and the Generalist's banner toss. The Sneak's Fade remains the
-## one ability GDD section 4 names and nothing has built.
+## All four are pickable, and **GDD section 4 is now built out in full** -- there is no longer an
+## ability the design names and nothing implements. Three keys carry the whole of it, one meaning
+## per class per key, which is why no press is ever ambiguous:
+##
+## | | Q -- your class's thing | V -- your second thing | X |
+## |---|---|---|---|
+## | Generalist | [SecondWind] | [BannerToss] | -- |
+## | Engineer | [ShoreUp] | -- | [Barricade] |
+## | Sneak | [Sonar] | [Fade] | [DustKick] |
+## | Brute | [CaveIn] (or its stomp on the lawn) | [Slam] | -- |
+##
+## THE SNEAK IS THE ONLY CLASS WITH THREE, and section 4 defends the count: the other three each do
+## something to the *world*, and the Sneak's whole subject is its own visibility, which is a smaller
+## thing to be about and so needs more of the verbs to cover -- before (sound it out), during (cross
+## it anyway), after (leave).
+##
+## EVERY NODE IS FITTED TO EVERY MOUSE and gates on `owner_class`, so a key one class does not own
+## is a key that does nothing **and says nothing**. The saying-nothing half was learned the hard
+## way twice, once on each shared key; see the notes in [ShoreUp] and [Barricade].
 const COUNT: int = 4
 
 

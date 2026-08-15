@@ -119,13 +119,24 @@ func _physics_process(delta: float) -> void:
 	if _player == null or _network == null:
 		return
 
+	# SILENT ON THE WRONG CLASS, AND BEFORE ANYTHING ELSE -- the same gate [CaveIn], [Sonar] and
+	# [SecondWind] put at the top of their own handlers, and here it is a fix rather than tidiness.
+	# Q belongs to all four classes; this node is fitted to every mouse and sits AFTER the other
+	# three owners in `MouseControls.CONTROLS`, so a wrong-class refusal was the last thing said on
+	# the frame and landed on the HUD **over the ability that had just worked**. A Brute bringing a
+	# roof down was told it was not an Engineer, once per press, and so was every sonar and every
+	# second wind.
+	if _player.mouse_class != owner_class:
+		_abandon()
+		return
+
 	var held := _player.input().is_held(InputFrame.Action.ABILITY)
-	# The press is what earns a refusal out loud. Held-and-not-allowed says nothing at all, or a
-	# Generalist leaning on Q would be told what class it is sixty times a second.
+	# The press is what earns a refusal out loud. Held-and-not-allowed says nothing at all, or an
+	# Engineer leaning on Q out on the lawn would be told the same thing sixty times a second.
 	if _player.input().is_pressed(InputFrame.Action.ABILITY):
 		_explain_refusal()
 
-	if not held or _player.is_scruffed() or _player.mouse_class != owner_class:
+	if not held or _player.is_scruffed():
 		_abandon()
 		return
 
@@ -167,11 +178,14 @@ func _physics_process(delta: float) -> void:
 
 
 ## Say why the key did nothing, once, on the press. Ordered the way the mouse would discover them:
-## what you are, then where you are, then what is already here.
+## where you are, then what is already here.
+##
+## NEVER "YOU ARE THE WRONG CLASS", and that row is gone rather than reordered. Every refusal in
+## this file is spoken to somebody who pressed **their own class's key** and got nothing -- which
+## is a fact about this corridor, not about them. Telling an Engineer it is an Engineer is the one
+## thing the caller has already established, and telling anybody else was the bug: see the gate at
+## the top of `_physics_process`.
 func _explain_refusal() -> void:
-	if _player.mouse_class != owner_class:
-		refused.emit("only the %s can shore a tunnel" % MouseClass.name_of(owner_class))
-		return
 	if _player.get_plane() <= 0:
 		refused.emit("nothing to hold up out here")
 		return

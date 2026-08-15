@@ -46,8 +46,6 @@ signal refused(reason: String)
 ## space around a scrap without walling off a lane.
 @export var radius: float = 4.0
 
-var _cooldown_left: float = 0.0
-
 
 func _ready() -> void:
 	super()
@@ -57,14 +55,6 @@ func _ready() -> void:
 		set_physics_process(false)
 		return
 	refused.connect(explain)
-
-
-func _process(delta: float) -> void:
-	_cooldown_left = maxf(0.0, _cooldown_left - delta)
-
-
-func cooldown_left() -> float:
-	return _cooldown_left
 
 
 func is_ready() -> bool:

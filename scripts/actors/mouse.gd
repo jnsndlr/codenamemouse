@@ -1180,6 +1180,20 @@ func apply_pose(at: Vector3, facing: float, flags: int, health: int) -> void:
 		# Set directly rather than through `scruff()`: that is the RULE, and rules resolve on the
 		# server. This is the picture of a rule that already resolved somewhere else.
 		_scruffed = down
+		# `[ADDED]` BUT GETTING UP IS ANNOUNCED, because a client never calls `revive_at` -- it
+		# learns a mouse is back on its feet only from this bit going out, and until now nothing on
+		# that machine was told. Two things listen: the camera cuts to the nest instead of skating
+		# across the yard after a mouse that teleported (`camera_rig.gd`), and every ability clears
+		# its cooldown ([MouseControl._on_revived]), which a client MUST do for itself -- the
+		# counters are run on both machines by design, so a reset that only happened on the host
+		# would leave the person at this keyboard looking at a grey chip for an ability that is
+		# actually ready.
+		#
+		# THE EDGE, NOT THE STATE, and it is the same edge on both sides: `revive_at` emits this
+		# once when the director sends somebody home, and so does this. What must not happen is an
+		# emit per pose -- thirty resets a second would hold every cooldown at zero forever.
+		if not down:
+			revived.emit(self)
 	# Taken every pose rather than only on the transition, because the two bits are decided one
 	# frame apart on the server -- `bury` sets the cause and `take_hit` does the scruffing -- so a
 	# pose can legitimately carry SCRUFFED before it carries BURIED. Read only on the edge, that

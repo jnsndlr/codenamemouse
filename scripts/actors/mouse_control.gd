@@ -52,6 +52,25 @@ var _network: TunnelNetwork
 ## answers "is anybody looking at this".
 var _director: MatchDirector
 
+## Seconds until this control may fire again, or 0 when it is up.
+##
+## `[MOVED HERE]` LIVED IN EIGHT SUBCLASSES AND WAS THE SAME THREE LINES IN EACH -- the same
+## declaration, the same `maxf(0.0, _cooldown_left - delta)` in `_process`, and the same
+## `cooldown_left()` accessor. Eight copies of a counter is eight places to remember when the rule
+## about the counter changes, and the rule did change: **it has to go back to zero when you
+## respawn**. One counter here means that is one line in [method _on_revived] and it cannot miss an
+## ability, including one written next year. That is the whole argument -- not tidiness, but that
+## the failure mode of the copies is silent.
+##
+## STILL SET BY THE SUBCLASSES, each to its own number and at its own moment, which is the part
+## that genuinely differs: [CaveIn] charges two different lengths out of this one counter depending
+## on whether the Brute was standing on the lawn.
+##
+## [ShoreUp] and [DigController] have no cooldown at all and simply never touch it. They do now
+## carry the base `_process` that ticks it, which is one `maxf` on a float that is already zero --
+## the price of the counter being in one place, and it is the right price.
+var _cooldown_left: float = 0.0
+
 
 func _ready() -> void:
 	_player = get_node_or_null(player_path) as Mouse
@@ -62,6 +81,51 @@ func _ready() -> void:
 	_network = get_node_or_null(network_path) as TunnelNetwork
 	if _network == null:
 		_network = get_tree().get_first_node_in_group(TunnelNetwork.NETWORK_GROUP) as TunnelNetwork
+	if _player != null:
+		_player.revived.connect(_on_revived)
+
+
+## A WALL CLOCK, AND ON EVERY MACHINE. Cooldowns tick in `_process` rather than `_physics_process`
+## for the reason each ability's own note gives: a countdown does not care how many physics steps
+## the frame contained. And a puppet runs it too -- see the note at the top of this file -- so the
+## person pressing the key has a HUD that greys out even though the ability itself resolves on the
+## host.
+##
+## SUBCLASSES THAT WANT THEIR OWN `_process` MUST CALL `super(delta)`, which four of them do;
+## GDScript overrides rather than chains. That is the one sharp edge of moving the counter up here,
+## and it is why `match_audit.gd`'s respawn check ends by asserting that a cooldown still runs down
+## on its own -- an override that forgot the line would otherwise pass every reset test in the file
+## by never being on the clock at all.
+func _process(delta: float) -> void:
+	_cooldown_left = maxf(0.0, _cooldown_left - delta)
+
+
+## Seconds until this control is ready. Zero means now.
+func cooldown_left() -> float:
+	return _cooldown_left
+
+
+## Back on your feet, and everything you were waiting for is off the clock.
+##
+## `[ADDED]` EVERY ABILITY COMES BACK WITH YOU. A mouse that went down mid-fight had spent whatever
+## it spent trying not to, and the six seconds it waits at the nest is already the price of losing
+## -- serving the tail of a 40-second Second Wind on top of that is the same setback charged twice,
+## and it is charged hardest on exactly the mouse that is having the worst time. Coming out of your
+## own nest with your kit is what makes the respawn a fresh start rather than a partial one.
+##
+## FIRED ON BOTH MACHINES, which is why `Mouse` emits `revived` from `apply_pose` as well as from
+## `revive_at` (see the note there). A host that reset the counters while the client went on
+## counting would leave the person at that keyboard looking at chips that were grey for up to forty
+## seconds after the ability had come back -- and the ability would work, which is worse than it
+## not working: the HUD would be teaching them not to press a key that was ready.
+##
+## VIRTUAL ON PURPOSE, and nothing overrides it yet. [Barricade] is the near miss and stays as it
+## is: its supply is not a counter but the boulders it has standing in the world, counted where they
+## stand -- and three rocks wedged across three corridors are three rocks wedged across three
+## corridors whether or not the Engineer who set them has since been scruffed. Getting up is not a
+## reason for a wall somebody else is walking around to disappear.
+func _on_revived(_mouse: Mouse) -> void:
+	_cooldown_left = 0.0
 
 
 ## Does this machine decide what happens to this mouse?

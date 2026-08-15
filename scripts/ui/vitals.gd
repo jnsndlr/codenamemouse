@@ -27,6 +27,30 @@ extends Control
 ## be too high -- this sits on the shoulders, under the pole.
 const HEAD: float = 0.46
 
+## Which ability nodes get a chip on the pip row, and what key each one answers to.
+##
+## NODE NAME -> KEY GLYPH, AND DELIBERATELY NOT NODE NAME -> CLASS. Every ability node already
+## carries its own `owner_class` and the row is built by asking them, so this table holds no
+## opinion about who owns what and therefore cannot come to disagree with the abilities about it --
+## which is the failure mode a second copy of the class list would eventually have. What it does
+## hold is the one fact the nodes genuinely do not know: which physical key the player pressed.
+##
+## THE ORDER IS THE ROW'S ORDER, Q then V then X, so the chips read left to right in the same
+## order `input_setup.gd` lists them and the same order the controls panel prints them. Only one
+## node per key can match any given class, so a class with three abilities gets three chips and
+## the Brute and the Generalist get two.
+const ABILITY_KEYS: Dictionary = {
+	"SecondWind": "Q",
+	"ShoreUp": "Q",
+	"Sonar": "Q",
+	"CaveIn": "Q",
+	"BannerToss": "V",
+	"Fade": "V",
+	"Slam": "V",
+	"Barricade": "X",
+	"DustKick": "X",
+}
+
 @export var director_path: NodePath
 
 @export_group("Bar")
@@ -42,6 +66,15 @@ const HEAD: float = 0.46
 var _director: MatchDirector
 ## mouse -> seconds since it was last worth showing.
 var _shown: Dictionary = {}
+## ability node -> the length of the cooldown it is currently running, in seconds.
+##
+## BECAUSE A COOLDOWN'S LENGTH IS NOT A CONSTANT. A chip fills from 0 to 1 and needs a denominator,
+## and the obvious one -- the node's exported `cooldown` -- is wrong for the one ability that has
+## two clocks: [CaveIn] charges 6 seconds for an aimed collapse and 10 for a stomp, out of the same
+## counter. Dividing by 6 would leave a stomping Brute staring at a chip that sat full for four
+## seconds and then started draining. Watching the high-water mark instead gets both right, needs
+## nothing added to the abilities, and stays right for whatever a fifth ability decides to do.
+var _span: Dictionary = {}
 
 
 func _ready() -> void:
@@ -67,6 +100,13 @@ func _process(delta: float) -> void:
 			_shown[mouse] = _shown[mouse] + delta
 			if _shown[mouse] > linger_seconds + fade_seconds:
 				_shown.erase(mouse)
+	# Only the local mouse's abilities ever get into `_span`, so this is three entries and a handful
+	# more each time you swap class or respawn -- but they are nodes, and a freed node is the one
+	# thing a Dictionary key will happily go on being. Same sweep, same reason, as the validity
+	# guard in `_draw`.
+	for key: Variant in _span.keys():
+		if key == null or not is_instance_valid(key):
+			_span.erase(key)
 	queue_redraw()
 
 
@@ -169,6 +209,7 @@ func _draw() -> void:
 			_scurry_pip(mouse, at, fade, ui)
 			_wedge_count(mouse, at, fade, ui)
 			_cast_bar(mouse, at, fade, ui)
+			_ability_pips(mouse, at, fade, ui)
 
 
 ## Whether your Scurry is off cooldown, as a wedge beside your own bars.
@@ -228,6 +269,113 @@ func _cast_bar(mouse: Mouse, at: Vector2, alpha: float, ui: float) -> void:
 	_bar(
 		at - Vector2(0.0, (bar_size.y + 3.0) * ui), done,
 		Color(0.98, 0.74, 0.24), alpha, ui, bar_size.y * 0.8
+	)
+
+
+## Your class's abilities, as a row of key chips that refill as they come back.
+##
+## `[ADDED]` THE ONE THING THE ABILITIES ALREADY CLAIMED THE HUD DID. `CaveIn`'s note about running
+## every check it can on both machines ends "so the person pressing Q gets a HUD that greys out and
+## a reason when it refuses" -- and half of that was true. The reason was on screen; the greying out
+## did not exist anywhere in this file, so the only way to learn a cooldown was to press the key and
+## be told a number of seconds. That is a readout you get by making a mistake, which is the shape of
+## feedback GDD section 10 spends its length arguing against.
+##
+## ALWAYS DRAWN, ON THE STAMINA BAR'S ARGUMENT RATHER THAN THE HEALTH BAR'S. A chip at full is not
+## the absence of news: "is my Slam up" is asked in the second BEFORE committing to a charge, which
+## is exactly what this file's header says stamina is always drawn for. A row that appeared only
+## while recharging would arrive at the moment it has stopped being useful, and would shove the
+## wedge count around every time an ability was pressed.
+##
+## THE KEY IS THE LABEL, not the ability's name. It is one glyph, it fits, and it is what the player
+## has to press -- a chip reading "Slam" would be a chip that has to be read, and this is meant to be
+## caught at the edge of vision while looking at something else. The classes are told apart by the
+## row itself: three chips is a Sneak, and a mouse never sees anybody's row but its own.
+##
+## YOURS ONLY, like everything else below the health bar, and here it is a hidden-information rule
+## rather than a layout one (GDD section 3): an enemy Brute's Slam chip visible across a corridor
+## would say whether it is safe to walk up to them, which is a thing you should have to guess at.
+func _ability_pips(mouse: Mouse, at: Vector2, alpha: float, ui: float) -> void:
+	var side := bar_size.y * 2.2 * ui
+	var gap := 3.0 * ui
+	# Below the wedge row, at a fixed offset rather than under it -- the wedges hide themselves when
+	# you are carrying nothing, and a chip row that rose and fell with what happened to be in your
+	# paws would be unreadable at exactly the moment it is wanted.
+	var spot := at + Vector2(0.0, bar_size.y * 5.0 * ui)
+	var placed := 0
+	for node_name: String in ABILITY_KEYS:
+		var ability := mouse.get_node_or_null(NodePath(node_name))
+		# ASKED OF THE NODE, NOT OF A TABLE. `owner_class` is the same field the ability itself gates
+		# its keypress on, so the row cannot show a chip for something the key would refuse -- and a
+		# design that moves an ability between classes again (this project has done it twice) moves
+		# the chip with it and needs nothing changed here.
+		if ability == null or int(ability.get("owner_class")) != mouse.mouse_class:
+			continue
+		var box := Rect2(spot + Vector2(float(placed) * (side + gap), 0.0), Vector2(side, side))
+		_pip(box, String(ABILITY_KEYS[node_name]), _recharge(ability), alpha, ui)
+		placed += 1
+
+
+## How far back a given ability has come, from 0 just-spent to 1 ready.
+##
+## A NODE WITHOUT A COOLDOWN IS ALWAYS READY, which is [ShoreUp] and is not a special case being
+## smuggled in: its cost is three seconds of standing still and there is no recharge at all, so a
+## chip that ever showed it as unavailable would be lying. What that cast costs while it is running
+## is drawn by `_cast_bar`, in the instrument that can also say WHICH cell.
+func _recharge(ability: Node) -> float:
+	if not ability.has_method("cooldown_left"):
+		return 1.0
+	var left: float = ability.call("cooldown_left")
+	if left <= 0.0:
+		_span.erase(ability)
+		return 1.0
+	# The high-water mark is the denominator -- see `_span`. Taken on the way down rather than at the
+	# moment of spending, because this node is not told when an ability fires and asking it to be
+	# would mean a signal from all nine of them to a HUD panel that may not exist.
+	var full: float = maxf(float(_span.get(ability, 0.0)), left)
+	_span[ability] = full
+	return clampf(1.0 - left / maxf(full, 0.001), 0.0, 1.0)
+
+
+## One chip: a sunk square, the recharge filling it from the bottom, and the key over the top.
+##
+## IT FILLS UPWARD RATHER THAN SWEEPING ROUND. A radial wipe is the convention and it is the wrong
+## one at this size -- eight pixels of arc is unreadable, and the question is never "how many seconds"
+## but "is it up yet", which a rising level answers at a glance and answers the same way the ghost
+## wedge beside it does. One vocabulary for "coming back", used twice.
+##
+## THE GLYPH GOES DARK ON A LIT CHIP AND DIM ON AN EMPTY ONE, so the two states differ in more than
+## brightness. A key you cannot press should not merely be a fainter version of a key you can.
+func _pip(box: Rect2, key: String, ready: float, alpha: float, ui: float) -> void:
+	var lit := ready >= 1.0
+	draw_rect(box.grow(1.0 * ui), Color(0.0, 0.0, 0.0, 0.55 * alpha), true)
+	draw_rect(
+		box, Color(HudSkin.WELL.r, HudSkin.WELL.g, HudSkin.WELL.b, 0.9 * alpha), true
+	)
+	if ready > 0.0:
+		var high := box.size.y * clampf(ready, 0.0, 1.0)
+		var top := box.position + Vector2(0.0, box.size.y - high)
+		draw_rect(
+			Rect2(top, Vector2(box.size.x, high)),
+			Color(HudSkin.GOLD.r, HudSkin.GOLD.g, HudSkin.GOLD.b, alpha * (1.0 if lit else 0.5)),
+			true
+		)
+		# A bright line on the surface of a partial fill, the same trick `HudSkin.segments` uses and
+		# for the same reason: at nine pixels tall, a third full and a half full are two shades of the
+		# same dim gold and tell apart at no distance at all. It is the LEVEL that reads, not the area
+		# under it -- so the level gets an edge, and the chip becomes a thing filling up rather than a
+		# square getting brighter.
+		if not lit:
+			draw_rect(
+				Rect2(top, Vector2(box.size.x, maxf(1.0 * ui, high * 0.22))),
+				Color(HudSkin.GOLD.r, HudSkin.GOLD.g, HudSkin.GOLD.b, alpha * 0.95), true
+			)
+	var ink := (
+		Color(0.10, 0.09, 0.07, alpha) if lit
+		else Color(HudSkin.TEXT_DIM.r, HudSkin.TEXT_DIM.g, HudSkin.TEXT_DIM.b, alpha)
+	)
+	HudSkin.text(
+		self, box, key, maxi(8, roundi(box.size.y * 0.72)), ink, HORIZONTAL_ALIGNMENT_CENTER
 	)
 
 

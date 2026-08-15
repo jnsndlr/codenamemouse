@@ -3,7 +3,7 @@ extends MouseControl
 ## The Sneak's second ability: ten seconds of glass (GDD section 4).
 ##
 ## V has one meaning per class. For a Brute it is [Slam] and for a Generalist it is [BannerToss];
-## for a Sneak it is this. **It is the last ability GDD section 4 named that nothing implemented**
+## for a Sneak it is this. **It was the last ability GDD section 4 named that nothing implemented**
 ## -- sonar, the stomp, the cave-in, Second Wind, shoring and the toss all arrived before it, and
 ## the class whose entire fantasy is *the one you don't see* spent six milestones being a mouse with
 ## slightly less health than the others.
@@ -56,7 +56,6 @@ signal refused(reason: String)
 @export var duration: float = 10.0
 
 
-var _cooldown_left: float = 0.0
 ## Whether the mouse was faded last tick, so `surfaced` fires once rather than every frame after.
 var _was_faded: bool = false
 
@@ -75,15 +74,13 @@ func _ready() -> void:
 ## a puppet counts it down and never acts on it, so the person pressing the key sees the HUD grey
 ## out and come back at the right moments even though the rule resolved somewhere else.
 func _process(delta: float) -> void:
-	_cooldown_left = maxf(0.0, _cooldown_left - delta)
+	# `super` FIRST: the cooldown lives in [MouseControl] now, and GDScript overrides rather than
+	# chains -- an override that forgets this line is an ability that never comes back.
+	super(delta)
 	var now := _player != null and _player.is_faded()
 	if _was_faded and not now:
 		surfaced.emit()
 	_was_faded = now
-
-
-func cooldown_left() -> float:
-	return _cooldown_left
 
 
 func is_ready() -> bool:

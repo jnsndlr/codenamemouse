@@ -85,7 +85,6 @@ signal refused(reason: String)
 ## here, because the arena is a lawn.
 @export var ring_color: Color = Color(0.93, 0.87, 0.52, 0.75)
 
-var _cooldown_left: float = 0.0
 var _wind_left: float = 0.0
 ## Health per second while the wind lasts. Kept rather than recomputed so a tuning change mid-wind
 ## cannot make the second half of a heal a different size from the first.
@@ -107,13 +106,10 @@ func _ready() -> void:
 ## The cooldown is a wall clock and the rings are a picture, so both live on the frame. The HEALING
 ## does not -- it is a rule, and rules run on the physics tick with everything else.
 func _process(delta: float) -> void:
-	_cooldown_left = maxf(0.0, _cooldown_left - delta)
+	# `super` FIRST: the cooldown lives in [MouseControl] now, and GDScript overrides rather than
+	# chains -- an override that forgets this line is an ability that never comes back.
+	super(delta)
 	_animate_rings()
-
-
-## 0 when ready, counting down otherwise. For a HUD that wants to draw the wait.
-func cooldown_left() -> float:
-	return _cooldown_left
 
 
 ## Seconds of healing still to come, or 0. Public for the same reason: the wind is a state a player

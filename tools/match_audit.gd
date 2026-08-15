@@ -115,6 +115,7 @@ func _initialize() -> void:
 		["no_underground", _check_no_underground],
 		["melee", _check_melee],
 		["respawn", _check_respawn],
+		["respawn_cooldowns", _check_respawn_clears_cooldowns],
 		["match_end", _check_match_end],
 		["bots_move", _check_bots_move],
 		["spotting", _check_spotting],
@@ -406,6 +407,99 @@ func _check_respawn() -> void:
 		"at its own nest, not where it fell"
 	)
 	_expect(mouse.collision_layer != 0, "and solid again")
+
+
+## Every cooldown is off the clock when you get up, on both machines.
+##
+## `[ADDED]` WHY THIS IS ITS OWN CHECK RATHER THAN THREE LINES ON THE RESPAWN ONE ABOVE. That check
+## is about the director -- where you come back and in what state -- and this is about nine nodes
+## hanging off the mouse that the director has never heard of. They came back on their own clocks
+## until now, so a mouse scruffed halfway through a Second Wind stood up at its nest and waited out
+## the rest of forty seconds on top of the six it had already served: the same setback charged
+## twice, hardest on the mouse having the worst time.
+##
+## EVERY ABILITY, NOT JUST THE ONES THIS CLASS CAN FIRE, and that is the reason the counters here
+## are set by hand rather than by pressing keys. You may change class at your own nest -- which is
+## exactly where you respawn -- so a Sneak that comes back and immediately becomes a Brute must not
+## inherit a stranger's cooldown. Firing only what the current class owns would leave the other six
+## nodes untested, which is precisely where a missed reset would hide.
+##
+## BOTH PATHS, because they are genuinely different code. A host respawns through `revive_at`; a
+## client is never told to do anything of the kind and learns it from the SCRUFFED bit going out in
+## a pose. The counters run on both machines by design, so a reset that only happened on one would
+## leave somebody looking at a grey chip for an ability that is actually ready.
+func _check_respawn_clears_cooldowns() -> void:
+	await _arena(1)
+	_director.respawn_seconds = 0.4
+	# THE PLAYER, because it is the one mouse that carries a control set -- bots do not get one
+	# (see [MouseControls]), so a puppet built by `_puppet` has no cooldowns to clear.
+	var mouse := _scene.get_node("Player") as Mouse
+	var abilities := _abilities_of(mouse)
+	_expect(abilities.size() == 9, "the player carries all nine abilities (found %d)" % abilities.size())
+
+	# -- the host's road: down, and up again by the director's clock.
+	_charge(abilities, 30.0)
+	_expect(_still_cooling(abilities).size() == abilities.size(), "the counters were set to begin with")
+	mouse.take_hit(9999.0, Vector3.ZERO, 0.0)
+	await _advance(0.7)
+	_expect(not mouse.is_scruffed(), "the mouse came back")
+	var warm := _still_cooling(abilities)
+	_expect(warm.is_empty(), "every cooldown cleared on respawn (still cooling: %s)" % ", ".join(warm))
+
+	# -- the client's road: no revive call anywhere, just the bit going out in a pose.
+	_charge(abilities, 30.0)
+	var here := mouse.global_position
+	var down := Snapshot.Flag.SCRUFFED | (mouse.mouse_class << Snapshot.CLASS_SHIFT)
+	mouse.apply_pose(here, 0.0, down, 255)
+	await _advance(0.05)
+	_expect(mouse.is_scruffed(), "a pose can put a puppet down")
+	_expect(
+		_still_cooling(abilities).size() == abilities.size(),
+		"and going down does not clear anything by itself"
+	)
+	mouse.apply_pose(here, 0.0, mouse.mouse_class << Snapshot.CLASS_SHIFT, 255)
+	await _advance(0.05)
+	var warm_puppet := _still_cooling(abilities)
+	_expect(
+		warm_puppet.is_empty(),
+		"a pose that stands a puppet up clears them too (still cooling: %s)" % ", ".join(warm_puppet)
+	)
+
+	# -- and the counters still count, or the check above would pass on an ability that had simply
+	# stopped working.
+	_charge(abilities, 0.2)
+	await _advance(0.5)
+	var stuck := _still_cooling(abilities)
+	_expect(stuck.is_empty(), "and a cooldown still runs down on its own (stuck: %s)" % ", ".join(stuck))
+
+
+## Every control on this mouse that has a cooldown, by name.
+func _abilities_of(mouse: Mouse) -> Dictionary:
+	var out: Dictionary = {}
+	for name: String in ["SecondWind", "ShoreUp", "Sonar", "CaveIn", "BannerToss", "Fade", "Slam",
+			"Barricade", "DustKick"]:
+		var node := mouse.get_node_or_null(NodePath(name))
+		if node != null:
+			out[name] = node
+	return out
+
+
+## Put every one of them on the clock.
+##
+## SET RATHER THAN PRESSED, for the reason the header gives: nine nodes, one class, and the six this
+## mouse cannot fire are the six a missed reset would hide in. `_cooldown_left` lives on
+## [MouseControl] now, so this reaches all of them the same way.
+func _charge(abilities: Dictionary, seconds: float) -> void:
+	for name: String in abilities:
+		abilities[name].set("_cooldown_left", seconds)
+
+
+func _still_cooling(abilities: Dictionary) -> PackedStringArray:
+	var out := PackedStringArray()
+	for name: String in abilities:
+		if float(abilities[name].call("cooldown_left")) > 0.0:
+			out.append(name)
+	return out
 
 
 func _check_match_end() -> void:
