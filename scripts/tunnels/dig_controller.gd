@@ -21,9 +21,6 @@ extends MouseControl
 ## put you on.
 
 @export_group("Digging")
-## Seconds of held input to open one tile. Deliberately brisk for testing; the real number is
-## a per-plane balance dial (GDD section 3 gives deeper planes longer dig times).
-@export var dig_seconds: float = 0.5
 ## How far from the mouse a tile can be and still be diggable, in cells. Stops you reaching
 ## across the map with the cursor -- you dig at arm's length, which is also what keeps the
 ## Engineer stationary and vulnerable while they work.
@@ -157,7 +154,7 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 
 	var digging := _target >= 0 and held
 	if digging:
-		_progress += delta * _dig_rate() / maxf(dig_seconds, 0.01)
+		_progress += delta / maxf(TunnelNetwork.dig_seconds_at(_plane), 0.01)
 		if _progress >= 1.0:
 			if acts():
 				var cut := _target
@@ -165,7 +162,8 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 					_plane,
 					TunnelNetwork.segment_origin(cut),
 					TunnelNetwork.segment_angle(cut),
-					_player.team
+					_player.team,
+					TunnelNetwork.segment_length_index(cut)
 				):
 					_cut += 1
 				_learn_exposed(cut)
@@ -259,20 +257,26 @@ func _cursor_for() -> DigCursor:
 	return _cursor
 
 
-## How fast whoever is driving opens a tile, as a multiplier on `dig_seconds`.
+## How far whoever is driving gets in one stroke, as an index into
+## [constant TunnelNetwork.SEG_LENGTHS].
 ##
 ## THE ENGINEER IS THE DIGGER, BUT NOT THE ONLY ONE. GDD section 4 made terrain alteration the
 ## Engineer's exclusive capability; this is a deliberate revision, recorded in that section. An
-## Engineer opens a tile in `dig_seconds`; everyone else takes about three times as long, which
-## is slow enough that you would not choose to tunnel as a Generalist and fast enough that you
-## CAN when it is the only way through. The alternative -- nobody else digs at all -- makes a
-## crew that has lost its Engineer unable to use a third of the map, and turns one seat into a
-## requirement rather than a choice.
+## Engineer cuts a metre where everyone else scrapes 37cm, which is slow enough that you would not
+## choose to tunnel as a Generalist and fast enough that you CAN when it is the only way through.
+## The alternative -- nobody else digs at all -- makes a crew that has lost its Engineer unable to
+## use a third of the map, and turns one seat into a requirement rather than a choice.
+##
+## `[REVISED]` THE CLASS BUYS DISTANCE, NOT TIME. This used to return a multiplier on the clock and
+## the clock is now the same for everybody -- the seconds belong to the PLANE (see
+## [constant TunnelNetwork.PLANE_DIG_SECONDS]), because the earth being harder further down is a
+## fact about the earth and not about who is standing in it. Two dials that both meant "speed" is
+## what made the slow classes feel gated rather than slow; each one means one thing now.
 ##
 ## Asked of the mouse rather than looked up here, so the number arrives with whoever is driving
-## and a class swap is felt on the very next tile.
-func _dig_rate() -> float:
-	return maxf(0.01, _player.get_dig_speed()) if _player != null else 1.0
+## and a class swap is felt on the very next stroke.
+func _dig_stroke() -> int:
+	return _player.get_dig_stroke() if _player != null else TunnelNetwork.FULL_STROKE
 
 
 ## The stroke the cursor is asking for, as a segment id, or -1.
@@ -313,7 +317,9 @@ func _aimed_id() -> int:
 	var heading := at - from
 	if heading.length_squared() < 0.0001:
 		return -1
-	var id := TunnelNetwork.segment_id(from, TunnelNetwork.direction_angle(heading))
+	var id := TunnelNetwork.segment_id(
+		from, TunnelNetwork.direction_angle(heading), _dig_stroke()
+	)
 	if _network.has_segment(_plane, id):
 		return -1
 
@@ -324,7 +330,9 @@ func _aimed_id() -> int:
 	# refused the one dig that matters most: a stroke that joins two corridors always ends inside
 	# the one it is reaching for, so two tunnels within a stroke of each other could never be
 	# connected at all. See TunnelNetwork.opens_ground.
-	if not _network.opens_ground(_plane, from, TunnelNetwork.segment_angle(id)):
+	if not _network.opens_ground(
+		_plane, from, TunnelNetwork.segment_angle(id), TunnelNetwork.segment_length_index(id)
+	):
 		return -1
 	# MIRRORS `TunnelNetwork.dig_segment`'S OWN REFUSALS, and must keep doing so. A stroke this
 	# offers but the network would refuse is a cursor that pulses invitingly over ground that will
@@ -361,17 +369,50 @@ func _blocked_cell() -> Vector2i:
 	if heading.length_squared() < 0.0001:
 		return Vector2i.MAX
 
-	# Walked along the stroke it WOULD have cut, and the first stone on it is the one to name.
-	# A seam a stroke merely passes near is not what stopped you.
-	var id := TunnelNetwork.segment_id(from, TunnelNetwork.direction_angle(heading))
-	var a := TunnelNetwork.segment_origin(id)
-	var b := TunnelNetwork.segment_end(id)
-	for i in range(1, 9):
-		var point := a.lerp(b, float(i) / 8.0)
+	# WALKED OUT TO THE STROKE'S REAL REACH, and the first stone on the way is the one to name.
+	#
+	# `[REVISED]` THE WALK USED TO STOP AT THE END OF THE SPINE, and a stroke reaches half a width
+	# further than that -- so the stone that actually stops a dig can sit past the last point this
+	# ever looked at. Harmless while every stroke was a metre; fatal the moment one was 0.375m,
+	# because of a rule that is entirely correct elsewhere. `_probe_cell` refuses to let the round
+	# END CAPS claim ground, so a scrape does not OWN the cell a metre ahead of it -- which means
+	# `segment_cells` does not name that cell either, and a seam sitting there is invisible to
+	# every cell-based test while still being the thing the player has run into. The Generalist got
+	# no cursor, no spoken refusal and no vein revealed: the dig button simply stopped working, in
+	# silence, which is the one failure this whole branch exists to prevent.
+	#
+	# THE SAME REACH `opens_ground` USES, deliberately. That function decides there is nothing to
+	# gain here; this one explains why. Measuring them differently is how the two could disagree
+	# and leave a refusal with no reason attached to it.
+	var id := TunnelNetwork.segment_id(
+		from, TunnelNetwork.direction_angle(heading), _dig_stroke()
+	)
+	var origin := TunnelNetwork.segment_origin(id)
+	var direction := TunnelNetwork.angle_direction(TunnelNetwork.segment_angle(id))
+	var reach := TunnelNetwork.segment_length(id) + TunnelNetwork.SEG_HALF_WIDTH
+	var steps := maxi(2, ceili(reach / TunnelContour.TEXEL))
+	for i in range(1, steps + 1):
+		var point := origin + direction * (reach * float(i) / float(steps))
 		var cell := _network.world_to_cell(Vector3(point.x, 0.0, point.y))
 		if _network.is_rock(_plane, cell):
 			return cell
-	return Vector2i.MAX
+
+	# AND THE STONE BESIDE IT, which the centre line cannot see. A stroke is a metre wide and can
+	# be refused by a seam it only clips, which is exactly what `_aimed_id` does through
+	# `segment_cells` -- so anything that walk missed is looked for in the cells the stroke would
+	# have claimed. Nearest to the origin, because that sweep is a bounding box and its order says
+	# nothing about which way you are digging.
+	var nearest := Vector2i.MAX
+	var closest := INF
+	for cell: Vector2i in _network.segment_cells(id):
+		if not _network.is_rock(_plane, cell):
+			continue
+		var centre := Vector2(float(cell.x) * TunnelNetwork.CELL, float(cell.y) * TunnelNetwork.CELL)
+		var gap := origin.distance_squared_to(centre)
+		if gap < closest:
+			closest = gap
+			nearest = cell
+	return nearest
 
 
 ## Step into the shaft under or over you.

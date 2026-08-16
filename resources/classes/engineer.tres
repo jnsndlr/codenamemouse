@@ -11,5 +11,5 @@ speed = 2.9
 sprint_seconds = 3.5
 attack_damage = 16.0
 carry_penalty = 0.25
-dig_speed = 1.0
+dig_stroke = 1.0
 carry_capacity = 2

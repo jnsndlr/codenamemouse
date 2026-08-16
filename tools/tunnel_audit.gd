@@ -267,28 +267,40 @@ func _check_dig_flow() -> void:
 
 	_findings.clear()
 	var neighbour := Vector2i(0, 1)
-	var slow := Vector2i(0, -1)
+	# TWO CELLS OUT, AND NOT THREE, which is the reach rule talking. A stroke roots at the nearest
+	# tunnel to the AIM and is refused if that root is further than `dig_reach` from it, so an aim
+	# three metres from a corridor that starts at the origin finds no root and digs nothing at all
+	# -- which the first version of this check did, and reported as a Generalist that could not
+	# dig rather than as a target nobody could have reached.
+	var quick_run := Vector2i(2, 0)
+	var slow_run := Vector2i(0, -2)
 	var far := Vector2i(0, 9)
 
-	# Adjacent, within reach, undug: an ENGINEER should open it after dig_seconds of holding.
-	# Forty frames is two thirds of a second against a dig_seconds of 0.5.
+	# Adjacent, within reach, undug: an ENGINEER should open it after one stroke of holding.
+	# Forty frames is two thirds of a second against a plane-1 stroke of 0.5s.
 	player.set_class(MouseClass.ENGINEER)
 	_hold_dig(player, controller, network.cell_to_world(1, neighbour), 40)
 	if not network.is_dug(1, neighbour):
 		_fail("DIG_FLOW", "an Engineer holding on an adjacent tile did not open it")
 
-	# THE SPREAD, WHICH IS THE WHOLE POINT OF THE CLASS. Everybody can dig; the Engineer is about
-	# three times faster (GDD section 4, revised -- see the note there). Both halves are asserted
-	# because both are design: a Generalist must NOT open a tile in the time an Engineer does, or
-	# the Engineer is decorative -- and must open it eventually, or a crew that loses its Engineer
+	# THE SPREAD, WHICH IS THE WHOLE POINT OF THE CLASS -- and it is a spread in DISTANCE now,
+	# not in time. Everybody digs on one clock (TunnelNetwork.PLANE_DIG_SECONDS) and what the
+	# Engineer buys is a metre a stroke against everyone else's 0.375, so the question worth
+	# asking is how far the corridor got in an equal hold. Both halves are still asserted because
+	# both are still design: a Generalist must not drive corridor as fast as an Engineer, or the
+	# Engineer is decorative -- and must get there eventually, or a crew that loses its Engineer
 	# is locked out of a third of the map.
-	player.set_class(MouseClass.GENERALIST)
-	_hold_dig(player, controller, network.cell_to_world(1, slow), 40)
-	if network.is_dug(1, slow):
-		_fail("DIG_FLOW", "a Generalist dug as fast as an Engineer")
-	_hold_dig(player, controller, network.cell_to_world(1, slow), 100)
-	if not network.is_dug(1, slow):
-		_fail("DIG_FLOW", "a Generalist could not open a tile however long it held")
+	#
+	# ASKED TWO CELLS OUT, AND THAT IS THE WHOLE TRICK. Pointed at a NEIGHBOUR this asserts
+	# nothing: a stroke is a metre WIDE whatever its length and its rounded end reaches half a
+	# width past the spine, so even a 0.375m scrape opens the cell next door on its first go. The
+	# two classes really are near enough identical at punching through one wall in a pinch -- it
+	# is the sustained corridor that belongs to the Engineer, and only distance can see it. A
+	# version of this test that kept pointing at a neighbour would have found them equal and
+	# called it a pass.
+	#
+	# The comparison itself runs LAST, at the bottom of this function -- it drives metres of
+	# corridor and every check between here and there needs ground nobody has touched.
 
 	# Out of reach: must stay shut no matter how long you hold.
 	_hold_dig(player, controller, network.cell_to_world(1, far), 60)
@@ -339,6 +351,33 @@ func _check_dig_flow() -> void:
 	if controller.get_dig_progress() > 0.0:
 		_fail("DIG_FLOW", "and an authoritative dig left the bar full instead of moving on")
 
+	# THE SPREAD -- see the note beside `quick_run` above. LAST, and that placement is the point:
+	# this is the only check here that drives METRES of corridor, and run earlier it would hand
+	# every assertion after it ground that was already open. It cost three wrong reds to find that
+	# out -- a tile "opening without the button held" and a client "cutting earth for itself" were
+	# both just cells this comparison had dug on its way past.
+	#
+	# +X AND -Z, because they are the two directions nothing above has spent: `mine` owns -X and
+	# `neighbour` and `far` own +Z.
+	# SEVENTY-FIVE FRAMES lands halfway between two stroke completions for both classes -- a stroke
+	# is 0.5s, so they land on 30, 60, 90 -- which keeps the measurement off the boundary where a
+	# float's last bit decides the answer.
+	player.set_class(MouseClass.ENGINEER)
+	_hold_dig(player, controller, network.cell_to_world(1, quick_run), 75)
+	var fast := _corridor_reach(network, Vector2(1.0, 0.0))
+
+	player.set_class(MouseClass.GENERALIST)
+	_hold_dig(player, controller, network.cell_to_world(1, slow_run), 75)
+	var slow := _corridor_reach(network, Vector2(0.0, -1.0))
+
+	if slow >= fast:
+		_fail(
+			"DIG_FLOW",
+			"a Generalist drove as much corridor as an Engineer (%.2fm against %.2fm)" % [slow, fast]
+		)
+	if slow <= 0.0:
+		_fail("DIG_FLOW", "a Generalist could not drive any corridor at all")
+
 	player.set_physics_process(true)
 	controller.set_physics_process(true)
 
@@ -351,6 +390,29 @@ func _check_dig_flow() -> void:
 	for finding: String in _findings:
 		print("   FAIL %s" % finding)
 	_total_failures += _findings.size()
+
+
+## Hold the dig button at a world point for `frames` ticks of the controller's own update.
+##
+## THROUGH THE INPUT FRAME, WHICH IS THE ONLY WAY LEFT (M7). This used to press `Input.action_press`
+## and poke `player._aim_point`, and it stopped working at step 2 without saying so -- see
+## `_running`. Both halves had to change: intent is a value now, so aim travels IN the frame, and
+## a `Player` that is handed one stops capturing over the top of it for that tick.
+##
+## How far the corridor reaches from the origin along one axis, in METRES.
+##
+## NOT IN CELLS, and that is the whole reason this exists. The spread being measured is a metre
+## against 0.375 over a runway the reach rule caps at about two and a half metres, so rounded to
+## whole cells the Engineer and the Generalist come out equal -- a check that passes by being too
+## blunt to see the thing it is looking at. Reading the strokes themselves is exact and free.
+##
+## THE FURTHEST END ALONG ONE AXIS, so corridor driven in other directions by other parts of this
+## check cannot contribute: everything behind the origin projects to zero or less.
+func _corridor_reach(network: TunnelNetwork, axis: Vector2) -> float:
+	var best := 0.0
+	for id: int in network.segments(1):
+		best = maxf(best, axis.dot(TunnelNetwork.segment_end(id)))
+	return best
 
 
 ## Hold the dig button at a world point for `frames` ticks of the controller's own update.

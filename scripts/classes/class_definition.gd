@@ -140,15 +140,31 @@ extends Resource
 ## want -- a class that is genuinely FASTER underground -- because that reads as a strength rather
 ## than as lag.
 @export_range(1.0, 2.0, 0.05) var tunnel_speed: float = 1.0
-## How fast this class opens a tile, as a multiplier on the dig controller's own timing.
+## How far this class gets in one stroke of digging, in metres.
 ##
 ## EVERYBODY CAN DIG, and the Engineer is simply the one who is good at it. GDD section 4 made
 ## digging the Engineer's exclusive capability; this is a deliberate revision (see the note in
 ## that section). A dig you can manage in a pinch keeps the tunnel a tool the whole crew shares
 ## and stops a crew without an Engineer being locked out of a third of the map -- and it costs
-## the Engineer nothing, because what makes them the digger is being three times faster at it
-## and, shortly, being the only one who can bring a tunnel down.
-@export_range(0.05, 2.0, 0.01) var dig_speed: float = 0.35
+## the Engineer nothing, because what makes them the digger is covering three times the ground
+## and being the only one who can bring a tunnel down.
+##
+## `[REVISED]` THIS WAS A SPEED MULTIPLIER AND IS NOW A LENGTH, which is the same balance said a
+## better way. The old number bought the Engineer TIME: 0.5s a metre against everyone else's 1.43s,
+## for the identical metre of corridor. What that actually feels like from the slow end is not a
+## slower dig, it is a longer wait -- the same act, the same result, gated. Every class now cuts on
+## one clock (see [constant TunnelNetwork.PLANE_DIG_SECONDS]) and buys a different amount of
+## tunnel with it, so the difference shows up in the ground rather than in a progress bar.
+##
+## 1.0 AGAINST 0.375 IS TODAY'S BALANCE, DELIBERATELY. The old multipliers put the Engineer 2.86x
+## ahead; a metre against six sixteenths is 2.67x, which is inside the noise of a number that was
+## picked by feel in the first place. This is a change of texture and not of power, and it should
+## not need a retune to ship.
+##
+## SNAPPED TO [constant TunnelNetwork.SEG_LENGTHS] WHEN IT IS USED, because only the four lengths
+## in that table can be said on the wire. The step here matches the sixteenth the origin grid is
+## quantised to, so a value tuned in the inspector lands on something sayable.
+@export_range(0.25, 1.0, 0.0625) var dig_stroke: float = 0.375
 ## Whether this class fits down a shaft at all. The Juggernaut (GDD section 4) will not: "too
 ## big" is a hard, thematic constraint and it is the one line of this file the hired rat needs.
 @export var can_enter_tunnels: bool = true

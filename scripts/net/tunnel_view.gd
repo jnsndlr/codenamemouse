@@ -60,11 +60,17 @@ enum Kind {
 
 ## Kind, plane, x, y, extra, bits. Coordinates are signed and can exceed a byte in a large arena.
 ##
-## `extra` IS THE ANGLE, and only a SEGMENT uses it -- every other kind sends a zero there. One
-## wasted byte on the handful of shaft, rock and shoring entries a match produces was much the
-## better trade against packing the angle into the spare bits of the coordinates, which would have
-## made the two fields mean different things depending on the kind and put a shift-and-mask
-## between every reader and the number it wanted.
+## `extra` IS THE ANGLE AND THE LENGTH, and only a SEGMENT uses it -- every other kind sends a zero
+## there. One wasted byte on the handful of shaft, rock and shoring entries a match produces was
+## much the better trade against packing the angle into the spare bits of the coordinates, which
+## would have made the two fields mean different things depending on the kind and put a
+## shift-and-mask between every reader and the number it wanted.
+##
+## `[REVISED]` THE LENGTH RIDES FOR FREE, and this entry did not have to grow to carry it. An angle
+## is one of 64 ([constant TunnelNetwork.ANGLE_STEPS]) and so needs six of these eight bits; the
+## stroke length is one of four and takes the other two. See [method TunnelNetwork.segment_extra].
+## That is the whole reason a per-class stroke length cost no packet space at all -- had the angle
+## needed the full byte, length would have meant a wider entry on every rock and shaft as well.
 const ENTRY_SIZE: int = 1 + 1 + 2 + 2 + 1 + 1
 
 ## How many entries may go in one packet.
@@ -167,15 +173,20 @@ func batch(peer: int, side: int) -> Array:
 ## the client's minimap draw a glimpse as a glimpse rather than as one of its own corridors.
 ##
 ## GATED AT THE STROKE'S MIDPOINT, matching `TunnelNetwork._segment_wants` -- the same question the
-## cutaway asks, so what a client is SENT and what the ground would show it can never disagree. A
-## stroke is a metre and a cell is a metre, so this is the granularity the rule always had.
+## cutaway asks, so what a client is SENT and what the ground would show it can never disagree.
+##
+## THE MIDPOINT IS THE RIGHT POINT EVEN NOW THAT A STROKE CAN BE SHORTER THAN A CELL. It used to be
+## defensible on the grounds that the two were the same size; what actually makes it correct is that
+## the midpoint is the one point guaranteed to be inside the stroke, so a scrape is gated on ground
+## it genuinely occupies. A short stroke simply asks about the cell it sits in, which is the same
+## cell the cutaway would be showing.
 func _gather_segments(side: int, plane: int, into: Dictionary) -> void:
 	for id: int in _network.segments(plane):
 		var middle := TunnelNetwork.segment_origin(id).lerp(TunnelNetwork.segment_end(id), 0.5)
 		var cell := _network.world_to_cell(Vector3(middle.x, 0.0, middle.y))
 		if not _sight.knows(side, plane, cell):
 			continue
-		into[_key(Kind.SEGMENT, plane, TunnelNetwork.segment_fixed(id), TunnelNetwork.segment_angle(id))] = (
+		into[_key(Kind.SEGMENT, plane, TunnelNetwork.segment_fixed(id), TunnelNetwork.segment_extra(id))] = (
 			_network.tunnel_known_bits(plane, cell)
 		)
 
@@ -206,10 +217,13 @@ func _gather_rock(side: int, plane: int, into: Dictionary) -> void:
 		into[_key(Kind.ROCK, plane, cell)] = _network.rock_known_bits(plane, cell)
 
 
-## `extra` carries a segment's angle and is zero for every other kind. Part of the KEY rather than
-## of the value, because two strokes from the same origin at different angles are two different
-## things -- folding the angle into the payload would have the diff treat a turn as an edit to the
-## stroke that was already there, and the client would never be told about one of them.
+## `extra` carries a segment's angle AND its length, and is zero for every other kind. Part of the
+## KEY rather than of the value, because two strokes from the same origin at different angles are
+## two different things -- folding the angle into the payload would have the diff treat a turn as
+## an edit to the stroke that was already there, and the client would never be told about one of
+## them. The length is in the key for exactly the same reason and it is the same failure: a scrape
+## and a full stroke from one spot along one heading are two pieces of tunnel, and a diff that
+## could not tell them apart would send one and swallow the other.
 func _key(kind: int, plane: int, cell: Vector2i, extra: int = 0) -> String:
 	return "%d:%d:%d:%d:%d" % [kind, plane, cell.x, cell.y, extra]
 

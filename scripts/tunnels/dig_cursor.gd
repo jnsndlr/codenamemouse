@@ -88,13 +88,18 @@ func show_stroke(
 		return
 
 	visible = true
-	_fit_stroke(network.wall_height)
+	# SIZED FROM THE STROKE, NOT FROM THE CONSTANT. A class that scrapes 37cm at a time must see a
+	# 37cm box, or the cursor promises a metre of corridor and delivers a third of one -- which
+	# reads as the dig having half failed rather than as the class being bad at digging, and the
+	# whole point of paying for the difference in LENGTH is that the length is what you can see.
+	var length := TunnelNetwork.segment_length(id)
+	_fit_stroke(network.wall_height, length)
 	var origin := TunnelNetwork.segment_origin(id)
 	var heading := TunnelNetwork.angle_direction(TunnelNetwork.segment_angle(id))
 	# Parked at the stroke's MIDDLE, because the box is centred on its own origin. The stroke
 	# itself starts inside the tunnel you are branching from, so the near half of the box overlaps
 	# ground that is already open -- which reads correctly: it is the far half you are buying.
-	var middle := origin + heading * (TunnelNetwork.SEG_LENGTH * 0.5)
+	var middle := origin + heading * (length * 0.5)
 	global_position = Vector3(middle.x, network.plane_y(plane), middle.y)
 	# Godot's -Z is forward, and the stroke's heading is an XZ vector; the negation is what keeps
 	# the box pointing along the tunnel rather than across it.
@@ -135,11 +140,14 @@ func _fit_cell(height: float) -> void:
 
 
 ## The same, sized to a stroke: width across, length along -- and length is Z, because that is the
-## axis [method show_stroke] turns to face down the tunnel. Read off the segment constants rather
-## than off the cell, so that if a stroke ever stops being exactly a metre the box does not
-## quietly keep claiming it is.
-func _fit_stroke(height: float) -> void:
-	_fit(Vector3(TunnelNetwork.SEG_WIDTH, height, TunnelNetwork.SEG_LENGTH))
+## axis [method show_stroke] turns to face down the tunnel.
+##
+## THE LENGTH IS PASSED IN NOW, and the caveat this header used to carry has come true: a stroke
+## stopped being exactly a metre when length became the class dial, so the box takes the number off
+## the segment it is describing. The WIDTH is still a constant, because a corridor is one cell wide
+## for everybody -- what a class buys is how far it gets, not how much room it leaves.
+func _fit_stroke(height: float, length: float) -> void:
+	_fit(Vector3(TunnelNetwork.SEG_WIDTH, height, length))
 
 
 ## Cached on the SIZE rather than on the height alone, since two callers now want two different

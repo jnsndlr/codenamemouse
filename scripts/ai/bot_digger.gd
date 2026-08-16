@@ -27,11 +27,25 @@ extends RefCounted
 ## section 4 asks digging to be. A bot that cut a corridor instantly would make the tunnel free,
 ## and free tunnels would answer M5's question with the wrong game.
 
-## Seconds to open one tile at `dig_speed` 1.0. THE SAME NUMBER dig_controller.gd charges a
-## player, deliberately duplicated as a reference rather than reached for through the scene: the
-## controller is the player's node and a bot has no business owning one, but if these two ever
-## disagree, the crew that digs faster will be the one nobody is watching.
-const CELL_SECONDS: float = 0.5
+## Seconds for this bot to open one CELL.
+##
+## `[REVISED]` DERIVED NOW, AND FROM THE NETWORK'S OWN NUMBERS. This used to be a hardcoded 0.5
+## with a header explaining that it was deliberately duplicated from dig_controller.gd, and warning
+## that if the two ever disagreed the crew digging faster would be the one nobody was watching.
+## That warning was about to come true: the player's dig moved to a per-plane clock and a per-class
+## STROKE LENGTH, and a bot left on a flat half-second would have cut a full metre for the price
+## of an Engineer's while playing a Generalist. Both halves now come from [TunnelNetwork], which is
+## the object a bot legitimately holds -- so the duplication that made the warning necessary is
+## simply gone, rather than being watched.
+##
+## A CELL RATHER THAN A STROKE, and that is what the conversion in here is for. Bots choose a
+## neighbouring CELL and cut it with [method TunnelNetwork.dig], which lays one full metre however
+## short the digger's own stroke is; charging them their class's stroke time for a whole metre of
+## corridor would make a Generalist bot nearly three times faster underground than the player
+## beside it. Paying by the metre keeps a bot's metres per second identical to a player's.
+static func cell_seconds(bot: Mouse, plane: int) -> float:
+	var stroke: float = TunnelNetwork.SEG_LENGTHS[bot.get_dig_stroke()]
+	return TunnelNetwork.dig_seconds_at(plane) * (TunnelNetwork.SEG_LENGTH / maxf(stroke, 0.01))
 
 ## How near the goal the bot has to get before it stops tunnelling and comes up, in metres. It
 ## surfaces SHORT of the objective rather than under it: coming up on top of the banner would make
@@ -316,7 +330,7 @@ func _underground(
 	# walking INTO an unopened cell is walking into a wall, and the animation of a mouse jogging
 	# on the spot against earth is exactly what a dig should not look like.
 	if not network.is_dug(plane, _target):
-		_progress += delta * bot.get_dig_speed() / CELL_SECONDS
+		_progress += delta / maxf(cell_seconds(bot, plane), 0.01)
 		_intent = "cutting a corridor"
 		if _progress < 1.0:
 			return {"at": bot.global_position, "plane": plane}

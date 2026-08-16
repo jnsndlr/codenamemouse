@@ -432,13 +432,19 @@ func _fit_body() -> void:
 		_visual.scale = Vector3(wide, height_ratio(), wide)
 
 
-## How fast this mouse opens a tile, as a multiplier on the dig controller's own timing.
+## How far this mouse gets in one stroke of digging, as an index into
+## [constant TunnelNetwork.SEG_LENGTHS].
 ##
 ## EVERYBODY DIGS; the Engineer is three times better at it. GDD section 4 made terrain the
 ## Engineer's exclusive capability and this is a deliberate revision of that -- the note is in
 ## the GDD. A crew without an Engineer can still get underground, slowly, in a pinch.
-func get_dig_speed() -> float:
-	return MouseClass.definition_of(mouse_class).dig_speed
+##
+## THE INDEX RATHER THAN THE METRES, because the index is what a stroke's identity is built from
+## and what travels on the wire. Handing out the raw float would leave every caller to snap it,
+## and two callers that snapped differently would be two machines disagreeing about which stroke
+## was just cut.
+func get_dig_stroke() -> int:
+	return TunnelNetwork.length_index_for(MouseClass.definition_of(mouse_class).dig_stroke)
 
 
 ## Whether this mouse fits down a shaft at all (GDD section 4 -- the Juggernaut does not).

@@ -1178,7 +1178,8 @@ func _send_earth() -> void:
 			out.put_u8(entry[1])
 			out.put_16(entry[2].x)
 			out.put_16(entry[2].y)
-			# The angle, for a SEGMENT; zero for everything else. See TunnelView.ENTRY_SIZE.
+			# The angle and length packed into one byte, for a SEGMENT; zero for everything else.
+			# See TunnelView.ENTRY_SIZE and TunnelNetwork.segment_extra.
 			out.put_u8(entry[3])
 			out.put_u8(entry[4])
 		_transport.send(peer, out.data_array, true)

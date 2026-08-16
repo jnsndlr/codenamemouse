@@ -107,12 +107,52 @@ const FIELD_HALF_TEXELS: int = MASK_HALF_CELLS * TunnelContour.TEXELS_PER_METRE
 ## Chunks across the field. The rebuild unit; see [TunnelContour].
 const FIELD_CHUNKS: int = FIELD_TEXELS / TunnelContour.CHUNK_TEXELS
 
-## How long one stroke of digging is, and how wide the corridor it leaves. Unchanged from the
-## cell the tunnel used to be built out of, deliberately: dig pacing, the Engineer's reach and
-## every bot timing were tuned against a metre, and the point of this change is the ANGLE.
+## The longest a stroke can be, and how wide the corridor it leaves. A metre, still, because the
+## cell the tunnel used to be built out of is what the Engineer's reach and every bot timing were
+## tuned against.
+##
+## NO LONGER THE ONLY LENGTH, though: see [constant SEG_LENGTHS]. This is the full stroke and the
+## default everywhere, so anything that never asks for a shorter one behaves exactly as before.
 const SEG_LENGTH: float = 1.0
 const SEG_WIDTH: float = 1.0
 const SEG_HALF_WIDTH: float = SEG_WIDTH * 0.5
+
+## How long a stroke is, as a small table a segment's id can point into.
+##
+## `[REVISED]` LENGTH IS THE CLASS DIAL NOW, AND TIME IS THE DEPTH DIAL. Digging used to differ by
+## class in SECONDS -- an Engineer took 0.5s over the same metre a Generalist took 1.43s over -- and
+## the trouble with that is a metre is a metre: what the slower class experienced was not a slower
+## dig, it was a longer wait for the identical result, with the difference living in a progress bar
+## nobody else can see. Every class now cuts on the same clock and the Engineer's stroke simply
+## goes further, so the difference is in the world: a corridor that leaps a metre at a time against
+## one that creeps 37cm at a time. See [method dig_seconds_at] for the half of this that is depth.
+##
+## A TABLE RATHER THAN A FLOAT, and that is forced by the same rule that quantises the angle (see
+## [constant ANGLE_STEPS]): length is part of a segment's identity now, so it has to survive the
+## wire bit-identical or a client draws a stroke the server has never heard of. Two bits index it,
+## and those two bits were already being sent -- the angle needs six of the byte it travels in.
+##
+## EVERY ENTRY IS A WHOLE NUMBER OF SIXTEENTHS, which is not decoration. Origins snap to sixteenths
+## ([constant ORIGIN_SCALE]) and a chained stroke starts where the last one ended, so a length off
+## that grid would round a little differently every time and consecutive scrapes would advance by
+## unequal amounts. 0.375 is 6/16 exactly; 0.33 would not be.
+##
+## Slots 2 and 3 are spare, and are a ladder rather than filler so a class that wants something
+## between the two in use has a value to take.
+const SEG_LENGTHS: Array[float] = [1.0, 0.375, 0.75, 0.5]
+## The full-metre stroke: the default for every caller that does not care, and the Engineer's.
+const FULL_STROKE: int = 0
+## Two bits of the id and two bits of the wire byte, which is exactly [constant SEG_LENGTHS].
+const LENGTH_MASK: int = 3
+
+## Seconds to cut one stroke, by plane. THE DEPTH DIAL, and the same for every class -- the earth
+## is harder down here for everybody, which is what GDD section 3 asks for and what the dig
+## controller's own header has been promising since the timing was first written.
+##
+## Plane 0 is the lawn and is never dug; its entry is a placeholder so the array can be indexed by
+## plane without an offset nobody would remember. Plane 1 keeps the 0.5s digging has always cost,
+## so this arrives as a change to the deep planes only.
+const PLANE_DIG_SECONDS: Array[float] = [0.5, 0.5, 0.75, 1.0]
 
 ## Directions a segment may point. 64 steps is 5.6 degrees -- past the point where a chain of
 ## them reads as faceted, and small enough to be one byte on the wire.
@@ -641,27 +681,66 @@ func in_bounds(cell: Vector2i) -> bool:
 # ------------------------------------------------------------------------- segments
 
 
-## A segment's identity, packed: where it starts and which way it points, and nothing else.
+## A segment's identity, packed: where it starts, which way it points, and how far it runs.
 ##
 ## ORIGIN SNAPPED TO SIXTEENTHS FIRST, which is what makes the id a real identity rather than a
 ## hash. Two digs at the same place must produce the same key or the second one lays a duplicate
 ## segment inside the first -- invisible in the world, twice the geometry, and a cell that needs
 ## un-digging twice before it closes. Snapping makes "the same place" a decidable question.
-static func segment_id(origin: Vector2, angle: int) -> int:
+##
+## LENGTH IS IN THE ID BECAUSE IT IS PART OF THE IDENTITY. Two strokes from the same spot along the
+## same heading, one a metre and one a scrape, are different pieces of tunnel -- and if they shared
+## a key the shorter one would be silently swallowed by the longer, or worse, adopted from the wire
+## as the longer and drawn a corridor too far. Two bits, between the origin and the angle.
+##
+## DEFAULTED, so every caller that predates the dial -- every audit and probe in tools/, which
+## build their networks a full metre at a time -- keeps the behaviour it was written against.
+static func segment_id(origin: Vector2, angle: int, length: int = FULL_STROKE) -> int:
 	var x := clampi(roundi(origin.x * ORIGIN_SCALE) + ID_BIAS, 0, ID_MASK)
 	var y := clampi(roundi(origin.y * ORIGIN_SCALE) + ID_BIAS, 0, ID_MASK)
-	return (x << 18) | (y << 6) | (posmod(angle, ANGLE_STEPS) as int)
+	return (
+		(x << 20) | (y << 8) | ((length & LENGTH_MASK) << 6) | (posmod(angle, ANGLE_STEPS) as int)
+	)
 
 
 static func segment_origin(id: int) -> Vector2:
 	return Vector2(
-		float(((id >> 18) & ID_MASK) - ID_BIAS) / ORIGIN_SCALE,
-		float(((id >> 6) & ID_MASK) - ID_BIAS) / ORIGIN_SCALE
+		float(((id >> 20) & ID_MASK) - ID_BIAS) / ORIGIN_SCALE,
+		float(((id >> 8) & ID_MASK) - ID_BIAS) / ORIGIN_SCALE
 	)
 
 
 static func segment_angle(id: int) -> int:
 	return id & (ANGLE_STEPS - 1)
+
+
+## Which entry of [constant SEG_LENGTHS] this stroke was cut at.
+static func segment_length_index(id: int) -> int:
+	return (id >> 6) & LENGTH_MASK
+
+
+## How far this stroke actually runs, in metres.
+static func segment_length(id: int) -> float:
+	return SEG_LENGTHS[segment_length_index(id)]
+
+
+## The nearest table entry to a length in metres, for anything holding a tuned float -- a class
+## resource, say. Snapped rather than trusted, because only the four in the table can be said on
+## the wire and a resource edited to 0.4 must become a stroke that exists rather than a silent 0.
+static func length_index_for(metres: float) -> int:
+	var best := FULL_STROKE
+	var closest := INF
+	for i in range(SEG_LENGTHS.size()):
+		var gap := absf(SEG_LENGTHS[i] - metres)
+		if gap < closest:
+			closest = gap
+			best = i
+	return best
+
+
+## Seconds to cut one stroke on this plane. See [constant PLANE_DIG_SECONDS].
+static func dig_seconds_at(plane: int) -> float:
+	return PLANE_DIG_SECONDS[clampi(plane, 0, PLANE_COUNT - 1)]
 
 
 ## A segment's origin in sixteenths of a metre, which is how it travels.
@@ -672,7 +751,26 @@ static func segment_angle(id: int) -> int:
 ## point the client is drawing a stroke the server has never heard of, one sixteenth of a metre
 ## from one it has.
 static func segment_fixed(id: int) -> Vector2i:
-	return Vector2i(((id >> 18) & ID_MASK) - ID_BIAS, ((id >> 6) & ID_MASK) - ID_BIAS)
+	return Vector2i(((id >> 20) & ID_MASK) - ID_BIAS, ((id >> 8) & ID_MASK) - ID_BIAS)
+
+
+## Everything about a stroke that is not its origin, in the ONE BYTE the wire already carries for
+## it. The angle needs six bits of that byte ([constant ANGLE_STEPS] is 64) and the length needs
+## two, so a stroke's full identity still costs exactly what an angle used to -- no wider entry, no
+## bigger packet, and [constant TunnelView.ENTRY_SIZE] untouched.
+##
+## A bare angle unpacks to a full stroke, which is what makes this safe to receive from anything
+## that has not learnt about lengths.
+static func segment_extra(id: int) -> int:
+	return (segment_length_index(id) << 6) | segment_angle(id)
+
+
+static func extra_angle(extra: int) -> int:
+	return extra & (ANGLE_STEPS - 1)
+
+
+static func extra_length(extra: int) -> int:
+	return (extra >> 6) & LENGTH_MASK
 
 
 static func fixed_origin(fixed: Vector2i) -> Vector2:
@@ -693,8 +791,12 @@ static func direction_angle(direction: Vector2) -> int:
 	return posmod(step, ANGLE_STEPS) as int
 
 
+## Where a stroke finishes. THE ONE PLACE LENGTH ENTERS THE GEOMETRY: the cell index, the chunk
+## dirtying, the earth test and the contour all reach the stroke through this and through
+## [method segment_origin], so a shorter stroke becomes a shorter piece of tunnel everywhere at
+## once rather than in four places that have to be kept agreeing.
 static func segment_end(id: int) -> Vector2:
-	return segment_origin(id) + angle_direction(segment_angle(id)) * SEG_LENGTH
+	return segment_origin(id) + angle_direction(segment_angle(id)) * segment_length(id)
 
 
 ## Every segment on a plane, as ids.
@@ -737,16 +839,38 @@ func segment_cells(id: int) -> Array[Vector2i]:
 ## SAMPLED AT THE FIELD'S OWN RESOLUTION, which is what makes "any earth" a decidable question
 ## rather than a matter of luck. A wall thinner than one texel is thinner than the world is stored,
 ## and the contour has already merged the two sides of it -- so there is nothing left there to dig.
-func opens_ground(plane: int, origin: Vector2, angle: int) -> bool:
+##
+## `[REVISED]` AND IT IS WRONG A THIRD WAY, which only short strokes could show. This walked the
+## SPINE, so it reached at most `length` past the origin -- but a stroke is a capsule, and its
+## rounded end carries it half a width further than that. A stroke roots on the centreline of
+## tunnel you already have (see [DigController._aimed_id]), and that tunnel's own end cap already
+## extends [constant SEG_HALF_WIDTH] past the same point. So for anything shorter than half a metre
+## the entire spine lies inside ground that is already open, this answered false, and the cursor
+## simply vanished: the Generalist's 0.375m scrape could never be cut at all, anywhere, ever. At a
+## full metre the far half of the spine escapes the cap and the bug stayed hidden.
+##
+## THE CAPSULE IS WHAT GETS DUG, SO THE CAPSULE IS WHAT GETS ASKED. Sampling runs to
+## `length + SEG_HALF_WIDTH`, with the lateral offsets drawing in through the rounded end so they
+## follow its actual edge -- a square sample pattern out there would claim earth beside the tip
+## that the stroke does not reach and would promise a dig that then takes nothing.
+func opens_ground(plane: int, origin: Vector2, angle: int, length: int = FULL_STROKE) -> bool:
 	if plane <= 0 or plane >= PLANE_COUNT:
 		return false
 	var direction := angle_direction(angle)
 	var across := Vector2(-direction.y, direction.x)
-	var along_steps := maxi(2, ceili(SEG_LENGTH / TunnelContour.TEXEL))
+	var span := SEG_LENGTHS[length & LENGTH_MASK]
+	var reach := span + SEG_HALF_WIDTH
+	var along_steps := maxi(2, ceili(reach / TunnelContour.TEXEL))
 	for i in range(along_steps + 1):
-		var spine := origin + direction * (SEG_LENGTH * float(i) / float(along_steps))
+		var down := reach * float(i) / float(along_steps)
+		# Past the end of the spine the capsule is a half-disc, so the offsets come in with it.
+		var half := SEG_HALF_WIDTH
+		if down > span:
+			var past := down - span
+			half = sqrt(maxf(0.0, SEG_HALF_WIDTH * SEG_HALF_WIDTH - past * past))
+		var spine := origin + direction * down
 		for offset: float in [0.0, -0.6, 0.6]:
-			if _is_earth(plane, spine + across * (SEG_HALF_WIDTH * offset)):
+			if _is_earth(plane, spine + across * (half * offset)):
 				return true
 	return false
 
@@ -1525,12 +1649,14 @@ func can_stand(plane: int, cell: Vector2i) -> bool:
 ## either of its ends being inside it, and a stroke that quietly cut through stone would make the
 ## seam a suggestion. Refused whole for now; stopping short at the stone is stage 3's job, and is
 ## the better answer.
-func dig_segment(plane: int, origin: Vector2, angle: int, team: int = -1) -> bool:
+func dig_segment(
+	plane: int, origin: Vector2, angle: int, team: int = -1, length: int = FULL_STROKE
+) -> bool:
 	if _puppet:
 		return false
 	if plane <= 0 or plane >= PLANE_COUNT:
 		return false
-	var id := segment_id(origin, angle)
+	var id := segment_id(origin, angle, length)
 	if _segments[plane].has(id):
 		return false
 
@@ -1568,7 +1694,7 @@ func dig_segment(plane: int, origin: Vector2, angle: int, team: int = -1) -> boo
 	# gained, quite correctly -- so asked first it swallows a dig aimed squarely at a seam and
 	# returns a silent false, and the player holds the button on rock and is told nothing. Which is
 	# the exact failure the seam's spoken refusal exists to prevent, reintroduced by a reordering.
-	if not opens_ground(plane, origin, angle):
+	if not opens_ground(plane, origin, angle, length):
 		return false
 
 	_segments[plane][id] = true
@@ -1832,10 +1958,12 @@ func set_puppet(on: bool) -> void:
 ## an enemy corridor makes the new cell shared -- and re-running them here against a partial copy
 ## of the world would reach a different answer from the server's for the same cell. There is one
 ## place that decides who knows what, and it is not this end.
-func adopt_segment(plane: int, origin: Vector2, angle: int, bits: int) -> bool:
+## `extra` IS THE PACKED BYTE, not a bare angle -- see [method segment_extra]. A bare angle still
+## arrives correctly, because an angle with its top two bits clear unpacks to a full stroke.
+func adopt_segment(plane: int, origin: Vector2, extra: int, bits: int) -> bool:
 	if plane <= 0 or plane >= PLANE_COUNT:
 		return false
-	var id := segment_id(origin, angle)
+	var id := segment_id(origin, extra_angle(extra), extra_length(extra))
 	var fresh := not _segments[plane].has(id)
 	if fresh:
 		_segments[plane][id] = true
@@ -1921,10 +2049,12 @@ func forget_shoring(plane: int, cell: Vector2i) -> bool:
 ## It is a rule on a host and a fact on a client, which is why it is here rather than in
 ## `collapse`: collapsing refuses on a shaft cell, and forgetting a shaft you glimpsed has to
 ## work.
-func forget_segment(plane: int, origin: Vector2, angle: int) -> bool:
+## `extra` IS THE PACKED BYTE, exactly as [method adopt_segment] receives it: a stroke is forgotten
+## by the same identity it was adopted under, or a scrape would be un-drawn as if it were a metre.
+func forget_segment(plane: int, origin: Vector2, extra: int) -> bool:
 	if plane <= 0 or plane >= PLANE_COUNT:
 		return false
-	var id := segment_id(origin, angle)
+	var id := segment_id(origin, extra_angle(extra), extra_length(extra))
 	if not _segments[plane].has(id):
 		return false
 	# Whatever cells this leaves empty take their shoring and their shaft record with them. Done
