@@ -215,7 +215,11 @@ func _check_thin(network: TunnelNetwork) -> int:
 		print("   straight wall unmoved to within a hundredth of a texel")
 
 	# A bar thinner than the rule, and long enough that no rule about islands would look at it.
-	var wafer := Vector2(3.0, 0.25)
+	#
+	# SIZED OFF THE SETTING, NOT OFF A ROUND NUMBER. The rule is set below what a 20cm wall's
+	# deepest SAMPLE reads, so a test bar has to be thinner than the grid's own margin or it walks
+	# straight through a rule that is working perfectly.
+	var wafer := Vector2(3.0, 0.15)
 	bad += _earth_before(network, wafer)
 	if _thin_after(network, _box(network, wafer)) > 0:
 		printerr("   a %.2fm wafer survived a %.2fm minimum" % [
@@ -243,7 +247,7 @@ func _check_thin(network: TunnelNetwork) -> int:
 		print("   slab kept, bar %d corner samples eased by the disc" % eased[0])
 
 	# And the cusp. Trimmed back to where the disc first fits, and no further.
-	var wedge := _wedge(network, 3.0, deg_to_rad(15.0))
+	var wedge := _wedge(network, 3.0, deg_to_rad(5.0))
 	var whole := _earth_count(wedge)
 	var trimmed := _thin_loss(network, wedge)
 	if trimmed[1] > 0:
@@ -389,7 +393,7 @@ func _check_rock(network: TunnelNetwork) -> int:
 
 	# Small enough for the island rule and thin enough for the thickness rule, so one nub in one
 	# rock cell asks both questions at once. It has to survive both.
-	var nub := _box(network, Vector2(0.3, 0.3))
+	var nub := _box(network, Vector2(0.15, 0.15))
 	network._rock[PLANE][cell] = true
 	network._thin_earth(PLANE, nub, wide, Vector2.ZERO)
 	if _earth_count(nub) == 0:
@@ -473,9 +477,9 @@ func _report_cost() -> void:
 	var settings: Array = [
 		["both off", 0.0, 0.0],
 		["islands 0.75m", 0.75, 0.0],
-		["thickness 0.50m", 0.0, 0.5],
-		["both", 0.75, 0.5],
-		["both, generous", 1.0, 0.75],
+		["thickness 0.08m", 0.0, 0.075],
+		["both", 0.75, 0.075],
+		["both, generous", 1.0, 0.25],
 	]
 	for setting: Array in settings:
 		var scene := (load("res://scenes/maps/arena.tscn") as PackedScene).instantiate()

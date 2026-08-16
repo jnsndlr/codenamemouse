@@ -267,28 +267,20 @@ func _check_dig_flow() -> void:
 
 	_findings.clear()
 	var neighbour := Vector2i(0, 1)
-	var slow := Vector2i(0, -1)
 	var far := Vector2i(0, 9)
 
-	# Adjacent, within reach, undug: an ENGINEER should open it after dig_seconds of holding.
-	# Forty frames is two thirds of a second against a dig_seconds of 0.5.
+	# Adjacent, within reach, undug: ONE FRAME of a press opens it, for anybody.
+	#
+	# `[REVISED]` THE FIRST STROKE IS FREE AND INSTANT, AND THAT IS THE DESIGN RATHER THAN A HOLE IN
+	# IT. Digging used to charge for a stroke before giving it -- hold for `dig_seconds`, receive a
+	# metre -- so the class spread was visible in the very first tile and this check could read it
+	# there. The press now cuts at once and the cost is the recharge afterwards, which moves the
+	# spread from the first stroke to every stroke after it. Same ground per minute, same ratio
+	# between the classes, asked one stroke further along.
 	player.set_class(MouseClass.ENGINEER)
-	_hold_dig(player, controller, network.cell_to_world(1, neighbour), 40)
+	_hold_dig(player, controller, network.cell_to_world(1, neighbour), 1)
 	if not network.is_dug(1, neighbour):
-		_fail("DIG_FLOW", "an Engineer holding on an adjacent tile did not open it")
-
-	# THE SPREAD, WHICH IS THE WHOLE POINT OF THE CLASS. Everybody can dig; the Engineer is about
-	# three times faster (GDD section 4, revised -- see the note there). Both halves are asserted
-	# because both are design: a Generalist must NOT open a tile in the time an Engineer does, or
-	# the Engineer is decorative -- and must open it eventually, or a crew that loses its Engineer
-	# is locked out of a third of the map.
-	player.set_class(MouseClass.GENERALIST)
-	_hold_dig(player, controller, network.cell_to_world(1, slow), 40)
-	if network.is_dug(1, slow):
-		_fail("DIG_FLOW", "a Generalist dug as fast as an Engineer")
-	_hold_dig(player, controller, network.cell_to_world(1, slow), 100)
-	if not network.is_dug(1, slow):
-		_fail("DIG_FLOW", "a Generalist could not open a tile however long it held")
+		_fail("DIG_FLOW", "one press did not open the tile it was aimed at")
 
 	# Out of reach: must stay shut no matter how long you hold.
 	_hold_dig(player, controller, network.cell_to_world(1, far), 60)
@@ -309,6 +301,9 @@ func _check_dig_flow() -> void:
 	# not are indistinguishable from the outside. Two guards need two subjects.
 	var mine := Vector2i(-1, 0)
 	player.set_class(MouseClass.ENGINEER)
+	# CUMULATIVE, SO IT IS READ AS A DELTA. `cells_cut` counts everything this controller has opened
+	# since the scene was built, and the checks above have opened plenty.
+	var claimed: int = controller.cells_cut()
 	player.set_puppet(true)
 	network.set_puppet(true)
 	_hold_dig(player, controller, network.cell_to_world(1, mine), 60)
@@ -324,20 +319,64 @@ func _check_dig_flow() -> void:
 	# it is asked of the network rather than through a control.
 	if network.dig(1, mine, Team.BLUE):
 		_fail("DIG_FLOW", "the network let something cut earth on a client")
-	# Two: the controller does not reach for it, which is visible in the BAR rather than in the
-	# ground. A puppet whose hold completes sits at full and waits for the server's own cut; the
-	# alternative -- calling `dig`, being refused, and zeroing -- fills the bar a second time
-	# during the round trip and reads as a dig that did not take.
-	if controller.get_dig_progress() < 1.0:
-		_fail("DIG_FLOW", "a client's dig bar restarted instead of holding full while it waited")
+	# Two: the controller does not reach for the earth, which is visible in what it CLAIMS rather
+	# than in the ground -- the network's refusal above would hide a controller that tried.
+	if controller.cells_cut() != claimed:
+		_fail("DIG_FLOW", "a client's controller counted a cut it cannot have made")
+
+	# `[REVISED]` AND IT DOES NOT BANK STROKES WHILE IT WAITS. Under the held bar the invariant here
+	# was the opposite one -- a puppet sat at FULL and waited, because zeroing would have re-filled
+	# the bar during the round trip and read as a dig that did not take. A recharge has no such
+	# problem and the honest rule is the simpler one: a client's controls work exactly like
+	# everybody's, and only the earth is not its to move.
+	#
+	# READ ONE FRAME AFTER A PRESS, from a charge deliberately refilled first, because that is the
+	# only moment the answer cannot be two things. Asked at the end of a long hold it depends on
+	# whether the frame count happens to divide by the cooldown, which is a check that passes or
+	# fails on arithmetic nobody meant to assert.
+	_hold_dig(player, controller, network.cell_to_world(1, mine), 90, false)
+	if controller.get_dig_charge() < 1.0:
+		_fail("DIG_FLOW", "a client's recharge did not refill with the button up")
+	_hold_dig(player, controller, network.cell_to_world(1, mine), 1)
+	if controller.get_dig_charge() >= 1.0:
+		_fail("DIG_FLOW", "a client's press cost no recharge -- it banks strokes while it waits")
 
 	network.set_puppet(false)
 	player.set_puppet(false)
 	_hold_dig(player, controller, network.cell_to_world(1, mine), 60)
 	if not network.is_dug(1, mine):
 		_fail("DIG_FLOW", "and could not dig again once it was the authority")
-	if controller.get_dig_progress() > 0.0:
-		_fail("DIG_FLOW", "and an authoritative dig left the bar full instead of moving on")
+	if controller.cells_cut() <= claimed:
+		_fail("DIG_FLOW", "and the cut it made once it was the authority went uncounted")
+
+	# THE SPREAD, WHICH IS THE WHOLE POINT OF THE CLASS. Everybody can dig; the Engineer is about
+	# three times faster (GDD section 4, revised -- see the note there). Both halves are asserted
+	# because both are design: a Generalist must NOT keep up with an Engineer, or the Engineer is
+	# decorative -- and must get through eventually, or a crew that loses its Engineer is locked out
+	# of a third of the map.
+	#
+	# MEASURED AS THE GAP BETWEEN TWO STROKES, which is where the spread lives now and the only
+	# place it can be read from the ground.
+	#
+	# AND LAST IN THE CHECK, WHICH IS LOAD-BEARING. This is the only part that runs a CORRIDOR rather
+	# than opening one tile, and a corridor claims a cell every metre of the way -- including, on any
+	# heading, the ring of cells the checks above need to find as solid earth. Put in the middle it
+	# turned "a tile opened without the dig button held" and "a client opened a cell for itself" into
+	# passes for the wrong reason, both of them reporting a cell some earlier check had dug. Nothing
+	# below reads the ground, so the scribbling belongs at the end.
+	var fast := _stroke_gap(player, controller, network, MouseClass.ENGINEER, Vector3(1.5, 0.0, 1.5))
+	var plodding := _stroke_gap(
+		player, controller, network, MouseClass.GENERALIST, Vector3(-1.5, 0.0, -1.5)
+	)
+	if fast < 0 or plodding < 0:
+		_fail("DIG_FLOW", "a held button did not produce two strokes: %d and %d" % [
+			fast, plodding
+		])
+	elif plodding <= fast:
+		_fail("DIG_FLOW", "a Generalist recharged as fast as an Engineer: %d frames against %d" % [
+			plodding, fast
+		])
+
 
 	player.set_physics_process(true)
 	controller.set_physics_process(true)
@@ -351,6 +390,35 @@ func _check_dig_flow() -> void:
 	for finding: String in _findings:
 		print("   FAIL %s" % finding)
 	_total_failures += _findings.size()
+
+
+## Frames between one stroke and the next, for a class leaning on the dig button.
+##
+## THE COOLDOWN, MADE OBSERVABLE. The class spread used to show up in how long the FIRST tile took;
+## the first stroke is instant for everybody now, so the only place left to read it from the ground
+## is the gap to the second one.
+##
+## COUNTED FROM THE FIRST STROKE THIS CLASS CUTS, not from the first frame, because the recharge is
+## the digger's and survives a class swap: the previous class may well have left one running, and
+## the wait it bought is not this one's to be measured by.
+func _stroke_gap(
+	player: Mouse, controller: Node, network: TunnelNetwork, mouse_class: int, at: Vector3
+) -> int:
+	player.set_class(mouse_class)
+	at.y = network.plane_y(1)
+	var seen := network.segment_count(1)
+	var first := -1
+	for i in range(400):
+		_hold_dig(player, controller, at, 1)
+		var now := network.segment_count(1)
+		if now <= seen:
+			continue
+		seen = now
+		if first < 0:
+			first = i
+		else:
+			return i - first
+	return -1
 
 
 ## Hold the dig button at a world point for `frames` ticks of the controller's own update.

@@ -15,11 +15,11 @@ extends SceneTree
 ##                        a stroke at.
 ##   island_after.png  -- the same loop, open. No nub, no stub of wall where it stood, and no seam
 ##                        across the floor where the chunk borders run.
-##   sliver_before.png -- two passes cut 1.2m apart, and the 20cm wafer of earth left standing
-##                        between them. It is joined to the map at both ends, which is why no rule
-##                        about islands will ever touch it.
-##   sliver_after.png  -- the same two passes, as the one room they were always meant to be. The
-##                        wafer is gone; the walls either side of it have not moved.
+##   sliver_before.png -- two passes cut 1.2m apart at a 0.50m minimum: the 20cm divider between
+##                        them does not survive, and what should be two corridors is one room.
+##   sliver_after.png  -- the same two passes at the shipped minimum. The divider stands. This pair
+##                        is the setting rather than the rule: see TunnelNetwork.earth_min_thickness
+##                        for why the ceiling is set by what the field can see and not by taste.
 
 const PLANE: int = 1
 
@@ -41,6 +41,7 @@ func _initialize() -> void:
 	# THE THICKNESS RULE HELD OFF WHILE THE ISLAND PAIR IS TAKEN, since it would open the scrap out
 	# first and there would be nothing to photograph. Each pair changes one setting and leaves the
 	# other where it was.
+	var shipped := network.earth_min_thickness
 	network.earth_min_thickness = 0.0
 
 	# A ring tight enough to close on itself: five-ish sides of a pentagon, each stroke starting
@@ -77,11 +78,10 @@ func _initialize() -> void:
 	network._rebuild_mask(PLANE)
 	await _shoot(player, network, stand, "/tmp/island_after.png")
 
-	# TWO PASSES, CUT JUST TOO CLOSE TOGETHER, which is how a player actually produces a wafer:
-	# not by doing anything odd, but by widening a corridor and coming back a hand's width shy of
-	# the last pass. A metre of tunnel and a 1.2m spacing leave twenty centimetres of earth standing
-	# between them -- too thin to hide behind, too thin to be a route, and attached to the map at
-	# both ends so that no rule about islands will ever look at it.
+	# TWO PASSES, CUT JUST TOO CLOSE TOGETHER: a metre of tunnel at 1.2m spacing leaves twenty
+	# centimetres of earth standing between them. Whether that divider is debris or a wall is the
+	# whole of what `earth_min_thickness` decides, and it is a decision a player will make by
+	# accident dozens of times a match, so it is worth two photographs.
 	var north := TunnelNetwork.ANGLE_STEPS / 4
 	var first := Vector2(6.0, -14.0)
 	var second := Vector2(7.2, -14.0)
@@ -90,20 +90,24 @@ func _initialize() -> void:
 		network.dig_segment(PLANE, second, north, Team.BLUE)
 		first = TunnelNetwork.segment_end(TunnelNetwork.segment_id(first, north))
 		second = TunnelNetwork.segment_end(TunnelNetwork.segment_id(second, north))
-	# Stood in the left-hand pass: the wafer itself is solid earth in the first shot.
+	# Stood in the left-hand pass: the divider itself is solid earth in the second shot, and a mouse
+	# put there falls through to the respawn and photographs a lawn.
 	var along := Vector2(6.0, -9.0)
 
+	network.earth_min_thickness = 0.5
 	network._rebuild_mask(PLANE)
 	await _shoot(player, network, along, "/tmp/sliver_before.png")
 
-	network.earth_min_thickness = 0.5
+	network.earth_min_thickness = shipped
 	network._rebuild_mask(PLANE)
 	await _shoot(player, network, along, "/tmp/sliver_after.png")
 
 	print("")
 	print("wrote island_before/after.png and sliver_before/after.png in /tmp")
 	print("island: a nub standing inside the loop, then the same loop open.")
-	print("sliver: a row of teeth down a zigzag's walls, then walls that read as walls.")
+	print("sliver: a 20cm divider eaten at a 0.50m minimum, then standing at the shipped %.3fm." % [
+		shipped
+	])
 	quit()
 
 

@@ -21,13 +21,35 @@ extends MouseControl
 ## put you on.
 
 @export_group("Digging")
-## Seconds of held input to open one tile. Deliberately brisk for testing; the real number is
-## a per-plane balance dial (GDD section 3 gives deeper planes longer dig times).
+## Seconds between one stroke and the next, at a dig speed of 1.0. Deliberately brisk for testing;
+## the real number is a per-plane balance dial (GDD section 3 gives deeper planes longer dig times).
+##
+## `[REVISED]` A RECHARGE RATHER THAN A HOLD, which is the whole shape of digging now. This used to
+## be how long you had to keep the button down before a stroke landed; it is now how long you wait
+## after one has. The metre itself is instant.
+##
+## WHY THAT IS NOT THE SAME PACING WEARING A DIFFERENT HAT. A stroke costing half a second of
+## holding and a stroke costing half a second of waiting open the same amount of ground per minute,
+## and feel nothing like each other, because of WHEN the earth moves relative to the button. Held,
+## every dig begins with a stretch in which you have pressed the button and nothing has happened
+## yet -- and that stretch is the entire first impression of the control, repeated on every stroke.
+## Instant, the answer arrives on the press and the cost is paid afterwards, while you are already
+## looking at the metre you just took. The player is never once waiting to find out whether the
+## button worked.
+##
+## AND IT IS WHAT MAKES DIGGING WHILE MOVING POSSIBLE. Under the hold, walking away mid-stroke was
+## walking away from the dig; the control wanted you standing still, which fought the Engineer's
+## own job of cutting a corridor. A recharge does not care where you are when it expires.
 @export var dig_seconds: float = 0.5
 ## How far from the mouse a tile can be and still be diggable, in cells. Stops you reaching
 ## across the map with the cursor -- you dig at arm's length, which is also what keeps the
 ## Engineer stationary and vulnerable while they work.
 @export var dig_reach: float = 2.6
+## How far the cursor may wander, in metres along the corridor wall and in angle steps, before it
+## counts as pointing at a different stroke. See [method _drifted] -- without a band here the aim
+## changes several times a second on a still hand and nothing is ever dug.
+@export var aim_slack: float = 0.35
+@export_range(0, 16) var aim_slack_steps: int = 4
 
 @export_group("Transit")
 ## How far above the destination floor the mouse is placed when it moves between layers.
@@ -38,7 +60,25 @@ var _plane: int = 0
 ## unit of digging stopped being square -- and an id rather than an origin-and-angle pair because
 ## it has to be comparable in one `!=` to notice the aim moving.
 var _target: int = -1
-var _progress: float = 0.0
+## Where the cursor was the last time it named a stroke at all, on the XZ plane.
+##
+## WHAT TELLS A STILL HAND FROM A HAND THAT HAS MOVED ON, and the only thing that can. `_aimed_id`
+## answers -1 for two situations that have nothing in common: the reading flickered (the candidate
+## landed exactly on a stroke already dug, the branch root swapped between two segments the same
+## distance from the cursor, the player's own footfall walked the root a hair past reach) and the
+## player is genuinely pointing at something undiggable, like a seam. The first must not lose the
+## dig; the second must lose it, or the rock never gets to refuse out loud. The stroke cannot tell
+## them apart because in both cases there is no stroke -- but the cursor can, because in the first
+## case it has not gone anywhere.
+var _aimed_at: Vector2 = Vector2.ZERO
+## Seconds left before this digger may cut again. Zero is ready.
+##
+## ON THE DIGGER, NOT ON THE STROKE, and that is the difference between a cooldown and the progress
+## bar it replaced. Progress belonged to what you were pointing at, so looking away lost it and
+## every re-aim was a fresh start; a recharge belongs to the paws doing the work, so it runs down
+## while you walk, while you turn round, and while you decide where the next metre goes. Nothing
+## you do with the cursor can spend it or refund it.
+var _cooldown: float = 0.0
 ## Built on the first frame anybody is looking at this mouse, and never on the other nine. Ten
 ## shader-material cursors for one pair of eyes is nine wasted meshes in every match.
 var _cursor: DigCursor
@@ -69,9 +109,29 @@ func get_plane() -> int:
 	return _plane
 
 
-## 0..1 while a tile is being opened, for anything that wants to draw it.
-func get_dig_progress() -> float:
-	return _progress
+## How ready this digger is for its next stroke: 0 the instant one lands, 1 when it may cut again.
+##
+## `[RENAMED]` FROM `get_dig_progress`, because it now means the opposite thing and a reader who
+## did not know that would draw the bar backwards. Under the hold it filled as a stroke was being
+## opened and emptied when it landed; it now empties when a stroke lands and fills while you wait
+## for the next. The bar looks much the same in motion, which is exactly why the name had to stop
+## saying "progress" -- the one way to get this wrong is to assume it was left alone.
+func get_dig_charge() -> float:
+	return 1.0 - clampf(_cooldown / maxf(_dig_cooldown(), 0.0001), 0.0, 1.0)
+
+
+## Seconds this mouse waits between strokes. See [member dig_seconds].
+##
+## DERIVED FROM THE CLASS'S DIG SPEED rather than being a fifth number on every class, so there is
+## still ONE dial per class for how fast it digs and the two cannot drift apart. An Engineer's 1.0
+## is [member dig_seconds] flat; everybody else's 0.35 is nearly three times that (GDD section 4,
+## revised) -- the same spread the held version charged, arriving in whole metres instead of in
+## fractions of one.
+##
+## Asked of the mouse rather than looked up here, so the number arrives with whoever is driving and
+## a class swap is felt on the very next stroke.
+func _dig_cooldown() -> float:
+	return maxf(dig_seconds, 0.0) / _dig_rate()
 
 
 ## Cells opened by holding the dig button. See `_cut`.
@@ -126,14 +186,41 @@ func _physics_process(delta: float) -> void:
 	_update_dig(frame, delta)
 
 
-## Aim, hold, open. The target is re-chosen every frame from where the cursor is, and moving
-## off a tile abandons it -- progress is a property of the tile you are pointing at, not of how
-## long the button has been down.
+## Aim, click, and the metre is gone. Then wait.
+##
+## `[REVISED]` THE STROKE IS INSTANT AND THE COST IS A COOLDOWN. Two models came before this one and
+## both charged for a stroke BEFORE giving it: the original held the button for `dig_seconds` and
+## popped a whole metre out at the end, and the carve that replaced it fed the same metre out
+## continuously over the same half second. The second is much the better picture of the two and it
+## did not fix the thing that was actually wrong, which neither model could: the button and the
+## earth were never in the same instant. Every stroke opened with a stretch of pressing and waiting,
+## and on a control you use several hundred times a match that stretch IS the control.
+##
+## So the order is reversed. The press cuts, at once, in full; the wait happens afterwards, while
+## you are looking at the metre you just took and choosing the next one. Same ground per minute,
+## same spread between the classes, and the player is never once left wondering whether the button
+## registered -- which was the complaint under both of the others, arriving in different words.
+##
+## HOLDING REPEATS, and that is not a separate feature. A recharge that fires on the press and a
+## recharge that fires the moment it expires are the same rule read at two speeds: click and you
+## dig once, lean on it and you dig as fast as the class can, which is what "walk up to the dirt
+## and start moving" needs. The alternative -- clicking once per metre -- is the same corridor with
+## a repetitive strain injury attached.
 func _update_dig(frame: InputFrame, delta: float) -> void:
+	# BEFORE ANYTHING ELSE, AND OUTSIDE EVERY GUARD BELOW. The recharge is a property of the paws
+	# (see [member _cooldown]), so it must run down while the cursor is over rock, over nothing, over
+	# the HUD, or over a stroke this mouse is not allowed to cut. Ticking it inside the digging
+	# branch would make looking away a way to pause your own cooldown.
+	_cooldown = maxf(0.0, _cooldown - delta)
+
+	var at := _aim_flat()
 	var wanted := _aimed_id()
-	if wanted != _target:
+	if wanted != _target and _drifted(wanted, at):
 		_target = wanted
-		_progress = 0.0
+	# Only a frame that named a stroke moves the mark, so the frames that name nothing are measured
+	# against the last one that did rather than against each other. See [member _aimed_at].
+	if wanted >= 0 or _target < 0:
+		_aimed_at = at
 
 	# The cursor-over-HUD guard lives in the capture now: a click on a slider never becomes a DIG
 	# in the first place, rather than being filtered out here and again in `player.gd`.
@@ -152,38 +239,31 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 				_network.dig_refused.emit("solid rock -- go round it, or go under it")
 				_learn_vein(rock)
 			_show_blocked(rock)
-			_progress = 0.0
 			return
 
-	var digging := _target >= 0 and held
-	if digging:
-		_progress += delta * _dig_rate() / maxf(dig_seconds, 0.01)
-		if _progress >= 1.0:
-			if acts():
-				var cut := _target
-				if _network.dig_segment(
-					_plane,
-					TunnelNetwork.segment_origin(cut),
-					TunnelNetwork.segment_angle(cut),
-					_player.team
-				):
-					_cut += 1
-				_learn_exposed(cut)
-				_progress = 0.0
-				# Re-aim immediately: the stroke just landed, so it is no longer a valid target and
-				# holding the button should move on to the next one rather than stall.
-				_target = _aimed_id()
-			else:
-				# A PUPPET HOLDS THE BAR FULL RATHER THAN RESTARTING IT. The cell is the server's
-				# to cut and arrives on the next earth tick, at which point `_aimed_cell` stops
-				# offering an already-dug cell and the target clears itself. Zeroing here instead
-				# would fill the bar a second time in the half-second of the round trip, which
-				# reads as a dig that did not take.
-				_progress = 1.0
-	elif not held:
-		_progress = 0.0
+	if _target >= 0 and held and _cooldown <= 0.0:
+		# CHARGED WHETHER OR NOT THIS MACHINE IS THE ONE THAT CUTS, which is what keeps a client
+		# honest. A puppet's stroke is the server's to make and arrives on the next earth tick; if
+		# the cooldown only started on a successful cut, a client would sit at full charge for the
+		# length of the round trip and fire again the instant its finger twitched, asking for two
+		# strokes and being told about one. The recharge is the CONTROL's, and a client's controls
+		# work exactly like everybody else's -- it is the earth that is not its to move.
+		_cooldown = _dig_cooldown()
+		if acts():
+			var cut := _target
+			if _network.dig_segment(
+				_plane,
+				TunnelNetwork.segment_origin(cut),
+				TunnelNetwork.segment_angle(cut),
+				_player.team
+			):
+				_cut += 1
+			_learn_exposed(cut)
+		# Re-aim immediately: the stroke just landed, so it is no longer a valid target and a held
+		# button should move on to the next one rather than sit on a stroke that no longer exists.
+		_target = _aimed_id()
 
-	_show(_target, _progress, _target >= 0 and held)
+	_show(_target, get_dig_charge(), _target >= 0 and held)
 
 
 ## Running into a seam teaches your crew where it goes (GDD section 3).
@@ -275,6 +355,12 @@ func _dig_rate() -> float:
 	return maxf(0.01, _player.get_dig_speed()) if _player != null else 1.0
 
 
+## Where the cursor is, flattened to the plane everything here is measured on.
+func _aim_flat() -> Vector2:
+	var aim := _player.get_aim_point()
+	return Vector2(aim.x, aim.z)
+
+
 ## The stroke the cursor is asking for, as a segment id, or -1.
 ##
 ## `[REVISED]` FREE BRANCHING, WHICH IS THE WHOLE POINT OF THE CHANGE. This used to pick one of the
@@ -296,8 +382,7 @@ func _aimed_id() -> int:
 	if _plane <= 0:
 		return -1
 
-	var aim := _player.get_aim_point()
-	var at := Vector2(aim.x, aim.z)
+	var at := _aim_flat()
 	var root := _network.nearest_segment_point(_plane, at, dig_reach)
 	if root.is_empty():
 		return -1
@@ -314,8 +399,18 @@ func _aimed_id() -> int:
 	if heading.length_squared() < 0.0001:
 		return -1
 	var id := TunnelNetwork.segment_id(from, TunnelNetwork.direction_angle(heading))
-	if _network.has_segment(_plane, id):
-		return -1
+	return id if _offers(id) else -1
+
+
+## Would the network really cut this stroke if the button went down on it?
+##
+## SPLIT OUT SO A HELD TARGET CAN BE RE-ASKED. The aim is sticky now (see [method _drifted]), which
+## means the stroke being dug is one chosen on some earlier frame -- and the world moves underneath
+## it: somebody else's corridor arrives, a cave-in fills it, a seam is revealed. A target held
+## without re-asking is a cursor promising a dig that has quietly become impossible.
+func _offers(id: int) -> bool:
+	if id < 0 or _network.has_segment(_plane, id):
+		return false
 
 	# Nothing to gain from a stroke lying wholly inside tunnel that is already open -- pointing
 	# back down your own corridor -- and the cursor should not sit there pulsing, promising it.
@@ -324,17 +419,70 @@ func _aimed_id() -> int:
 	# refused the one dig that matters most: a stroke that joins two corridors always ends inside
 	# the one it is reaching for, so two tunnels within a stroke of each other could never be
 	# connected at all. See TunnelNetwork.opens_ground.
-	if not _network.opens_ground(_plane, from, TunnelNetwork.segment_angle(id)):
-		return -1
+	if not _network.opens_ground(
+		_plane, TunnelNetwork.segment_origin(id), TunnelNetwork.segment_angle(id)
+	):
+		return false
 	# MIRRORS `TunnelNetwork.dig_segment`'S OWN REFUSALS, and must keep doing so. A stroke this
 	# offers but the network would refuse is a cursor that pulses invitingly over ground that will
 	# never open -- and worse here than merely misleading, because falling through to `-1` is what
-	# hands the frame to the rock branch below. Without the stone test the seam got no cursor, no
-	# refusal and no reveal: the player held the button on rock and the game said nothing at all.
+	# hands the frame to the rock branch. Without the stone test the seam got no cursor, no refusal
+	# and no reveal: the player held the button on rock and the game said nothing at all.
 	for cell: Vector2i in _network.segment_cells(id):
 		if not _network.in_bounds(cell) or _network.is_rock(_plane, cell):
-			return -1
-	return id
+			return false
+	return true
+
+
+## Has the aim moved far enough to count as pointing somewhere else?
+##
+## WHY THE CURSOR NEEDED THIS AT ALL. A stroke's identity is its origin snapped to sixteenths of a
+## metre and its angle snapped to a sixty-fourth of a turn, and BOTH of those slide continuously as
+## the mouse moves: the origin runs along the corridor wall under the cursor, the angle sweeps with
+## it. So the packed id changes every few centimetres of cursor travel -- and the old rule, "a
+## different id means a different target, start the bar again", meant a hand that was not perfectly
+## still never finished a dig at all. The cube jittered between quantised placements and the
+## progress bar reset under it, which reads as the dig button not working.
+##
+## MEASURED IN WORLD UNITS, NOT IN IDS, which is the fix. Two ids a texel apart describe the same
+## intention; the player is pointing at the same piece of earth. The aim only counts as having
+## moved when the stroke it would cut is somewhere a player could actually mean differently -- a
+## third of a metre along the wall, or twenty degrees round.
+##
+## The band is deliberately wider than the quantisation rather than a hair over it. Sized to the
+## quantisation it would still flicker, because the id changes once per sixteenth of a metre and a
+## mouse in a hand moves further than that between two frames.
+func _drifted(wanted: int, at: Vector2) -> bool:
+	if _target < 0:
+		return true
+	# The world may have taken the target away since it was chosen, and it may have walked out of
+	# reach under its own steam.
+	if not _offers(_target):
+		return true
+	var from := TunnelNetwork.segment_origin(_target)
+	var here := _player.global_position
+	if Vector2(here.x, here.z).distance_to(from) > dig_reach:
+		return true
+	# `[REVISED]` NOTHING TO POINT AT IS NOT THE SAME AS POINTING SOMEWHERE ELSE, and conflating the
+	# two is what made a still hand dig twice for one metre of corridor. `_aimed_id` returns -1 for a
+	# whole family of momentary conditions -- the candidate stroke landing exactly on one that is
+	# already dug, the branch root flickering between two segments equidistant from the cursor, the
+	# root stepping a hair past reach as the player's own footfall moves the camera -- and any single
+	# frame of that used to drop the target and everything cut on it.
+	#
+	# SO THE CURSOR ANSWERS IT INSTEAD (see [member _aimed_at]), against the same band the rest of
+	# this measures drift in. A hand that has not moved means the same stroke it meant last frame;
+	# a hand that HAS moved and now names nothing has genuinely left, which is what has to keep
+	# happening for a seam to get its refusal in.
+	if wanted < 0:
+		return at.distance_to(_aimed_at) > aim_slack
+	if TunnelNetwork.segment_origin(wanted).distance_to(from) > aim_slack:
+		return true
+	var half := TunnelNetwork.ANGLE_STEPS / 2
+	var turned := absi(wrapi(
+		TunnelNetwork.segment_angle(wanted) - TunnelNetwork.segment_angle(_target), -half, half
+	))
+	return turned > aim_slack_steps
 
 
 ## The cell a refused stroke ran into, when what stopped it was stone.
@@ -346,8 +494,7 @@ func _blocked_cell() -> Vector2i:
 	if _plane <= 0:
 		return Vector2i.MAX
 
-	var aim := _player.get_aim_point()
-	var at := Vector2(aim.x, aim.z)
+	var at := _aim_flat()
 	var root := _network.nearest_segment_point(_plane, at, dig_reach)
 	if root.is_empty():
 		return Vector2i.MAX
@@ -398,7 +545,6 @@ func _take_shaft(_cell: Vector2i) -> void:
 		return
 	_plane = arrived
 	_target = -1
-	_progress = 0.0
 
 
 ## Keep the remembered plane honest if the player ends up somewhere it doesn't explain.
@@ -414,7 +560,9 @@ func _resync_plane() -> void:
 	_plane = _network.plane_at_height(_player.global_position.y)
 	_apply_plane()
 	_target = -1
-	_progress = 0.0
+	# THE COOLDOWN IS DELIBERATELY LEFT RUNNING. Everything else here is stale belief being
+	# corrected; the recharge is not belief, it is a debt already incurred, and clearing it would
+	# make a shaft -- or a respawn -- a way to buy back a stroke you have already spent.
 
 
 ## Tell the body which layer it is on.

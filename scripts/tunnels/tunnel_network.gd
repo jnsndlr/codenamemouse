@@ -114,6 +114,12 @@ const SEG_LENGTH: float = 1.0
 const SEG_WIDTH: float = 1.0
 const SEG_HALF_WIDTH: float = SEG_WIDTH * 0.5
 
+## How far a part-cut stroke has to advance before the physics picture is brought up to date with
+## the drawn one. See [method carve] -- the drawing follows every texel, the collision cannot
+## afford to, and a quarter of a metre is under the width of the corridor being cut so nothing you
+## can walk into is ever more than a step ahead of the shape you walk into it with.
+const CARVE_COLLIDE_STEP: float = 0.25
+
 ## Directions a segment may point. 64 steps is 5.6 degrees -- past the point where a chain of
 ## them reads as faceted, and small enough to be one byte on the wire.
 ##
@@ -247,10 +253,23 @@ const SIDES: Array[Vector2i] = [
 ## disagree about whether a disc fits in it.
 ##
 ## IT WILL ALSO OPEN A WALL. Two corridors dug closer together than this leave a divider too thin to
-## survive the rule, and the two become one room. That is the rule working rather than overreaching
-## -- a hand's width of earth is not cover and not a route, and leaving it standing is what made the
-## screenshots that started this -- but it is the reason to raise this one carefully.
-@export var earth_min_thickness: float = 0.5
+## survive the rule, and the two become one room. That is the rule working rather than overreaching,
+## but it is the reason this is set where it is rather than where it first was.
+##
+## `[REVISED]` SET UNDER WHAT THE FIELD CAN SEE, WHICH IS NOT WHAT THE EYE CAN. The first value here
+## was 0.5, and it ate dividers that were wanted. The arithmetic that decides the ceiling: a 20cm
+## wall between two passes is 1.6 samples wide at 12.5cm, and the grid does not put a sample at its
+## middle -- so the deepest sample IN a 20cm wall reads between 3.75cm and 10cm depending only on
+## where the wall happens to fall. Anything above 0.075 therefore keeps a 20cm wall on some
+## alignments and eats it on others, which is the same lottery the whole cull exists to stop.
+##
+## So the ceiling is not a matter of taste: to keep 20cm walls AT ALL, this has to sit under the
+## worst alignment of one. What survives the setting is the honest scope of the rule -- anything
+## under 7.5cm goes, anything 20cm or over stays, and the band between is decided by the grid. That
+## is a cleanup of earth the field can barely represent rather than a shaping tool, and shaping
+## wants a finer field (see [constant TunnelContour.TEXELS_PER_METRE]) rather than a bigger number
+## here.
+@export var earth_min_thickness: float = 0.075
 
 @export_group("Rock")
 ## Per-plane rock obstructions (GDD section 3). Solid seams scattered through the earth that stop
@@ -438,6 +457,21 @@ var _shored: Array[Dictionary] = []
 ## twenty other files that walk it.
 var _chunk_cache: Array[Dictionary] = []
 
+## Strokes part-way cut, per plane, keyed by the stroke: `{id: {"along": float, "team": int}}`.
+## See [method carve].
+##
+## `[REVISED]` KEYED BY THE STROKE RATHER THAN BY WHOEVER IS CUTTING IT, AND KEPT WHEN THE BUTTON
+## GOES UP. Both halves of that are the same correction. A carve used to be one digger's transient
+## preview of a stroke they had not finished, thrown away the moment they let go or looked
+## elsewhere -- so a player who released early watched the trench they had just cut fill back in,
+## and a player standing IN it was dropped through the floor that closed under them, because there
+## is nothing below a plane's floor to land on.
+##
+## Filed under the stroke, a part-cut metre is simply earth that is out. It survives the button, it
+## survives re-aiming, and pointing back at it resumes rather than restarts -- which is what makes
+## digging continuous rather than a series of half-second commitments you can lose.
+var _carving: Array[Dictionary] = []
+
 ## The disc [method _thin_earth] searches, flattened for one window width, each offset's length in
 ## metres, and the width and radius the pair was built for.
 var _thin_offsets: PackedInt32Array = PackedInt32Array()
@@ -502,6 +536,7 @@ func _init() -> void:
 	for plane in range(PLANE_COUNT):
 		_segments.append({})
 		_cell_segments.append({})
+		_carving.append({})
 		_chunk_cache.append({})
 		_dirty_chunks.append({})
 		_mark_nodes.append({})
@@ -737,16 +772,25 @@ func segment_cells(id: int) -> Array[Vector2i]:
 ## SAMPLED AT THE FIELD'S OWN RESOLUTION, which is what makes "any earth" a decidable question
 ## rather than a matter of luck. A wall thinner than one texel is thinner than the world is stored,
 ## and the contour has already merged the two sides of it -- so there is nothing left there to dig.
+##
+## `[REVISED]` A STROKE'S OWN CARVE DOES NOT COUNT AGAINST IT, and forgetting that broke digging
+## outright the first time carving was wired up. Part-cut ground reads as dug -- it is, that is the
+## whole point -- so once a carve had eaten far enough along its own stroke, the stroke stopped
+## opening ground, the cursor stopped offering it, the target reset and the progress with it. The
+## dig cancelled itself a few centimetres before finishing, every time, and did it identically for
+## every class. What the question means is "is there earth here that this stroke has not had yet",
+## so the stroke's own progress is exactly the thing to look past.
 func opens_ground(plane: int, origin: Vector2, angle: int) -> bool:
 	if plane <= 0 or plane >= PLANE_COUNT:
 		return false
 	var direction := angle_direction(angle)
 	var across := Vector2(-direction.y, direction.x)
+	var mine := segment_id(origin, angle)
 	var along_steps := maxi(2, ceili(SEG_LENGTH / TunnelContour.TEXEL))
 	for i in range(along_steps + 1):
 		var spine := origin + direction * (SEG_LENGTH * float(i) / float(along_steps))
 		for offset: float in [0.0, -0.6, 0.6]:
-			if _is_earth(plane, spine + across * (SEG_HALF_WIDTH * offset)):
+			if _is_earth(plane, spine + across * (SEG_HALF_WIDTH * offset), mine):
 				return true
 	return false
 
@@ -763,12 +807,22 @@ func opens_ground(plane: int, origin: Vector2, angle: int) -> bool:
 ## went through it -- so asked of the segments alone this says there is ground there to take out,
 ## the dig is allowed, and the player spends a stroke on a chamber floor and watches nothing happen.
 ## Which is the very complaint the cull exists to answer, moved one step along.
-func _is_earth(plane: int, point: Vector2) -> bool:
+## `except` is a stroke whose own carve is to be ignored; see [method opens_ground].
+func _is_earth(plane: int, point: Vector2, except: int = -1) -> bool:
 	var cell := world_to_cell(Vector3(point.x, 0.0, point.y))
 	if _rock[plane].has(cell):
 		return false
 	if _in_culled_island(plane, point):
 		return false
+	# Ground somebody is part-way through cutting is ground that is already out. Left in, the dig
+	# rule would offer the mouse beside you a stroke through a trench you are standing in cutting.
+	for id: int in _carving[plane]:
+		if id == except:
+			continue
+		var start := segment_origin(id)
+		var tip := _carve_end(id, carved_along(plane, id))
+		if TunnelContour.segment_distance(point, start, tip, SEG_HALF_WIDTH) <= 0.0:
+			return false
 	for y in range(cell.y - 1, cell.y + 2):
 		for x in range(cell.x - 1, cell.x + 2):
 			for id: int in segments_in_cell(plane, Vector2i(x, y)):
@@ -1009,17 +1063,39 @@ func _near_cells(id: int) -> Array[Vector2i]:
 
 ## Mark every chunk a segment's outline could fall in as needing re-contouring.
 func _touch(plane: int, id: int) -> void:
-	var a := segment_origin(id)
-	var b := segment_end(id)
+	_touch_span(plane, segment_origin(id), segment_end(id))
+
+
+## The same, for a stretch of ground named directly rather than by a stroke id.
+##
+## SPLIT OUT FOR CARVING, which changes the field a few centimetres at a time. A growing stroke has
+## only altered the earth around the bit it just grew INTO, so re-contouring its whole metre on
+## every step is eight times the work for the same picture -- and it is work paid several times a
+## second, which the commit path never was.
+##
+## `cull` is whether to reach out far enough for the field rules to be re-decided at a distance;
+## see the reach below for what that costs and [method carve] for why a growing carve declines it.
+func _touch_span(plane: int, a: Vector2, b: Vector2, cull: bool = true) -> void:
 	# Grown by the half-width plus a texel, so the chunk holding the far side of a rounded end is
 	# included. Missing one leaves a notch of un-rebuilt wall that only appears at some angles.
 	#
 	# AND BY THE CULL'S REACH ON TOP OF THAT, because a stroke changes more than it touches now: the
 	# scrap it pinches off can be a whole island away, in a chunk this stroke never enters, and that
 	# chunk has to re-contour to notice its earth has become small enough to swallow.
-	var reach := (
-		SEG_HALF_WIDTH + TunnelContour.TEXEL * 2.0 + float(_cull_pad()) * TunnelContour.TEXEL
-	)
+	#
+	# WHICH IS ALSO MOST OF WHAT A REBUILD COSTS -- it is a metre of extra reach in every direction,
+	# so it is the difference between waking two chunks and waking nine. Declining it leaves the
+	# rules a moment out of date at a distance and nothing else: what a carve can pinch off a chunk
+	# away is a scrap of earth, and a scrap left standing is the state it was already in.
+	#
+	# THE COMMIT COLLECTS THE BILL, and now that a carve can be abandoned half-way (see
+	# [method carve]) it is worth saying what happens when no commit comes: the scrap stands until
+	# the next stroke cut anywhere near it reaches out in full and swallows it. That is a crumb
+	# nobody can see for as long as nobody digs there, against paying a nine-chunk rebuild eight
+	# times a stroke on the chance that there is one.
+	var reach := SEG_HALF_WIDTH + TunnelContour.TEXEL * 2.0
+	if cull:
+		reach += float(_cull_pad()) * TunnelContour.TEXEL
 	var low := _chunk_at(Vector2(minf(a.x, b.x) - reach, minf(a.y, b.y) - reach))
 	var high := _chunk_at(Vector2(maxf(a.x, b.x) + reach, maxf(a.y, b.y) + reach))
 	for cy in range(low.y, high.y + 1):
@@ -1572,6 +1648,9 @@ func dig_segment(plane: int, origin: Vector2, angle: int, team: int = -1) -> boo
 		return false
 
 	_segments[plane][id] = true
+	# Whatever was part-cut here is now cut in full, and leaving the carve behind would keep a
+	# duplicate of the same capsule in the field for every chunk to union in for nothing.
+	_drop_carve(plane, id)
 	for cell: Vector2i in _occupy(plane, id):
 		_learn_tunnel_cell(plane, cell, team)
 	_rebuild_walls(plane)
@@ -1585,6 +1664,115 @@ func dig_segment(plane: int, origin: Vector2, angle: int, team: int = -1) -> boo
 			cell_opened.emit(plane, cell)
 	segment_opened.emit(plane, id)
 	return true
+
+
+## Cut part of a stroke: the earth comes out as the digger works along it, rather than a metre at a
+## time when they finish.
+##
+## THE UNIT OF DIGGING IS UNCHANGED, AND THAT IS THE POINT OF DOING IT THIS WAY. A carve claims no
+## cells, joins no graph, teaches no crew anything and never crosses the wire. Everything the game
+## is balanced on -- what a stroke costs, what it opens, who learns about it, what a bot counts --
+## still happens exactly once, in [method dig_segment], when the stroke is finished. What changes is
+## only what the earth LOOKS and FEELS like on the way there, which is the whole of the complaint:
+## a corridor that arrives a metre at a time reads as tiles popping, and one that arrives
+## continuously reads as digging.
+##
+## SO A CARVE IS PURE GEOMETRY. It goes into the field, so it is contoured, collided and cut out of
+## the lid like anything else -- you can walk into the part you have cut -- and it goes into
+## [method _is_earth], so the dig rule cannot offer you ground you have already taken out. Nothing
+## else in the file knows carves exist.
+##
+## `[REVISED]` AND IT ONLY EVER GROWS. Earth that has come out stays out: there is no shrinking, no
+## abandoning and no un-digging, which is what makes this continuous rather than a half-second bet
+## you can lose by breathing on the mouse. Two bugs came out of the old rule together and both were
+## the same bug -- a released button filled the trench back in, and a player standing in that trench
+## when it filled was pushed into solid ground with no floor under it and fell out of the world.
+##
+## RESUMED BY ASKING [method carved_along], which is the other half. Progress belongs to the STROKE
+## now, not to the hold, so looking away and back picks the same stroke up where it was left rather
+## than starting it again.
+##
+## QUANTISED TO A TEXEL, WHICH IS WHAT MAKES IT AFFORDABLE. The field cannot represent anything
+## finer than 12.5cm, so advancing by less than that is a chunk rebuild for a picture nobody can
+## tell from the last one. At a stroke every half second that is sixteen rebuilds a second instead
+## of one per frame, and each is confined to the chunks around the few centimetres just cut.
+##
+## NOT REFUSED ON A PUPPET, unlike every other way of moving earth. A carve only ever takes out
+## ground the server is about to take out anyway, it can never run more than one stroke ahead, and
+## it is dropped the moment that stroke resolves -- so a client predicting its own digging cannot
+## drift, and without it the one machine whose feel this was written for is the one that does not
+## get it.
+## SEEN BY THE CREW CUTTING IT AND BY NOBODY ELSE, which is why the team comes in. Visibility for a
+## committed stroke is a question about CELLS -- has your crew learnt this square (see
+## [method _segment_wants]) -- and asking it of a carve gets the answer exactly backwards: a stroke
+## being cut into fresh ground is by definition in a cell nobody has learnt yet, so the lid over it
+## stays shut, and the digger cannot see the trench they are standing in cutting. Whose carve it is
+## settles it instead, and settles the other half too: an enemy's carve stays dark until it becomes
+## a stroke and comes under the ordinary fog, rather than leaking a metre of their corridor in real
+## time.
+func carve(plane: int, id: int, along: float, team: int = -1) -> void:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return
+	if _segments[plane].has(id):
+		return
+	var stop := floorf(clampf(along, 0.0, SEG_LENGTH) / TunnelContour.TEXEL) * TunnelContour.TEXEL
+	var before := carved_along(plane, id)
+	if stop <= before:
+		return
+	_carving[plane][id] = {"along": stop, "team": team}
+	# ONLY THE STRETCH JUST CUT, which is the difference between carving being affordable and not.
+	# The field behind the tip has not moved, so re-contouring the whole stroke is eight rebuilds of
+	# the same picture -- and unlike a commit, this is paid several times a second. The cull's reach
+	# is declined for the same reason (see [method _touch_span]): a scrap a metre away can wait for
+	# the commit, which always reaches out in full.
+	_touch_span(plane, _carve_end(id, before), _carve_end(id, stop), false)
+	# COLLISION FOLLOWS THE TRENCH NOW, AT A QUARTER OF A METRE. It used to wait for the commit, on
+	# the argument that the only mouse who could walk into a carve was the one standing still cutting
+	# it -- which stopped being true the moment carving became digging rather than a preview of it.
+	# You are meant to walk forward into what you are cutting, and ground you can see through and
+	# cannot enter is the same complaint as ground that does not open. Throttled rather than every
+	# step because a concave shape rebuilds its whole tree whenever it is set (see
+	# [method _rebuild_walls]), so this is four physics rebuilds per stroke rather than eight.
+	var collide := floori(stop / CARVE_COLLIDE_STEP) > floori(before / CARVE_COLLIDE_STEP)
+	_rebuild_walls(plane, collide)
+
+
+## How far along a stroke has already been cut, or zero. What lets a dig be picked up where it was
+## put down; see [method carve].
+func carved_along(plane: int, id: int) -> float:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return 0.0
+	var carve: Variant = _carving[plane].get(id)
+	return 0.0 if carve == null else (carve as Dictionary)["along"] as float
+
+
+## Every part-cut stroke on a plane, as `{"along": float, "team": int}` keyed by stroke id.
+func carving(plane: int) -> Dictionary:
+	if plane < 0 or plane >= PLANE_COUNT:
+		return {}
+	return _carving[plane]
+
+
+## Where a stroke has been cut to, in world terms.
+static func _carve_end(id: int, along: float) -> Vector2:
+	return segment_origin(id) + angle_direction(segment_angle(id)) * along
+
+
+## Forget the part-cut record of a stroke, because the stroke itself now exists. The geometry does
+## not change -- a finished stroke covers everything its carve did -- so nothing has to be touched.
+func _drop_carve(plane: int, id: int) -> void:
+	_carving[plane].erase(id)
+
+
+## Forget part-cut strokes that floor a cell being brought down, so a cave-in does not leave a stub
+## of open trench behind in ground it has just closed.
+func _drop_carves_in(plane: int, cell: Vector2i) -> void:
+	for id: int in _carving[plane].keys():
+		var along := carved_along(plane, id)
+		if _probe_cell(cell, segment_origin(id), _carve_end(id, along))[1] > -STANDING_CLEARANCE:
+			continue
+		_carving[plane].erase(id)
+		_touch_span(plane, segment_origin(id), _carve_end(id, along))
 
 
 ## Cut a stroke centred on a cell, pointing along whichever axis joins it to tunnel it already
@@ -1779,6 +1967,10 @@ func _take_cell(plane: int, cell: Vector2i) -> void:
 	# brought down its neighbours either side as well.
 	for id: int in _segments_standing_in(plane, cell):
 		_drop_segment(plane, id)
+	# And whatever was only part-cut here, for the same reason: a cave-in that left the trench
+	# somebody had started would close the cell on the books and leave a slot of open ground and
+	# open floor standing in it.
+	_drop_carves_in(plane, cell)
 	# Belt and braces: `collapse` refuses a shored cell before it ever reaches here, so this only
 	# fires for a cell taken as the far end of something else -- a shaft's landing, say. Timbers
 	# recorded against earth that no longer exists would be timbers an Engineer could never spend
@@ -1839,6 +2031,10 @@ func adopt_segment(plane: int, origin: Vector2, angle: int, bits: int) -> bool:
 	var fresh := not _segments[plane].has(id)
 	if fresh:
 		_segments[plane][id] = true
+		# The prediction this client cut for itself has arrived as the real thing. Same reasoning as
+		# [method dig_segment]: the stroke covers everything its carve did, so the record goes and
+		# the picture does not change.
+		_drop_carve(plane, id)
 		_occupy(plane, id)
 		_rebuild_walls(plane)
 		_relight(plane)
@@ -2547,20 +2743,26 @@ func _make_rock_material() -> StandardMaterial3D:
 	return material
 
 
-## The top of a seam your crew has found. Unshaded, pale stone, and that is the whole trick.
+## The top of a seam your crew has found. Unshaded pale stone with this plane's tunnels cut out of
+## it; see rock_cap.gdshader for why each of those three words is doing work.
 ##
-## It is drawn a centimetre under a lid that is itself lit by nothing much, so a shaded sheet came
-## back almost black and the vein you had paid a dig to learn about was invisible. The cap also
-## used to be deliberately dark AND its generated winding faced away from the camera, so back-face
-## culling removed it outright from above. Unshaded means the colour on screen is the colour in the
-## export; double-sided means a generated quad cannot silently choose the wrong visible side.
-func _make_rock_top_material() -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = rock_top_color
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	DirtTexture.apply_to(material)
+## `[REVISED]` A SHADER RATHER THAN A PLAIN MATERIAL, because the sheet is built out of whole cells
+## and the tunnel under it is not built out of anything of the kind. A stroke's rounded end may
+## reach into a rock cell without making any of it walkable -- perfectly legal, and what you do
+## every time you run a corridor alongside a seam -- and the cell's whole square then hangs over
+## open trench. Square overhangs on a smooth curved corridor, which is the sort of thing that reads
+## as the renderer being broken. Discarded against the dug field, the sheet ends where the wall does.
+func _make_rock_top_material(plane: int) -> ShaderMaterial:
+	var material := ShaderMaterial.new()
+	material.shader = load("res://art/shaders/rock_cap.gdshader") as Shader
+	material.set_shader_parameter("dug_here", _mask_textures[plane])
+	material.set_shader_parameter("field_half_metres", float(MASK_HALF_CELLS))
+	material.set_shader_parameter(
+		"field_texels_per_metre", float(TunnelContour.TEXELS_PER_METRE)
+	)
+	material.set_shader_parameter("albedo_color", rock_top_color)
+	material.set_shader_parameter("dirt", DirtTexture.shared())
+	material.set_shader_parameter("dirt_tile", DirtTexture.WORLD_TILE)
 	return material
 
 
@@ -2630,7 +2832,7 @@ func _rebuild_rock_caps(plane: int) -> void:
 			centre + Vector3(half, 0.0, -half), centre + Vector3(-half, 0.0, -half))
 	t.generate_normals()
 	var mesh := t.commit()
-	mesh.surface_set_material(0, _make_rock_top_material())
+	mesh.surface_set_material(0, _make_rock_top_material(plane))
 	cap.mesh = mesh
 	cap.visible = plane == _focus
 
@@ -2654,10 +2856,34 @@ func _rebuild_rock_caps(plane: int) -> void:
 ## at 12.5cm -- a plane's field is a million texels, and marching all of them to learn that one
 ## stroke moved is the version of this that drops a frame every time you dig.
 ##
+## `[REVISED]` AND THE SECOND STEP IS NOW ACTUALLY NATIVE, which the paragraph above claimed before
+## it was true. The concatenation always was; handing the result to a SurfaceTool a vertex at a time
+## was not, and that loop ran over the WHOLE PLANE on every dig -- tens of thousands of GDScript
+## iterations to redraw a mesh that changed in one corner, growing with the map, and by a good
+## margin the most expensive thing a dig did. Normals are worked out per chunk while a chunk is
+## being contoured anyway (there are a few hundred triangles in one, against a plane's tens of
+## thousands) and cached with the triangles, which leaves nothing per-vertex to do out here at all.
+##
+## It did not matter much while a dig happened twice a second. Carving moved the same work to
+## sixteen times a second, which is how it came to light.
+##
 ## THE WHOLE PLANE IS STILL ONE MESH, deliberately. The chunk is a unit of WORK, not a unit of
 ## scene: one mesh instance per plane keeps the focus rules, the per-plane materials, the dimming
-## and the single collision body exactly as the rest of the file already expects them.
-func _rebuild_walls(plane: int) -> void:
+## and the single collision body exactly as the rest of the file already expects them -- and keeps
+## a big network three draw calls rather than three hundred.
+## `collide` is whether to hand the result to the physics engine as well as to the renderer. A
+## concave shape has to build its whole tree from scratch every time it is faced -- there is no way
+## to edit one -- so it costs the same whether a metre of corridor arrived or a centimetre did, and
+## it is the second most expensive thing here after re-contouring.
+##
+## `[REVISED]` SO A CARVE PAYS IT EVERY QUARTER METRE RATHER THAN NEVER. The old rule was that a
+## growing carve declined collision entirely and the earth you were cutting stayed solid to walk
+## into until the stroke landed -- justified on the grounds that the only mouse in a position to
+## walk into it was the one standing still cutting it. That stopped being true when carving became
+## digging rather than a preview of it: you are meant to press dig and walk forward, and a trench
+## you can see through and cannot enter is the same complaint as ground that will not open. See
+## [constant CARVE_COLLIDE_STEP]. Every commit still rebuilds in full.
+func _rebuild_walls(plane: int, collide: bool = true) -> void:
 	for key: int in _dirty_chunks[plane]:
 		_rebuild_chunk(plane, key)
 	_dirty_chunks[plane].clear()
@@ -2666,43 +2892,89 @@ func _rebuild_walls(plane: int) -> void:
 	var walls := PackedVector3Array()
 	var stone := PackedVector3Array()
 	var collision := PackedVector3Array()
+	var floor_normals := PackedVector3Array()
+	var wall_normals := PackedVector3Array()
+	var stone_normals := PackedVector3Array()
 	for key: int in _chunk_cache[plane]:
 		var chunk: Dictionary = _chunk_cache[plane][key]
 		floors.append_array(chunk["floors"])
 		walls.append_array(chunk["walls"])
 		stone.append_array(chunk["stone"])
 		collision.append_array(chunk["collision"])
+		floor_normals.append_array(chunk["floor_normals"])
+		wall_normals.append_array(chunk["wall_normals"])
+		stone_normals.append_array(chunk["stone_normals"])
 
-	_floors[plane].mesh = _commit(floors, _floor_materials[plane])
-	_walls[plane].mesh = _commit(walls, _wall_materials[plane])
-	_rock_faces[plane].mesh = _commit(stone, _rock_materials[plane])
+	_floors[plane].mesh = _commit(floors, floor_normals, _floor_materials[plane])
+	_walls[plane].mesh = _commit(walls, wall_normals, _wall_materials[plane])
+	_rock_faces[plane].mesh = _commit(stone, stone_normals, _rock_materials[plane])
 
-	var body_shape: ConcavePolygonShape3D = null
-	if not collision.is_empty():
-		body_shape = ConcavePolygonShape3D.new()
-		# Double-sided, so a triangle emitted with the wrong winding still collides. Winding
-		# is easy to get backwards and produces a floor you silently fall through, which
-		# is a miserable thing to debug for zero benefit on static level geometry.
-		body_shape.backface_collision = true
+	if collide:
+		# THE SAME SHAPE RESOURCE, RE-FACED, rather than a fresh one hung on the node. Assigning to
+		# `shape` takes the old shape off the physics body and puts a new one on, and a mouse
+		# standing on the floor during that swap is a mouse standing on nothing for a frame -- which
+		# with no floor below a plane means falling out of the world. Setting the faces on the shape
+		# that is already attached is the same rebuild without the gap.
+		var body_shape := _shapes[plane].shape as ConcavePolygonShape3D
+		if body_shape == null:
+			body_shape = ConcavePolygonShape3D.new()
+			# Double-sided, so a triangle emitted with the wrong winding still collides. Winding
+			# is easy to get backwards and produces a floor you silently fall through, which
+			# is a miserable thing to debug for zero benefit on static level geometry.
+			body_shape.backface_collision = true
+			_shapes[plane].shape = body_shape
 		body_shape.set_faces(collision)
-	_shapes[plane].shape = body_shape
 
 	_relight(plane)
 
 
-## Triangles into a mesh with a material, or null if there are none. Null rather than an empty
-## mesh because an empty ArrayMesh still costs a draw call and still asks the renderer questions.
-func _commit(triangles: PackedVector3Array, material: Material) -> ArrayMesh:
+## Triangles and their normals into a mesh with a material, or null if there are none. Null rather
+## than an empty mesh because an empty ArrayMesh still costs a draw call and still asks the renderer
+## questions.
+##
+## ONE CALL RATHER THAN ONE PER VERTEX. `add_surface_from_arrays` hands the whole plane over as two
+## packed arrays; the SurfaceTool this replaced took the same data a vertex at a time through
+## GDScript, which is the same picture for a loop that grows with the map and runs on every dig.
+func _commit(
+	triangles: PackedVector3Array, normals: PackedVector3Array, material: Material
+) -> ArrayMesh:
 	if triangles.is_empty():
 		return null
-	var tool := SurfaceTool.new()
-	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for vertex: Vector3 in triangles:
-		tool.add_vertex(vertex)
-	tool.generate_normals()
-	var mesh := tool.commit()
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = triangles
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	mesh.surface_set_material(0, material)
 	return mesh
+
+
+## `count` normals all pointing straight up. Native fill, no loop.
+static func _flat_up(count: int) -> PackedVector3Array:
+	var normals := PackedVector3Array()
+	normals.resize(count)
+	normals.fill(Vector3.UP)
+	return normals
+
+
+## A flat normal per triangle, repeated for each of its three vertices.
+##
+## FLAT RATHER THAN SMOOTHED, which is what the SurfaceTool was producing too: `generate_normals`
+## on an unindexed surface gives one normal per face. Earth is faceted on purpose -- a smoothed
+## corridor wall reads as plastic -- so this is a like-for-like replacement rather than a look
+## change.
+static func _face_normals(triangles: PackedVector3Array) -> PackedVector3Array:
+	var normals := PackedVector3Array()
+	normals.resize(triangles.size())
+	for t in range(0, triangles.size(), 3):
+		var normal := (triangles[t + 1] - triangles[t]).cross(
+			triangles[t + 2] - triangles[t]
+		).normalized()
+		normals[t] = normal
+		normals[t + 1] = normal
+		normals[t + 2] = normal
+	return normals
 
 
 ## Re-contour one 4m square: its geometry, and its share of the crew's cutaway.
@@ -2762,15 +3034,47 @@ func _rebuild_chunk(plane: int, key: int) -> void:
 			for id: int in segments_in_cell(plane, Vector2i(x, y)):
 				found[id] = true
 
+	# Ends the strokes have been cut to, so a carve unions in exactly like a finished stroke and the
+	# corridor has no idea which of the two it grew from. Full length unless somebody is part-way
+	# through cutting it (see [method carve]).
+	var strokes: Array[Vector2] = []
+	var reaches: Array[Vector2] = []
+	var shown := PackedByteArray()
+	for id: int in found:
+		strokes.append(segment_origin(id))
+		reaches.append(segment_end(id))
+		shown.append(1 if _segment_wants(plane, id) else 0)
+	# CARVES ARE NOT IN THE CELL INDEX and are walked whole instead, rejected on their bounding box
+	# rather than gathered by square. Registering them would mean maintaining an index entry for a
+	# thing that grows every twelfth of a second, and un-registering it on the commit that turns it
+	# into a real stroke -- against which a box test on a list that only grows when somebody walks
+	# away from a half-dug alcove is nothing.
+	#
+	# AND THEY ARE SHOWN BY CREW RATHER THAN BY CELL, which is the one place a carve is not simply a
+	# short stroke. See [method carve].
+	# Grown by the furthest either sampling pass below reaches from a stroke's spine, so a carve
+	# rejected here could not have written a texel of this window even at the widest of them.
+	var window := Rect2(origin, Vector2(extent, extent))
+	var carve_reach := SEG_HALF_WIDTH + maxf(TunnelContour.SDF_RANGE, _thin_reach())
+	for id: int in _carving[plane]:
+		var carve: Dictionary = _carving[plane][id]
+		var from := segment_origin(id)
+		var to := _carve_end(id, carve["along"] as float)
+		if not window.intersects(Rect2(from, Vector2.ZERO).expand(to).grow(carve_reach)):
+			continue
+		strokes.append(from)
+		reaches.append(to)
+		shown.append(1 if _view_team < 0 or (carve["team"] as int) == _view_team else 0)
+
 	## Whether any stroke in this window is one the viewing crew must not be shown. Almost always
 	## false -- a client is only ever sent its own tunnels -- and when it is false `seen` came out
 	## of the loop below identical to `shape`, so the cull can be run once and shared.
 	var hidden := false
 
-	for id: int in found:
-		var a := segment_origin(id)
-		var b := segment_end(id)
-		var visible := _segment_wants(plane, id)
+	for index in range(strokes.size()):
+		var a := strokes[index]
+		var b := reaches[index]
+		var visible := shown[index] != 0
 		if not visible:
 			hidden = true
 		# TWICE, OVER TWO DIFFERENT SQUARES, and the difference is what the values are FOR.
@@ -2851,6 +3155,15 @@ func _rebuild_chunk(plane: int, key: int) -> void:
 		"stone": stone,
 		"collision": contour.collision,
 		"islands": islands,
+		# WORKED OUT HERE, WHERE THERE ARE A FEW HUNDRED TRIANGLES, rather than out in the plane
+		# assembly where there are tens of thousands and none of them have moved.
+		#
+		# A floor triangle is horizontal and wound to face up by construction (see
+		# TunnelContour._add_floor_triangle), so its normal is not worth a cross product -- and the
+		# floor is much the bigger half of a dug chunk.
+		"floor_normals": _flat_up(contour.floors.size()),
+		"wall_normals": _face_normals(walls),
+		"stone_normals": _face_normals(stone),
 	}
 	_blit(plane, _inner(seen, wide, pad, span), span, base_x, base_y, n)
 
