@@ -55,8 +55,13 @@ static func take(network: TunnelNetwork, mouse: Node3D, plane: int, lift: float 
 	if target < 0 or refusal(mouse) != "":
 		return -1
 
+	# WHERE THE TUNNEL IS IN THAT CELL, not the middle of the square. Off-grid digging means a
+	# corridor at an angle claims cells it does not cover the centre of, so a mouse climbing into
+	# one and placed at `cell_to_world` arrives inside the earth -- and the ceiling is 65cm down, so
+	# it does not fall out, it simply stands in the ground. `standing_point` answers the centre on
+	# the lawn, where there are no strokes, which is what the mouth coming UP wants.
 	var cell := network.world_to_cell(mouse.global_position)
-	mouse.global_position = network.cell_to_world(target, cell) + Vector3.UP * lift
+	mouse.global_position = network.standing_point(target, cell) + Vector3.UP * lift
 	if mouse is CharacterBody3D:
 		(mouse as CharacterBody3D).velocity = Vector3.ZERO
 

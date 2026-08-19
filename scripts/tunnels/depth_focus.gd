@@ -92,6 +92,9 @@ func _cut_the_ground() -> void:
 	_slab_material.set_shader_parameter(
 		"field_texels_per_metre", float(TunnelContour.TEXELS_PER_METRE)
 	)
+	# The lawn is the lid of plane 1 and takes the same rim back its walls lean away by, so an
+	# entrance reads as a cut in the ground rather than as a hole punched in a sheet of it.
+	_slab_material.set_shader_parameter("dug_grow", _network.rim_grow(1))
 	_slab_material.set_shader_parameter(
 		"albedo_color", source.albedo_color if source != null else Color(0.44, 0.42, 0.31)
 	)

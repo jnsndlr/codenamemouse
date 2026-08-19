@@ -513,24 +513,45 @@ func _check_routing() -> void:
 	#
 	# Driven through the NETWORK rather than the controls, because what is under test is the rule
 	# about earth; `_check_dig_flow` is where the button is.
-	var gap_from := Vector2(3.0, 1.0)
+	#
+	# `[REVISED]` STARTED ON THE CORRIDOR'S CENTRELINE, NOT AGAINST ITS WALL, and getting that wrong
+	# here was hidden by the graph for four milestones. This used to begin the run at (3, 1) -- one
+	# metre out from a corridor whose body ends at 0.5, so the first stroke's cap and the corridor
+	# met at a single tangent point with a pinch of zero width between them. A four-way graph called
+	# those two cells connected because they share a face, and the scenario passed. They are not: no
+	# mouse fits through a tangent, and dig_controller.gd goes to some trouble to make sure the
+	# controls cannot produce one ("the new capsule always overlaps the old one by half a width, so
+	# the union is continuous by construction"). Digging the way the button digs is the fix, and the
+	# rule under test -- two corridors a stroke apart CAN be joined -- is unchanged.
+	var reach := TunnelNetwork.ANGLE_STEPS / 4
+	var gap_from := Vector2(3.0, 0.0)
 	var joined := false
-	for i in range(4):
-		if not _network.dig_segment(1, gap_from, TunnelNetwork.ANGLE_STEPS / 4, Team.BLUE):
+	for i in range(5):
+		if not _network.dig_segment(1, gap_from, reach, Team.BLUE):
 			break
-		gap_from = TunnelNetwork.segment_end(
-			TunnelNetwork.segment_id(gap_from, TunnelNetwork.ANGLE_STEPS / 4)
-		)
+		gap_from = TunnelNetwork.segment_end(TunnelNetwork.segment_id(gap_from, reach))
 		graph = _network.graph()
 		if not graph.route(1, Vector2i(3, 0), 1, Vector2i(3, 4)).is_empty():
 			joined = true
 			break
 	if not joined:
 		_fail("ROUTING", "two corridors four cells apart could not be joined by digging between them")
+	else:
+		_check_steps(graph.route(1, Vector2i(3, 0), 1, Vector2i(3, 4)), "joined")
 
-	# THE DIAGONAL. A staircase of corner-touching cells is not walkable and must not be
-	# routable -- and the two cells at the ends of it are four cells apart in plan view, so a
-	# graph that answers at all here is answering through solid earth.
+	# THE DIAGONAL, AND `[REVISED]` IT IS NOW THE OPPOSITE ASSERTION. This used to read *"a
+	# staircase of corner-touching cells is not walkable and must not be routable"*, which was true
+	# of the geometry that existed when it was written: walls were built on the four faces of a
+	# cell, so two cells touching at a corner had a wall either side of it and no gap. The contour
+	# retired that. Each cell's stroke is a capsule reaching half a metre past the square, so
+	# consecutive strokes on a diagonal meet tangentially, and the thin-earth rule then shaves the
+	# wedge either side of the tangent away and leaves a doorway. The capsule walks the whole
+	# staircase without touching the sides -- measured, not assumed.
+	#
+	# So the honest test is that the graph SAYS SO, and the reason this is not simply a weakened
+	# assertion is `_check_graph_edges`: every scenario in this file now has each of its edges
+	# walked by the player's own capsule, in both directions. A graph joining eight neighbours
+	# blindly no longer passes by getting this one case right.
 	if not await _fresh_network():
 		_broken("routing", "the arena would not build")
 		return
@@ -538,8 +559,59 @@ func _check_routing() -> void:
 	for i in range(1, 5):
 		_network.dig(1, Vector2i(i, i))
 	graph = _network.graph()
-	if not graph.route(1, Vector2i(0, 0), 1, Vector2i(4, 4)).is_empty():
-		_fail("ROUTING", "a diagonal staircase routed as if it were a corridor")
+	var staircase := graph.route(1, Vector2i(0, 0), 1, Vector2i(4, 4))
+	if staircase.is_empty():
+		_fail("ROUTING", "no route along a staircase the mouse can walk end to end")
+	_check_steps(staircase, "staircase")
+
+	# A CORRIDOR AT FORTY-FIVE DEGREES, which is the whole reason any of this changed. Its cells
+	# touch at their corners and nowhere else, so a four-way graph holds every one of them as a
+	# point and joins none of them -- a corridor a player can run down and a bot will not follow,
+	# with nothing anywhere reporting a fault.
+	if not await _fresh_network():
+		_broken("routing", "the arena would not build")
+		return
+	_descend(0, Vector2i(0, 0))
+	var slant := TunnelNetwork.ANGLE_STEPS / 8
+	var tip := _drive_angled(1, Vector2.ZERO, slant, 8)
+	graph = _network.graph()
+	var far := _cell_behind(tip, slant)
+	if not _network.is_dug(1, far):
+		_broken("routing", "the slanted corridor did not reach %v" % far)
+	else:
+		var slanted := graph.route(1, Vector2i(0, 0), 1, far)
+		if slanted.is_empty():
+			_fail("ROUTING", "no route along a corridor dug at 45 degrees")
+		_check_steps(slanted, "slanted")
+		# PASSING FOR THE RIGHT REASON. A route made entirely of straight steps would mean the
+		# corridor had been claimed two cells wide and the diagonal never tested.
+		var corners := 0
+		for i in range(1, slanted.size()):
+			var gap: Vector2i = (slanted[i]["cell"] as Vector2i) - (slanted[i - 1]["cell"] as Vector2i)
+			if gap.x != 0 and gap.y != 0:
+				corners += 1
+		if corners == 0:
+			_fail("ROUTING", "a 45-degree corridor routed without a single diagonal step")
+
+	# AND AT AN ANGLE THAT LINES UP WITH NOTHING. Seventeen degrees wanders across the grid,
+	# claiming cells in ones and twos and clipping others it never makes walkable -- so this is
+	# where a graph that trusts a shared face gets caught routing into earth. The capsule in
+	# `_check_steps` is what catches it.
+	if not await _fresh_network():
+		_broken("routing", "the arena would not build")
+		return
+	_descend(0, Vector2i(0, 0))
+	var shallow := 3
+	var wander := _drive_angled(1, Vector2.ZERO, shallow, 10)
+	graph = _network.graph()
+	var end := _cell_behind(wander, shallow)
+	if not _network.is_dug(1, end):
+		_broken("routing", "the shallow corridor did not reach %v" % end)
+	else:
+		var wandered := graph.route(1, Vector2i(0, 0), 1, end)
+		if wandered.is_empty():
+			_fail("ROUTING", "no route along a corridor dug at a shallow angle")
+		_check_steps(wandered, "wander")
 
 	# Down two planes and back up a different shaft: the vertical edges are shafts and only
 	# shafts, and a route may use them in either direction.
@@ -1247,7 +1319,19 @@ func _soft_neighbour(plane: int, cell: Vector2i) -> Vector2i:
 
 ## Consecutive waypoints must be one step apart: a shared face on the same plane, or the same
 ## cell across a plane through a shaft. Anything else is a route through earth.
+## Every leg of a route, checked to be a leg a mouse could actually take.
+##
+## `[REVISED]` A STEP IS EIGHT-WAY NOW, AND BEING ONE STEP IS NO LONGER THE POINT. Adjacency was
+## the whole test while a corridor was a run of squares; with strokes at free angles it is barely
+## half of one, because two cells can share a face and have earth standing in it. So the leg is
+## WALKED -- the player's own capsule, in the physics world, from one waypoint to the next -- which
+## is the promise the graph is making and the thing a bot will do with the answer.
+##
+## THE ROUTE'S OWN WAYPOINTS, deliberately, rather than the cell centres they used to be. If the
+## graph ever hands back an `at` in solid earth, this is where it is caught, and the capsule cannot
+## be talked out of noticing.
 func _check_steps(route: Array[Dictionary], label: String) -> void:
+	var probe := _capsule_probe()
 	for i in range(1, route.size()):
 		var here: Vector2i = route[i]["cell"]
 		var last: Vector2i = route[i - 1]["cell"]
@@ -1256,8 +1340,16 @@ func _check_steps(route: Array[Dictionary], label: String) -> void:
 
 		if plane == was:
 			var gap := here - last
-			if absi(gap.x) + absi(gap.y) != 1:
+			if maxi(absi(gap.x), absi(gap.y)) != 1:
 				_fail("ROUTING", "%s: %v to %v is not one step" % [label, last, here])
+				continue
+			# Plane 0 legs are the lawn, which is route_planner.gd's business and not a walk
+			# between two cells of tunnel.
+			if plane == 0:
+				continue
+			probe.collision_mask = _mask_for(plane)
+			if not _capsule_walk(probe, route[i - 1]["at"], route[i]["at"]):
+				_fail("ROUTING", "%s: %v to %v is a step the mouse cannot walk" % [label, last, here])
 			continue
 
 		if absi(plane - was) != 1 or here != last:
@@ -1294,6 +1386,34 @@ func _drive(plane: int, from: Vector2i, step: Vector2i, count: int) -> void:
 			continue
 		if not _network.dig(plane, at):
 			return
+
+
+## Drive a corridor at an arbitrary angle, stroke chained onto stroke, and report where it got to.
+##
+## THE SAME SHAPE AS `_drive` AND A DIFFERENT UNIT, which is the whole point of it existing: cells
+## can only say the four directions they have names for, and everything this file has ever dug has
+## therefore been axis-aligned. A graph that only works on axis-aligned corridors passes an audit
+## built entirely out of them, which is how four-way survived the change of geometry unnoticed.
+##
+## Chained end to end, the way the dig controller does it, so consecutive strokes overlap and the
+## corridor comes out continuous rather than as a row of discs.
+func _drive_angled(plane: int, from: Vector2, angle: int, count: int) -> Vector2:
+	var at := from
+	for i in range(count):
+		if not _network.dig_segment(plane, at, angle):
+			break
+		at = TunnelNetwork.segment_end(TunnelNetwork.segment_id(at, angle))
+	return at
+
+
+## The cell half a stroke back from a point, which is the last one a corridor certainly claimed.
+##
+## A stroke's rounded end reaches past its own centreline without making any of that square
+## walkable (see TunnelNetwork._probe_cell), so the cell holding the very tip of a corridor is
+## routinely not a cell at all. Stepping back to the middle of the last stroke names one that is.
+func _cell_behind(tip: Vector2, angle: int) -> Vector2i:
+	var back := tip - TunnelNetwork.angle_direction(angle) * (TunnelNetwork.SEG_LENGTH * 0.5)
+	return _network.world_to_cell(Vector3(back.x, 0.0, back.y))
 
 
 ## Sink a shaft and go down it, the way pressing F then E does.
@@ -1476,6 +1596,7 @@ func _audit(label: String) -> void:
 	_check_index_exact()
 	_check_no_interior_faces()
 	_check_contour_matches_field()
+	_check_graph_edges()
 
 	var counts: Array = []
 	var shafts := 0
@@ -1490,6 +1611,58 @@ func _audit(label: String) -> void:
 	for finding: String in _findings:
 		print("   FAIL %s" % finding)
 	_total_failures += _findings.size()
+
+
+## The routing graph and the collision mesh agree about where a mouse can go.
+##
+## THE INVARIANT THE FOUR-WAY GRAPH DIED OF, stated so it cannot come back. Connectivity used to be
+## a rule you could read off the cells -- share a face and you are connected -- and off-grid digging
+## made that rule wrong in both directions at once: a corridor at an angle runs through cells that
+## touch only at their corners, and clips others whose shared face still has a metre of earth in it.
+## Neither failure shows up anywhere else. A missing edge is a bot that will not follow you down a
+## corridor you are standing in; an extra one is a bot walking into a wall and grinding there, which
+## reads as the AI being broken rather than as the map being described wrongly.
+##
+## SO THE TEST IS NOT A RULE AT ALL, it is the two systems put side by side. tunnel_graph.gd reaches
+## its answer from the strokes and the dug field; this asks the PHYSICS ENGINE, by walking the
+## player's own capsule between the two standing points, and insists they say the same thing. There
+## is no third opinion to appeal to -- the capsule is what the player will actually be.
+##
+## BOTH DIRECTIONS, which is what makes it teeth-tested rather than decorative. Join all eight
+## neighbours blindly and the extra edges fail here; go back to four and every angled corridor in
+## the file reports missing ones.
+func _check_graph_edges() -> void:
+	var graph := _network.graph()
+	if graph == null:
+		return
+	var probe := _capsule_probe()
+	var missing: Array = []
+	var invented: Array = []
+	for plane in range(1, TunnelNetwork.PLANE_COUNT):
+		probe.collision_mask = _mask_for(plane)
+		for cell: Vector2i in _network.dug_cells(plane):
+			var here := _network.standing_point(plane, cell)
+			for side: Vector2i in _compass_cells():
+				var next: Vector2i = cell + side
+				if not _network.is_dug(plane, next):
+					continue
+				# Once per pair. The walk is symmetric and it is the expensive half.
+				if side.x < 0 or (side.x == 0 and side.y < 0):
+					continue
+				var walks := _capsule_walk(probe, here, _network.standing_point(plane, next))
+				var joined := graph.joined(plane, cell, next)
+				if walks and not joined:
+					missing.append("plane %d %v-%v" % [plane, cell, next])
+				elif joined and not walks:
+					invented.append("plane %d %v-%v" % [plane, cell, next])
+	if not missing.is_empty():
+		_fail("GRAPH_EDGES", "%d walks the graph does not offer: %s" % [
+			missing.size(), ", ".join(missing.slice(0, 6))
+		])
+	if not invented.is_empty():
+		_fail("GRAPH_EDGES", "%d edges the mouse cannot walk: %s" % [
+			invented.size(), ", ".join(invented.slice(0, 6))
+		])
 
 
 ## The occupancy index says exactly what the segments say.
@@ -1554,7 +1727,11 @@ func _check_no_interior_faces() -> void:
 		if walls == null:
 			continue
 		var faces: PackedVector3Array = walls.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
-		for t in range(0, faces.size(), 6):
+		# ASKED OF THE FOOT OF EACH FACE. A face is a strip of rows (TunnelContour.WALL_RINGS) and
+		# every row above the first is deliberately set BACK from the outline, into the earth,
+		# which this check has no quarrel with -- it is hunting for faces standing on the wrong
+		# side of it. The bottom row is the one on the outline and the one worth measuring.
+		for t in range(0, faces.size(), TunnelContour.face_verts()):
 			var middle := (faces[t] + faces[t + 1]) * 0.5
 			var at := Vector2(middle.x, middle.z)
 			var distance := _distance_to_tunnel(plane, at)
@@ -1719,13 +1896,29 @@ func _check_reachable() -> void:
 
 ## Independent of the network's own idea of connectivity, on purpose: a check that shares an
 ## implementation with the thing it checks proves only that the code agrees with itself.
+##
+## `[REVISED]` AND IT HAD TO STOP BEING FOUR SIDES, for the same reason the graph did. This used to
+## call two cells connected when they shared a face, which off-grid digging makes wrong in both
+## directions -- a corridor at 30 degrees runs through cells that touch only at their corners, and
+## clips others whose shared face is still a metre of earth. What kept it honest through the change
+## is that it does not ask the network anything: eight candidates, and the PHYSICS decides, by
+## walking the player's own capsule from one standing point to the other. The graph reaches its
+## answer from the strokes; this one reaches it from the collision mesh those strokes generated,
+## which is exactly the disagreement worth having a second opinion about.
 func _walkable_from(plane: int, cell: Vector2i) -> Array[Vector3i]:
 	var out: Array[Vector3i] = []
 	# Plane 0 is the lawn: you can be anywhere on it, so the only edge that matters is down.
 	if plane > 0:
-		for side: Vector2i in TunnelNetwork.SIDES:
-			if _network.is_dug(plane, cell + side):
-				out.append(Vector3i(plane, cell.x + side.x, cell.y + side.y))
+		var probe := _capsule_probe()
+		probe.collision_mask = _mask_for(plane)
+		var here := _network.standing_point(plane, cell)
+		for side: Vector2i in _compass_cells():
+			var next := cell + side
+			if not _network.is_dug(plane, next):
+				continue
+			if not _capsule_walk(probe, here, _network.standing_point(plane, next)):
+				continue
+			out.append(Vector3i(plane, next.x, next.y))
 	if _network.has_shaft_down(plane, cell):
 		out.append(Vector3i(plane + 1, cell.x, cell.y))
 	if _network.has_shaft_up(plane, cell):
@@ -1906,6 +2099,49 @@ func _capsule_probe() -> PhysicsShapeQueryParameters3D:
 
 func _mask_for(plane: int) -> int:
 	return TunnelNetwork.WORLD_BIT | TunnelNetwork.plane_bit(plane)
+
+
+## The eight cells around one. Candidates for a step, settled by [method _capsule_walk].
+func _compass_cells() -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for x in [-1, 0, 1]:
+		for y in [-1, 0, 1]:
+			if x != 0 or y != 0:
+				out.append(Vector2i(x, y))
+	return out
+
+
+## Can the player's own capsule get from one standing point to another in a straight line?
+##
+## THE AUDIT'S WHOLE ANSWER TO "ARE THESE TWO CELLS CONNECTED", and it is deliberately the question
+## a bot's legs ask rather than the one the graph asks. Underground a bot walks straight at its next
+## waypoint, so a route is only ever as good as this.
+##
+## Stepped overlap tests rather than a cast_motion sweep, for the reason [method _obstructed] gives
+## at length: the walls are zero-thickness trimesh quads and swept queries walk straight through
+## them. Both ends are lifted to a clear stance first -- a query begun from an intersecting pose
+## reports open air, which would turn every walled-off pair into a connection.
+func _capsule_walk(
+	probe: PhysicsShapeQueryParameters3D, from: Vector3, to: Vector3
+) -> bool:
+	var start: Variant = _clear_stance(probe, from)
+	if start == null:
+		return false
+	var feet: Vector3 = start
+	var lift := feet.y - from.y
+	var target := to + Vector3.UP * lift
+	var span := feet.distance_to(target)
+	if span < 0.0001:
+		return true
+	var direction := (target - feet) / span
+	var travelled := STEP
+	while travelled <= span:
+		probe.transform = Transform3D(Basis(), feet + direction * travelled + Vector3.UP * 0.2)
+		probe.motion = Vector3.ZERO
+		if not _space.intersect_shape(probe, 1).is_empty():
+			return false
+		travelled += STEP
+	return true
 
 
 ## Eight directions, because the dig controller cuts on eight and the player moves freely.

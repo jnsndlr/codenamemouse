@@ -54,7 +54,8 @@ void vertex() {
 
 void fragment() {
 	vec2 xz = world_position.xz;
-	if (cutting && (sample_dug(dug_here, xz) || (cut_above && sample_dug(dug_above, xz)))) {
+	if (cutting && (sample_dug(dug_here, xz, dug_grow)
+			|| (cut_above && sample_dug(dug_above, xz, 0.0)))) {
 		discard;
 	}
 	ALBEDO = albedo_color * dim * texture(dirt, xz / dirt_tile).rgb;

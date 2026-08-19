@@ -48,10 +48,108 @@ const SDF_RANGE: float = 1.0
 ## shader change is about filtering rather than about meaning.
 const SURFACE: float = 0.5
 
+## How far the TOP of an earth face leans back from the outline it stands on, in metres.
+##
+## THE 90-DEGREE LIP IS THE THING THAT READS AS A BOX. A wall that meets the ground dead square
+## announces that the trench was stamped out rather than dug -- the reference art has none of it,
+## and neither does anything anybody has ever cut into soil. Leaning the last handspan of the face
+## back over a quarter turn puts a rounded shoulder where that corner was, and the light does the
+## rest: the bevel catches the sky at a different angle from both the flat ground and the wall
+## below it, so a corridor reads as a cut in the earth from directly above, where before it read as
+## a dark slot.
+##
+## THE GROUND ABOVE HAS TO OPEN BY EXACTLY THIS MUCH OR THE BEVEL IS DRAWN AND NEVER SEEN. The lid
+## discards against the dug field at the OUTLINE, so the shoulder -- which lies outside that line,
+## in the earth -- sits under solid ground with the sharp lid edge still standing over it. That is
+## why `dug_grow` exists in dug_field.gdshaderinc and why it is fed from here (see
+## [method wall_bevel]): one number, spent once on the geometry and once on the hole above it.
+##
+## THE TWO AGREE BECAUSE THE FIELD IS A TRUE DISTANCE. Stepping every point of the outline out
+## along its own normal by `b` lands on the set of points `b` from the tunnel, which is exactly
+## what the shader's shifted threshold cuts -- so the rim of the hole and the top of the bevel are
+## the same curve, at any angle and around any bend.
+##
+## THEY PART COMPANY IN EARTH THINNER THAN TWO BEVELS, which at this size is any two corridors
+## running closer than half a metre apart -- not a rare case, so it is worth saying exactly what
+## happens. The ground above has closed over entirely by then: the grown cut eats a wall that thin
+## from both sides at once. The two shoulders meanwhile cross rather than meet, and what you get is
+## a low ridge of earth between the two trenches with a hairline where the crossing is. That is a
+## seam on a surface, which the eye forgives; the alternative -- backing the bevel off where the
+## earth is thin, so the geometry stops short of a hole that has already opened -- is a slot
+## straight through to nothing, which it does not.
+const WALL_BEVEL: float = 0.25
+
+## Ceiling on the bevel as a fraction of the wall's own height, so a shortened wall gets a
+## shoulder in proportion rather than a wall that is nothing BUT shoulder. It also collapses the
+## whole profile to nothing on plane 0, whose "wall" is zero high and must stay invisible.
+##
+## IT HAS TO CLEAR THE BEVEL ABOVE AT THE DEFAULT WALL HEIGHT or the constant next door is a lie:
+## a ceiling below it does not read as a cap, it reads as the number having no effect. At 0.65m of
+## wall this leaves 40cm of straight face under a 25cm shoulder.
+const BEVEL_HEIGHT_FRACTION: float = 0.4
+
+## How deep the gouging in the flat of a wall goes, in metres.
+##
+## OUTWARD ONLY, NEVER INTO THE CORRIDOR. The noise is added along the outward normal as a 0..1
+## depth, so the drawn face is always at or BEHIND the outline the collision barrier stands on. A
+## two-sided wobble would look the same and would put earth a couple of centimetres inside the
+## space a mouse is entitled to walk through, which is the sort of mismatch that gets reported as
+## the controls sticking.
+const WALL_ROUGHNESS: float = 0.07
+
+## Metres per feature of that gouging, and the fraction of its true size the HEIGHT is fed in at --
+## so a gouge comes out a bit over twice as tall as it is wide. Stretched upward because that is
+## what a tool working a face leaves: unstretched noise reads as lumpy plaster, and the stretch
+## also covers how few rows a face this short can afford to be built out of.
+const ROUGH_SCALE: float = 0.38
+const ROUGH_STRETCH: float = 0.45
+## Fixed, so two machines drawing the same tunnel gouge it in the same places. Nothing about the
+## walls is on the wire -- both ends contour the same strokes -- and this is the one part of their
+## shape that is not implied by those strokes.
+const ROUGH_SEED: int = 8_512
+
+## The cross-section of one earth face, from the floor up. Per ring: how far up the straight part
+## of the wall it sits, how far round the quarter-turn of the bevel, and how much of
+## [constant WALL_ROUGHNESS] it carries.
+##
+## THE ENDS CARRY NO ROUGHNESS AT ALL, and both zeroes are load-bearing. The bottom ring is welded
+## to the floor, which is contoured on the outline itself -- move it and the wall lifts off its own
+## floor and you can see under it. The top ring is welded to the rim of the hole in the ground
+## above, which is a shader cutting a smooth curve and cannot be told about a gouge; a wall that
+## fell 2cm short of it would leave a slot straight through to nothing, all the way along the
+## corridor.
+##
+## FIVE ROWS RATHER THAN THE ONE QUAD THIS REPLACES, weighted toward the bevel because that is
+## where the silhouette is. It costs about as many wall triangles as a chunk has floor triangles;
+## the flat of the wall is the part you see least of and gets two. The whole change -- rows,
+## gouging and the normals it is all pointed along -- puts a stroke up from 5.2ms to 6.5ms on
+## `carve_probe.gd`'s scale, about a fifth, spread over the nine rebuilds a held dig makes.
+const WALL_RINGS: Array = [
+	[0.0, 0.0, 0.0],
+	[0.5, 0.0, 1.0],
+	[1.0, 0.0, 0.9],
+	[1.0, 0.45, 0.6],
+	[1.0, 0.8, 0.3],
+	[1.0, 1.0, 0.0],
+]
+
 ## Triangles, ready for a SurfaceTool. Filled by [method build], cleared on each call.
 var floors := PackedVector3Array()
 var walls := PackedVector3Array()
 var collision := PackedVector3Array()
+
+## The samples [method build] was given, with one ring of margin round them, and its row stride.
+## The margin is what makes the outward normal a central difference at EVERY sample including the
+## outermost -- see [method _outward_at].
+var _field := PackedFloat32Array()
+var _field_stride: int = 0
+
+## [constant WALL_RINGS] worked out against the wall height in hand: height, outward offset and
+## roughness depth, all in metres. Rebuilt once per [method build] rather than per face.
+var _rings := PackedVector3Array()
+
+## The gouging. Static because a contour is a per-chunk object and this is a per-project fact.
+static var _grain: FastNoiseLite = null
 
 
 ## Signed distance in metres, as the 0..1 the field stores. Negative distance -- inside the
@@ -62,6 +160,18 @@ static func encode(distance: float) -> float:
 
 static func decode(value: float) -> float:
 	return (SURFACE - value) * SDF_RANGE * 2.0
+
+
+## How far the top of a wall of this height leans back, in metres. The one number the geometry and
+## the hole cut in the ground above it both have to be built from.
+static func wall_bevel(wall_top: float) -> float:
+	return minf(WALL_BEVEL, maxf(0.0, wall_top) * BEVEL_HEIGHT_FRACTION)
+
+
+## Vertices one earth face is made of. Anything walking [member walls] a face at a time -- the rock
+## split, the audits -- has to step by this rather than by the 6 of the single quad it used to be.
+static func face_verts() -> int:
+	return (WALL_RINGS.size() - 1) * 6
 
 
 ## Signed distance from `point` to a segment of tunnel: a capsule of `half_width` about the line
@@ -93,12 +203,21 @@ static func segment_distance(point: Vector2, a: Vector2, b: Vector2, half_width:
 ##
 ## `wall_top` is how far the drawn earth face rises; `barrier_top` how far the invisible one does.
 ## The two differ (see TunnelNetwork.barrier_height) and always have.
+##
+## `margined` is the same samples with one extra ring all round, `(n + 3)` square, starting a texel
+## before `origin`. Only the wall's shape reads it, and only for the direction "away from the
+## tunnel" (see [method _outward_at]) -- but that direction has to be the SAME on both sides of a
+## chunk border or every seam in the world opens by the width of the bevel, and a central
+## difference at the outermost sample cannot be taken from samples that stop there. Left out, the
+## edge samples fall back to a one-sided difference, which is fine for a lone chunk and is what the
+## probes hand over.
 func build(
 	samples: PackedFloat32Array,
 	n: int,
 	origin: Vector2,
 	wall_top: float,
-	barrier_top: float
+	barrier_top: float,
+	margined: PackedFloat32Array = PackedFloat32Array()
 ) -> void:
 	floors.clear()
 	walls.clear()
@@ -107,6 +226,14 @@ func build(
 	var stride := n + 1
 	if samples.size() < stride * stride:
 		return
+
+	_field_stride = n + 3
+	_field = (
+		margined if margined.size() == _field_stride * _field_stride
+		else _widen(samples, n)
+	)
+	_shape_rings(wall_top)
+	_rough_grain()
 
 	for j in range(n):
 		var row := j * stride
@@ -148,6 +275,12 @@ func build(
 				inside,
 				[v00, v10, v11, v01],
 				[p00, p10, p11, p01],
+				[
+					_outward_at(i, j),
+					_outward_at(i + 1, j),
+					_outward_at(i + 1, j + 1),
+					_outward_at(i, j + 1),
+				],
 				wall_top,
 				barrier_top
 			)
@@ -170,6 +303,7 @@ func _walk_cell(
 	inside: int,
 	values: Array,
 	points: Array,
+	outward: Array,
 	wall_top: float,
 	barrier_top: float
 ) -> void:
@@ -179,7 +313,9 @@ func _walk_cell(
 			# Two corners, each its own little triangle, and the earth stays joined between them.
 			for corner in range(4):
 				if (inside >> corner) & 1:
-					_emit_polygon(_corner_lobe(corner, values, points), wall_top, barrier_top)
+					_emit_polygon(
+						_corner_lobe(corner, values, points, outward), wall_top, barrier_top
+					)
 			return
 
 	var polygon: Array[Vector2] = []
@@ -187,48 +323,146 @@ func _walk_cell(
 	## between two crossings is the isoline and therefore a wall; every other edge runs along the
 	## cell border, where the neighbouring cell either continues the floor or raises its own wall.
 	var crossed: Array[bool] = []
+	## Parallel to `polygon` too: which way the earth lies from that vertex. Only the wall reads it.
+	var normals: Array[Vector2] = []
 
 	for corner in range(4):
 		var next := (corner + 1) % 4
 		if (inside >> corner) & 1:
 			polygon.append(points[corner])
 			crossed.append(false)
+			normals.append(outward[corner])
 		var here_in := ((inside >> corner) & 1) != 0
 		var there_in := ((inside >> next) & 1) != 0
 		if here_in != there_in:
-			polygon.append(
-				_crossing(points[corner], points[next], values[corner], values[next])
-			)
+			var t := _crossing_t(values[corner], values[next])
+			polygon.append((points[corner] as Vector2).lerp(points[next], t))
 			crossed.append(true)
+			normals.append(_blend(outward[corner], outward[next], t))
 
-	_emit(polygon, crossed, wall_top, barrier_top)
+	_emit(polygon, crossed, normals, wall_top, barrier_top)
 
 
-## One inside corner cut off by the isoline: the corner itself and the two crossings either side.
-func _corner_lobe(corner: int, values: Array, points: Array) -> Array:
+## One inside corner cut off by the isoline: the corner itself and the two crossings either side,
+## as `[points, outward normals]`.
+func _corner_lobe(corner: int, values: Array, points: Array, outward: Array) -> Array:
 	var before := (corner + 3) % 4
 	var next := (corner + 1) % 4
+	var back := _crossing_t(values[before], values[corner])
+	var on := _crossing_t(values[corner], values[next])
 	return [
-		_crossing(points[before], points[corner], values[before], values[corner]),
-		points[corner],
-		_crossing(points[corner], points[next], values[corner], values[next]),
+		[
+			(points[before] as Vector2).lerp(points[corner], back),
+			points[corner],
+			(points[corner] as Vector2).lerp(points[next], on),
+		],
+		[
+			_blend(outward[before], outward[corner], back),
+			outward[corner],
+			_blend(outward[corner], outward[next], on),
+		],
 	]
 
 
 ## A three-vertex lobe is all crossings but for its middle vertex.
 func _emit_polygon(lobe: Array, wall_top: float, barrier_top: float) -> void:
-	var polygon: Array[Vector2] = [lobe[0], lobe[1], lobe[2]]
-	_emit(polygon, [true, false, true], wall_top, barrier_top)
+	var points: Array = lobe[0]
+	var outward: Array = lobe[1]
+	var polygon: Array[Vector2] = [points[0], points[1], points[2]]
+	var normals: Array[Vector2] = [outward[0], outward[1], outward[2]]
+	_emit(polygon, [true, false, true], normals, wall_top, barrier_top)
 
 
-## Where along an edge the surface sits. Linear in the stored value, which is linear in distance --
-## so this is the real crossing point rather than the midpoint, and it is the whole reason a wall
-## at an arbitrary angle comes out straight instead of stepped.
-func _crossing(a: Vector2, b: Vector2, va: float, vb: float) -> Vector2:
+## How far along an edge the surface sits. Linear in the stored value, which is linear in distance
+## -- so this is the real crossing point rather than the midpoint, and it is the whole reason a
+## wall at an arbitrary angle comes out straight instead of stepped.
+##
+## A FRACTION RATHER THAN A POINT, because the wall needs the same fraction to mix the two
+## corners' outward normals with. Taking the point from one function and the direction from
+## another is how the two end up disagreeing at a vertex two cells share, and a vertex two cells
+## disagree about is a crack you can see the void through.
+static func _crossing_t(va: float, vb: float) -> float:
 	var span := vb - va
 	if absf(span) < 0.000001:
-		return (a + b) * 0.5
-	return a.lerp(b, clampf((SURFACE - va) / span, 0.0, 1.0))
+		return 0.5
+	return clampf((SURFACE - va) / span, 0.0, 1.0)
+
+
+## Two outward normals mixed and renormalised. Falls back to whichever is real if they cancel --
+## which they do at the tip of a scrap of earth, where "away from the tunnel" has no answer.
+static func _blend(a: Vector2, b: Vector2, t: float) -> Vector2:
+	var mixed := a.lerp(b, t)
+	if mixed.length_squared() < 0.000001:
+		return a if a.length_squared() > 0.0 else b
+	return mixed.normalized()
+
+
+## Which way the earth lies from sample `(i, j)`: the field's gradient, flipped, as a unit vector.
+##
+## THE FIELD RISES INTO THE TUNNEL (see [method encode]), so its gradient points down the corridor
+## and the earth is the other way. Zero where the field is flat, which the wall reads as "do not
+## move this vertex" -- the honest answer in the middle of a plateau the thinning rewrote.
+##
+## A CENTRAL DIFFERENCE, from the margined copy, and both halves of that matter. Central because a
+## one-sided difference at a sample is a different direction from the one the sample on the far
+## side of the same edge computes, and the two are averaged into the same vertex. Margined because
+## the outermost samples of a chunk are the ones a neighbouring chunk also owns, and a vertex on
+## that seam must come out identical in both -- which it does only if both take the difference
+## across the same two samples.
+func _outward_at(i: int, j: int) -> Vector2:
+	var at := (j + 1) * _field_stride + (i + 1)
+	var gradient := Vector2(
+		_field[at + 1] - _field[at - 1],
+		_field[at + _field_stride] - _field[at - _field_stride]
+	)
+	if gradient.length_squared() < 0.000000001:
+		return Vector2.ZERO
+	return -gradient.normalized()
+
+
+## Samples with a ring of margin round them, made by repeating the edge. Only for callers that
+## have no wider window to give -- see [method build].
+static func _widen(samples: PackedFloat32Array, n: int) -> PackedFloat32Array:
+	var stride := n + 1
+	var wide := n + 3
+	var out := PackedFloat32Array()
+	out.resize(wide * wide)
+	for j in range(wide):
+		var row := clampi(j - 1, 0, n) * stride
+		var target := j * wide
+		for i in range(wide):
+			out[target + i] = samples[row + clampi(i - 1, 0, n)]
+	return out
+
+
+## [constant WALL_RINGS] in metres, for a wall of this height.
+func _shape_rings(wall_top: float) -> void:
+	var bevel := wall_bevel(wall_top)
+	var straight := maxf(0.0, wall_top - bevel)
+	var rough := WALL_ROUGHNESS if wall_top > 0.0 else 0.0
+	_rings.resize(WALL_RINGS.size())
+	for k in range(WALL_RINGS.size()):
+		var ring: Array = WALL_RINGS[k]
+		# The bevel is a quarter turn: sine takes the ring up, cosine takes it back.
+		var turn := (ring[1] as float) * PI * 0.5
+		_rings[k] = Vector3(
+			(ring[0] as float) * straight + bevel * sin(turn),
+			bevel * (1.0 - cos(turn)),
+			(ring[2] as float) * rough
+		)
+
+
+## The noise the flat of a wall is gouged with.
+static func _rough_grain() -> FastNoiseLite:
+	if _grain == null:
+		_grain = FastNoiseLite.new()
+		_grain.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+		_grain.seed = ROUGH_SEED
+		_grain.frequency = 1.0 / ROUGH_SCALE
+		# Two octaves: a broad swell for the shape of the cut and a finer one for the tool marks.
+		_grain.fractal_octaves = 2
+		_grain.fractal_gain = 0.45
+	return _grain
 
 
 ## Floor triangles for the polygon, and a wall on every edge that is part of the isoline.
@@ -238,7 +472,11 @@ func _crossing(a: Vector2, b: Vector2, va: float, vb: float) -> Vector2:
 ## facing INTO the corridor without any per-edge test -- and a wall facing the wrong way is
 ## invisible from the only place anybody stands to look at it.
 func _emit(
-	polygon: Array[Vector2], crossed: Array[bool], wall_top: float, barrier_top: float
+	polygon: Array[Vector2],
+	crossed: Array[bool],
+	normals: Array[Vector2],
+	wall_top: float,
+	barrier_top: float
 ) -> void:
 	if polygon.size() < 3:
 		return
@@ -251,6 +489,7 @@ func _emit(
 	if area < 0.0:
 		polygon.reverse()
 		crossed.reverse()
+		normals.reverse()
 		# Reversing puts each vertex's flag one place out of step with the edge it starts: the
 		# edge that ran k -> k+1 now runs the other way round the array. Rotating the flags by one
 		# puts them back on their own edges.
@@ -264,7 +503,7 @@ func _emit(
 		var next := (k + 1) % polygon.size()
 		if not (crossed[k] and crossed[next]):
 			continue
-		_add_wall(polygon[k], polygon[next], wall_top, barrier_top)
+		_add_wall(polygon[k], polygon[next], normals[k], normals[next], wall_top, barrier_top)
 
 
 ## A floor triangle, wound so it faces up. The polygon walk is anticlockwise in (x, z), which in
@@ -284,19 +523,42 @@ func _add_floor_triangle(a: Vector2, b: Vector2, c: Vector2) -> void:
 
 ## The earth face standing on one isoline edge. Drawn to `wall_top`, collided to `barrier_top` --
 ## two heights for two jobs, exactly as the cell version did.
-func _add_wall(a: Vector2, b: Vector2, wall_top: float, barrier_top: float) -> void:
+##
+## THE DRAWN FACE IS NO LONGER THE COLLIDED ONE, and that is the whole licence for what follows.
+## The barrier is still the flat vertical quad standing on the outline, so the shape of the world
+## a mouse walks into, a route is planned through and an audit measures is untouched by any of
+## this. What the eye gets is a strip of [constant WALL_RINGS] instead: gouged outward through the
+## flat of the wall, leaning back over a bevel at the top. Everything here moves earth AWAY from
+## the corridor or leaves it where it was, so the drawn wall never crosses the barrier and there
+## is nothing to walk into that you cannot see.
+##
+## THE VERTICES ARE A FUNCTION OF THE OUTLINE AND NOTHING ELSE -- the point, the height, and the
+## normal mixed for that point -- so the two cells that share a vertex compute the same offset for
+## it, whichever way their own isoline edges run. That is what keeps a wall built out of a few
+## thousand independent strips watertight.
+func _add_wall(
+	a: Vector2, b: Vector2, na: Vector2, nb: Vector2, wall_top: float, barrier_top: float
+) -> void:
+	var rings := _rings.size()
+	var side_a := PackedVector3Array()
+	var side_b := PackedVector3Array()
+	side_a.resize(rings)
+	side_b.resize(rings)
+	for k in range(rings):
+		var ring := _rings[k]
+		side_a[k] = _face_point(a, na, ring)
+		side_b[k] = _face_point(b, nb, ring)
+
+	for k in range(rings - 1):
+		walls.append(side_a[k])
+		walls.append(side_b[k])
+		walls.append(side_b[k + 1])
+		walls.append(side_a[k])
+		walls.append(side_b[k + 1])
+		walls.append(side_a[k + 1])
+
 	var base_a := Vector3(a.x, 0.0, a.y)
 	var base_b := Vector3(b.x, 0.0, b.y)
-	var top_a := Vector3(a.x, wall_top, a.y)
-	var top_b := Vector3(b.x, wall_top, b.y)
-
-	walls.append(base_a)
-	walls.append(base_b)
-	walls.append(top_b)
-	walls.append(base_a)
-	walls.append(top_b)
-	walls.append(top_a)
-
 	var bar_a := Vector3(a.x, barrier_top, a.y)
 	var bar_b := Vector3(b.x, barrier_top, b.y)
 	collision.append(base_a)
@@ -305,3 +567,18 @@ func _add_wall(a: Vector2, b: Vector2, wall_top: float, barrier_top: float) -> v
 	collision.append(base_a)
 	collision.append(bar_b)
 	collision.append(bar_a)
+
+
+## One vertex of a wall: a point on the outline, pushed back into the earth by the ring's own
+## offset and by however deep the gouging is at that spot.
+func _face_point(at: Vector2, outward: Vector2, ring: Vector3) -> Vector3:
+	var back := ring.y
+	if ring.z > 0.0:
+		# Sampled at the point on the OUTLINE rather than at the moved one, so the depth of a gouge
+		# does not depend on how deep the gouge came out. Height goes in as the noise's second
+		# axis, stretched, which is what makes a face vary up its own height instead of being an
+		# extrusion of one wobbly line.
+		var grain := _grain.get_noise_3d(at.x, ring.x * ROUGH_STRETCH, at.y)
+		back += ring.z * clampf(grain * 0.5 + 0.5, 0.0, 1.0)
+	var point := at + outward * back
+	return Vector3(point.x, ring.x, point.y)

@@ -140,6 +140,28 @@ const ID_MASK: int = 4095
 ## radius (see [Mouse.body_radius], 0.16) plus a little margin.
 const STANDING_CLEARANCE: float = 0.18
 
+## How much room a mouse needs to get PAST something, which is not the same question and does not
+## get the same answer. See [method walkable_between].
+##
+## THE MARGIN IS THE WHOLE DIFFERENCE, and it belongs to standing rather than to walking.
+## [constant STANDING_CLEARANCE] decides whether a square is somewhere a mouse LIVES -- a place to
+## be shoved about in, to swing from, to be a waypoint -- and being fussy by two centimetres there
+## costs a cell at the end of a corridor that nobody wanted anyway. A doorway is the opposite trade:
+## the mouse is only passing through, the body either fits or it does not, and a graph two
+## centimetres fussier than the collision mesh refuses junctions the player is visibly walking
+## through. The tangent join in [method walkable_between]'s header is exactly that case -- it
+## measures 16.8cm at its narrowest and the capsule goes through it without touching the sides.
+##
+## THE PHYSICS IS THE ARBITER, not this number: `tunnel_audit.gd` walks the player's actual capsule
+## along every step of every route it plans, so a value that let a route through a gap the body
+## cannot take would fail there rather than in play.
+const WALK_CLEARANCE: float = 0.16
+
+## Samples around the body when the field has to be asked the long way. See [method _stands_at].
+## Eight leaves 12cm between neighbouring samples at this radius -- about a texel, which is as fine
+## as the field can distinguish anyway.
+const WALK_RING: int = 8
+
 ## How far from a cell's centre to go looking for somewhere to stand, and how finely.
 ##
 ## A CELL IS CLAIMED IF THE TUNNEL PASSES THROUGH IT, NOT IF IT COVERS THE EXACT CENTRE, and
@@ -158,6 +180,15 @@ const STANDING_CLEARANCE: float = 0.18
 ## tunnel to two cells wide on the minimap.
 const CELL_PROBE_REACH: float = 0.4
 const CELL_PROBE_STEPS: int = 5
+
+## How finely a walk between two places is sampled. See [method walkable_between].
+##
+## SIZED AGAINST THE BODY RATHER THAN AGAINST THE FIELD. Each sample proves a disc of
+## [constant WALK_CLEARANCE] fits at that spot, and a signed distance is 1-Lipschitz, so a chain of
+## them proves the walk fits inside a sausage of `sqrt(clearance^2 - (step/2)^2)` -- 15.2cm at this
+## step. Halving it buys under a centimetre; doubling it starts letting a walk clip a corner between
+## two samples, which is a bot walking into a wall.
+const WALK_SAMPLE: float = 0.1
 
 ## Bit 1 is the world: ground, arena walls, props, rocks. Everything a mouse collides with
 ## regardless of depth.
@@ -922,11 +953,20 @@ func _segment_cells(id: int) -> Array[Vector2i]:
 ## samples that fall past either end restores "one stroke, one cell's worth of corridor" without
 ## costing a curve anything, because consecutive strokes chain end to end and their bodies cover
 ## the whole path between them.
+## TIES GO TO THE MIDDLE OF THE SQUARE, and that is not tidiness. Every sample along a straight
+## corridor's centreline is exactly as deep as every other, so a plain `<` keeps whichever the loop
+## reached first -- the corner of the sampling window, 0.4m off-centre, for every cell of every
+## axis-aligned tunnel in the game. Nothing minded while this only had to find somewhere solid to
+## drop a ray, and then [TunnelGraph] started handing these out as waypoints and pricing routes off
+## the gaps between them: a straight corridor came out as a row of points all shoved to one side,
+## and a route down it measured a length no corridor has. The centre is the honest tie-break, and
+## it is also the one a player would name.
 static func _probe_cell(cell: Vector2i, a: Vector2, b: Vector2) -> Array:
 	var origin := Vector2(float(cell.x) * CELL, float(cell.y) * CELL)
 	var along := b - a
 	var length_squared := along.length_squared()
 	var best := 1000.0
+	var closest := INF
 	var at := origin
 	var step := CELL_PROBE_REACH * 2.0 / float(CELL_PROBE_STEPS - 1)
 	for j in range(CELL_PROBE_STEPS):
@@ -939,8 +979,12 @@ static func _probe_cell(cell: Vector2i, a: Vector2, b: Vector2) -> Array:
 				if t < 0.0 or t > 1.0:
 					continue
 			var distance := TunnelContour.segment_distance(point, a, b, SEG_HALF_WIDTH)
-			if distance < best:
-				best = distance
+			var gap := point.distance_squared_to(origin)
+			# A centimetre of depth is the width of the tie: below that the two samples are the
+			# same spot as far as anything downstream can tell, and the nearer one is better.
+			if distance < best - 0.01 or (distance < best + 0.01 and gap < closest):
+				best = minf(best, distance)
+				closest = gap
 				at = point
 	return [at, best]
 
@@ -961,6 +1005,126 @@ func standing_point(plane: int, cell: Vector2i) -> Vector3:
 			best = probe[1]
 			at = probe[0]
 	return Vector3(at.x, plane_y(plane), at.y)
+
+
+## Could a mouse walk from here to there in a straight line, without leaving the tunnel?
+##
+## WHAT ADJACENCY USED TO BE ASSUMED TO MEAN, and the assumption that off-grid digging broke. Two
+## cells were connected if they shared a face, because a corridor was a run of whole squares and a
+## shared face was a doorway. Neither half of that survives: a stroke at 30 degrees claims a chain
+## of cells that touch only at their CORNERS -- perfectly walkable, no shared face anywhere -- and
+## it also clips cells whose far side is still solid, so a shared face can now have a metre of earth
+## standing in it. The old test was wrong in both directions at once, and the two failures look
+## completely different in play: a bot that will not follow you down a diagonal corridor, and a bot
+## that walks into a wall and grinds against it.
+##
+## SO CONNECTIVITY IS ASKED OF THE EARTH INSTEAD OF THE GRID. This is the whole of it -- the graph
+## above (see [TunnelGraph]) is nothing but this question asked of every pair of neighbouring cells.
+##
+## AND IT IS THE BOT'S OWN MOVEMENT MODEL, stated once. Underground a bot heads straight at the next
+## waypoint -- there is no navmesh down here and the graph is expected to have done the routing (see
+## `bot.gd::_next_step`) -- so "there is an edge between these two cells" and "walking straight
+## between these two points works" have to be the same claim, or the route is a promise the walk
+## cannot keep. Asking exactly the question the mouse will ask is what makes them the same claim.
+##
+## ASKED OF THE FIELD, NOT OF THE STROKES, and that was the second answer rather than the first.
+## Measuring against the strokes is the obvious thing and it is a SECOND MODEL of the earth: the
+## field has two more rules applied to it (the island cull and the thin-earth pass -- see
+## [member island_max_span], [member earth_min_thickness]) and the walls, the floor and the
+## collision trimesh are all built from the field AFTER they have run. A tunnel measured from the
+## strokes is therefore the tunnel as it was before the world finished deciding what it looked
+## like, and the two disagree in exactly the places those rules bite.
+##
+## THE CASE THAT FORCED IT, because it is not a corner case. Dig a corridor square-on at another
+## one and the last stroke you are allowed lands its rounded end exactly tangent to the far
+## corridor's wall -- they touch at a single point, there is no earth left between them for another
+## stroke to take, and measured off the strokes the doorway is zero wide. The thin-earth pass then
+## shaves the wedge either side of that point away and leaves a half-metre opening a mouse walks
+## straight through. Off the strokes the graph refuses a junction the player is using; off the field
+## it agrees with the floor.
+func walkable_between(plane: int, from: Vector2, to: Vector2) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return false
+	var span := from.distance_to(to)
+	var steps := maxi(1, ceili(span / WALK_SAMPLE))
+	for i in range(steps + 1):
+		if not _stands_at(plane, from.lerp(to, float(i) / float(steps))):
+			return false
+	return true
+
+
+## Is there room for a mouse to stand at this exact spot?
+##
+## ASKED AS "IS THERE EARTH WITHIN A BODY'S REACH", NOT AS "HOW DEEP IS IT HERE", and the difference
+## is the one property the field does not have. The field is the MAXIMUM of one signed distance per
+## stroke, which puts its zero crossing exactly where the tunnel's edge is -- a point is inside the
+## union precisely when some capsule contains it -- and makes the number at any other point an
+## UNDER-estimate of how far the nearest wall really is. Two parallel strokes laid side by side meet
+## along a seam their own distances both call zero, and the depth reading down that seam is nothing
+## while the ground either side of it is wide open. A chamber dug as adjacent runs is nothing but
+## seams, so a depth test refuses to walk across the middle of a room.
+##
+## Sampling a ring instead only ever asks the field the question it answers exactly: inside, or not.
+##
+## THE DEEP CASE STILL SHORT-CIRCUITS, because it is almost every case -- anywhere the reading is
+## already a body's width there is no ring worth taking.
+func _stands_at(plane: int, point: Vector2) -> bool:
+	# A barricade is a collider dropped into an otherwise open cell (see [method block_cell]): it
+	# moves no earth, so the field has no idea it is there. It has to be asked here rather than left
+	# to the graph dropping the cell, because a diagonal step between two open cells passes through
+	# the corner of two others and one of those can be the one holding the boulder.
+	if is_blocked(plane, world_to_cell(Vector3(point.x, 0.0, point.y))):
+		return false
+	var here := TunnelContour.decode(_field_at(plane, point))
+	if here > 0.0:
+		return false
+	if here <= -WALK_CLEARANCE:
+		return true
+	for i in range(WALK_RING):
+		var around := TAU * float(i) / float(WALK_RING)
+		var at := point + Vector2(cos(around), sin(around)) * WALK_CLEARANCE
+		if TunnelContour.decode(_field_at(plane, at)) > 0.0:
+			return false
+	return true
+
+
+## The dug field at a point, interpolated the way the contour interpolates it.
+##
+## Solid earth wherever nothing has been contoured, which is the honest answer for a chunk nobody
+## has ever dug in and the safe one for a chunk waiting on a rebuild.
+func _field_at(plane: int, point: Vector2) -> float:
+	if plane < 0 or plane >= PLANE_COUNT:
+		return 0.0
+	var fx := point.x * float(TunnelContour.TEXELS_PER_METRE) + float(FIELD_HALF_TEXELS)
+	var fy := point.y * float(TunnelContour.TEXELS_PER_METRE) + float(FIELD_HALF_TEXELS)
+	var gx := floori(fx)
+	var gy := floori(fy)
+	if gx < 0 or gy < 0 or gx + 1 >= FIELD_TEXELS or gy + 1 >= FIELD_TEXELS:
+		return 0.0
+	var tx := fx - float(gx)
+	var ty := fy - float(gy)
+	return lerpf(
+		lerpf(_texel(plane, gx, gy), _texel(plane, gx + 1, gy), tx),
+		lerpf(_texel(plane, gx, gy + 1), _texel(plane, gx + 1, gy + 1), tx),
+		ty
+	)
+
+
+## One stored sample, found through the chunk that holds it.
+##
+## Chunks overlap by a row and a column on purpose -- a chunk keeps `CHUNK_TEXELS + 1` samples each
+## way, so the texel on a border belongs to both neighbours and reads the same from either. That is
+## the same spare sample that stops a seam of missing wall appearing on every chunk edge, being
+## useful for a second reason.
+func _texel(plane: int, gx: int, gy: int) -> float:
+	var n := TunnelContour.CHUNK_TEXELS
+	var cx := mini(gx / n, FIELD_CHUNKS - 1)
+	var cy := mini(gy / n, FIELD_CHUNKS - 1)
+	var cached: Variant = _chunk_cache[plane].get(cy * FIELD_CHUNKS + cx)
+	if cached == null:
+		return 0.0
+	var field: PackedFloat32Array = (cached as Dictionary)["field"]
+	return field[(gy - cy * n) * (n + 1) + (gx - cx * n)]
 
 
 ## Put a segment into the books: the segment set, the reverse index, the derived cell set, and
@@ -2420,6 +2584,7 @@ func _build_lid(plane: int) -> void:
 	material.set_shader_parameter(
 		"field_texels_per_metre", float(TunnelContour.TEXELS_PER_METRE)
 	)
+	material.set_shader_parameter("dug_grow", rim_grow(plane))
 	material.set_shader_parameter("albedo_color", lid_color)
 	material.set_shader_parameter("dirt", DirtTexture.shared())
 	material.set_shader_parameter("dirt_tile", DirtTexture.WORLD_TILE)
@@ -2444,6 +2609,16 @@ func _build_lid(plane: int) -> void:
 ## The dug mask for a plane, for anything that needs to cut a hole in the earth above it.
 func dug_mask(plane: int) -> Texture2D:
 	return _mask_textures[clampi(plane, 0, PLANE_COUNT - 1)]
+
+
+## How far past the dug outline the ground over a plane has to be taken back, in metres.
+##
+## The top of that plane's walls leans away from the outline by exactly this much (see
+## [constant TunnelContour.WALL_BEVEL]); ground cut on the outline itself would stand over the
+## lean and hide it. Asked of the network rather than read off the constant because it depends on
+## how tall the walls of that particular plane are -- plane 0's are nothing.
+func rim_grow(plane: int) -> float:
+	return TunnelContour.wall_bevel(_wall_top(plane))
 
 
 func mask_half_cells() -> int:
@@ -2760,6 +2935,7 @@ func _make_rock_top_material(plane: int) -> ShaderMaterial:
 	material.set_shader_parameter(
 		"field_texels_per_metre", float(TunnelContour.TEXELS_PER_METRE)
 	)
+	material.set_shader_parameter("dug_grow", rim_grow(plane))
 	material.set_shader_parameter("albedo_color", rock_top_color)
 	material.set_shader_parameter("dirt", DirtTexture.shared())
 	material.set_shader_parameter("dirt_tile", DirtTexture.WORLD_TILE)
@@ -3141,8 +3317,19 @@ func _rebuild_chunk(plane: int, key: int) -> void:
 		float(base_x) / float(TunnelContour.TEXELS_PER_METRE),
 		float(base_y) / float(TunnelContour.TEXELS_PER_METRE)
 	)
+	var inner := _inner(shape, wide, pad, span)
+	# ONE RING WIDER FOR THE WALL'S SAKE. The bevel and the gouging both move a vertex along "away
+	# from the tunnel", which is a central difference of the field -- and at the outermost samples
+	# of a chunk that difference has to be taken across the border, or the two chunks sharing that
+	# seam lean their walls back in slightly different directions and the seam opens. See
+	# [method TunnelContour.build]. Free: these samples are already in `shape`.
 	contour.build(
-		_inner(shape, wide, pad, span), n, chunk_origin, _wall_top(plane), _barrier_top(plane)
+		inner,
+		n,
+		chunk_origin,
+		_wall_top(plane),
+		_barrier_top(plane),
+		_inner(shape, wide, pad - 1, span + 2) if pad >= 1 else PackedFloat32Array()
 	)
 
 	var walls := PackedVector3Array()
@@ -3155,6 +3342,16 @@ func _rebuild_chunk(plane: int, key: int) -> void:
 		"stone": stone,
 		"collision": contour.collision,
 		"islands": islands,
+		# THE NUMBERS THE TRIANGLES ABOVE CAME OUT OF, kept rather than thrown away, so that
+		# anything asking "is there room for a mouse here" can ask the same thing the wall was
+		# built from instead of a second model of it. See [method walkable_between], which is the
+		# whole reason this is here -- routing used to re-derive the shape of the earth from the
+		# strokes, which is the field before two of its rules have run, and got a different answer
+		# from the collision mesh in exactly the places those rules bite.
+		#
+		# A CHUNK'S WORTH IS 33x33 FLOATS -- 4.4KB, against the tens of KB of triangles it sits
+		# beside, and only for chunks somebody has dug in.
+		"field": inner,
 		# WORKED OUT HERE, WHERE THERE ARE A FEW HUNDRED TRIANGLES, rather than out in the plane
 		# assembly where there are tens of thousands and none of them have moved.
 		#
@@ -3578,7 +3775,13 @@ func _in_culled_island(plane: int, point: Vector2) -> bool:
 func _split_stone(
 	plane: int, source: PackedVector3Array, earth: PackedVector3Array, stone: PackedVector3Array
 ) -> void:
-	for t in range(0, source.size(), 6):
+	# A WHOLE FACE AT A TIME, ASKED AT ITS FOOT. A face is a strip of rows now rather than one quad
+	# (see TunnelContour._add_wall), and the rows above the first stand back from the outline by
+	# the bevel -- so asking each row for itself would sometimes put a row of stone and a row of
+	# earth on the same face, and the seam between them would be a grey stripe up a mud wall. The
+	# bottom row is the one on the true outline, which is the question this was always asking.
+	var stride := TunnelContour.face_verts()
+	for t in range(0, source.size(), stride):
 		var a := source[t]
 		var b := source[t + 1]
 		# A step from the middle of the face AWAY from the corridor, far enough to land in the
@@ -3586,7 +3789,7 @@ func _split_stone(
 		var outward := -(b - a).cross(Vector3.UP).normalized()
 		var behind := (a + b) * 0.5 + outward * (CELL * 0.6)
 		var into := stone if _rock[plane].has(world_to_cell(behind)) else earth
-		for k in range(6):
+		for k in range(stride):
 			into.append(source[t + k])
 
 

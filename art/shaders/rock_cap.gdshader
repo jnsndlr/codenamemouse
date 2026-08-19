@@ -35,7 +35,9 @@ void vertex() {
 
 void fragment() {
 	vec2 xz = world_position.xz;
-	if (sample_dug(dug_here, xz)) {
+	// The same rim the lid takes back, so the sheet's edge stays on the ground's edge rather than
+	// overhanging the bevel the ground has just leaned away from.
+	if (sample_dug(dug_here, xz, dug_grow)) {
 		discard;
 	}
 	ALBEDO = albedo_color * texture(dirt, xz / dirt_tile).rgb;
