@@ -41,10 +41,39 @@ extends MouseControl
 ## walking away from the dig; the control wanted you standing still, which fought the Engineer's
 ## own job of cutting a corridor. A recharge does not care where you are when it expires.
 @export var dig_seconds: float = 0.5
-## How far from the mouse a tile can be and still be diggable, in cells. Stops you reaching
-## across the map with the cursor -- you dig at arm's length, which is also what keeps the
-## Engineer stationary and vulnerable while they work.
-@export var dig_reach: float = 2.6
+## How far from the mouse a stroke may START, in metres. Stops you reaching across the map with
+## the cursor -- you dig at arm's length, which is also what keeps the Engineer stationary and
+## vulnerable while they work.
+##
+## `[REVISED]` DELIBERATELY JUST UNDER A STROKE LENGTH, down from 2.6. The old number let you
+## stand well back and eat forward with the cursor, which made the Engineer a turret: the mouse
+## barely moved, and the corridor grew away from it. Under a metre the rule becomes one you can
+## state in a sentence -- **a stroke never starts further from you than the stroke is long** --
+## and it has to be re-earned every stroke, because opening one puts the new face a metre further
+## on. Holding the button now walks you into your own tunnel, which is what the recharge was
+## built for (see [method _update_dig]) and what the reach was quietly cancelling out.
+##
+## Branching sideways is untouched by this, and that is worth knowing before tuning it: the root
+## is the nearest point of EXISTING tunnel to the cursor, so a stroke off the corridor wall you
+## are standing in starts at your feet whatever this says. The number only rations reaching
+## FORWARD, into ground nobody has opened yet.
+@export var dig_reach: float = 0.9
+## How far from existing tunnel the CURSOR may point and still name a stroke, in metres.
+##
+## `[SPLIT OUT OF dig_reach]`, and the split is the whole reason shortening the reach was safe.
+## One number used to do both jobs: it capped how far the cut may start from the mouse AND how
+## far from the tunnel the cursor could be and still find a branch root. Those read as the same
+## rule and are not, because they are measured from different things -- one from the mouse, one
+## from the cursor -- and taking the shared number under a metre broke aiming outright: pointing
+## at the very next cell puts the cursor a metre from the tunnel you are standing in, so the root
+## search came back empty and the ground would not open at all. The audit caught it as "one press
+## did not open the tile it was aimed at", which is a sentence about digging and was really a
+## sentence about pointing.
+##
+## SO AIMING KEEPS THE OLD 2.6 AND ONLY STANDING GOT STRICTER. You may still point well out into
+## the dark and have a stroke run that way; what you may no longer do is start that stroke from a
+## piece of tunnel you are not standing next to. Reach is about where your paws are.
+@export var aim_range: float = 2.6
 ## How far the cursor may wander, in metres along the corridor wall and in angle steps, before it
 ## counts as pointing at a different stroke. See [method _drifted] -- without a band here the aim
 ## changes several times a second on a still hand and nothing is ever dug.
@@ -79,9 +108,12 @@ var _aimed_at: Vector2 = Vector2.ZERO
 ## while you walk, while you turn round, and while you decide where the next metre goes. Nothing
 ## you do with the cursor can spend it or refund it.
 var _cooldown: float = 0.0
-## Built on the first frame anybody is looking at this mouse, and never on the other nine. Ten
-## shader-material cursors for one pair of eyes is nine wasted meshes in every match.
-var _cursor: DigCursor
+## The earth coming off the face while this mouse digs. UNLIKE THE CURSOR, NOT GATED ON
+## `watched()`: the cursor is aiming UI and belongs to the one pair of eyes steering it, but dust
+## is a thing happening in the world -- on a host, a remote player's dig should throw earth on
+## every screen that can see the corridor, exactly as their strokes open it. Built on demand, on
+## the first frame this mouse actually digs.
+var _dust: DigDust
 ## Cells this controller has actually opened, and shafts it has sunk.
 ##
 ## COUNTED BECAUSE OF WHERE IT IS COUNTED. On a host these are per SEAT, so they say which human's
@@ -181,6 +213,10 @@ func _physics_process(delta: float) -> void:
 		# poses, which reads as the shaft being broken rather than as the client overstepping.
 		if acts():
 			_take_shaft(standing)
+		# Taking a shaft skips the dig update below, so the scrabble and the dust are told to
+		# stop here -- a mouse arriving on a new plane still wearing last frame's pose would be
+		# digging at a wall that is now a layer away.
+		_dress(false, -1)
 		return
 
 	_update_dig(frame, delta)
@@ -226,10 +262,11 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 	# in the first place, rather than being filtered out here and again in `player.gd`.
 	var held := frame.is_held(InputFrame.Action.DIG)
 
-	# ROCK GETS ITS OWN CURSOR (GDD section 3). A seam is refused by the network, so without this
-	# the cursor simply vanishes over it -- which is what "out of reach" and "not adjacent" and
-	# "already dug" all look like, and the player is left to guess which of the four they have hit.
-	# Pressing on it says so out loud, once per press, through the network's own refusal.
+	# WHY A PRESS THAT DOES NOTHING HAS TO SAY SOMETHING, and why that matters more now than it
+	# did. The rock refusal below used to be a second opinion: the hover box had already gone grey
+	# over the seam, and this only put words to it. With the box gone (see [DigCursor]) the words
+	# are the ONLY feedback a refused press gets, so both refusals -- stone, and simply being too
+	# far from the earth -- are said out loud on the press.
 	if _target < 0:
 		var rock := _blocked_cell()
 		if rock != Vector2i.MAX:
@@ -238,8 +275,12 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 				# the controls are working and the ground is not.
 				_network.dig_refused.emit("solid rock -- go round it, or go under it")
 				_learn_vein(rock)
-			_show_blocked(rock)
+			# No dust and no scrabble on rock, deliberately: pressing on a seam achieves nothing,
+			# and paws visibly working it would promise otherwise.
+			_dress(false, -1)
 			return
+		if frame.is_pressed(InputFrame.Action.DIG):
+			_explain_reach(at)
 
 	if _target >= 0 and held and _cooldown <= 0.0:
 		# CHARGED WHETHER OR NOT THIS MACHINE IS THE ONE THAT CUTS, which is what keeps a client
@@ -258,12 +299,16 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 				_player.team
 			):
 				_cut += 1
+				# Aimed before it kicks, because on the very first press the emitter has never
+				# been pointed at anything -- a kick with no face to come off is no kick at all.
+				_aim_dust(cut)
+				_dust.kick()
 			_learn_exposed(cut)
 		# Re-aim immediately: the stroke just landed, so it is no longer a valid target and a held
 		# button should move on to the next one rather than sit on a stroke that no longer exists.
 		_target = _aimed_id()
 
-	_show(_target, get_dig_charge(), _target >= 0 and held)
+	_dress(_target >= 0 and held, _target)
 
 
 ## Running into a seam teaches your crew where it goes (GDD section 3).
@@ -278,10 +323,10 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 ##
 ## THE PRESS ALONE WAS NEARLY NEVER ENOUGH, which only showed up on screen. Digging a corridor
 ## along a seam draws its face in stone -- you are standing there looking at it -- and none of that
-## counted, because the reveal hung off deliberately pressing dig INTO the rock. The cursor tells
-## you not to do that: it goes grey and stops pulsing precisely to say holding the button will
-## achieve nothing. So the one action the feature waited for was the one action the interface talks
-## you out of, and the vein you had plainly found stayed dark.
+## counted, because the reveal hung off deliberately pressing dig INTO the rock, which is the one
+## thing the game tells you not to bother doing: back when the hover box existed it went grey over
+## stone, and now the refusal says so in words. So the one action the feature waited for was the
+## action the interface talks you out of, and the vein you had plainly found stayed dark.
 ##
 ## Both paths reveal now. Running into it head-on still works and is what a player does when they
 ## want to know how far it goes; exposing the face is what actually happens.
@@ -300,43 +345,89 @@ func _learn_vein(cell: Vector2i) -> void:
 	_network.reveal_vein(_plane, cell, _player.team)
 
 
-## The cursor, and the two rules about it.
+## Why a press that named no stroke did nothing, when the answer is distance.
 ##
-## BUILT ON DEMAND AND ONLY FOR THE MOUSE THIS MACHINE IS LOOKING AT. Every driven mouse in the
-## match carries one of these controllers now, so an unconditional cursor would be a box of earth
-## lit up on the host's screen for every corridor every other player is standing in.
+## `[ADDED WITH THE CURSOR'S REMOVAL]` and only worth having because of it. A refused press used
+## to be self-explanatory: the box was either sitting on a stroke or it wasn't, so "out of reach"
+## was something you learnt by waving the cursor around with no button pressed. Nothing draws that
+## rule any more, and the reach is now short enough that walking a step too far back silently
+## stops the ground opening -- which is the exact failure a player reads as the button being
+## broken. So distance gets said out loud, on the press, the way stone already was.
 ##
-## A PUPPET STILL GETS ONE, though, and that is the other half. On a client the local mouse is a
-## puppet -- its rules resolve on the host -- but the reach and adjacency rules are exactly what
-## the cursor exists to teach, and they are the same rules on both machines. What a client must
-## not do is *cut*, and it cannot: the network refuses it.
-func _show(id: int, progress: float, digging: bool) -> void:
-	var cursor := _cursor_for()
-	if cursor == null:
+## SEARCHED WIDER THAN THE REACH, deliberately: a cursor further from the tunnel than a mouse may
+## dig finds no root at all, which is the commonest way to be too far and would otherwise be the
+## one case that stayed silent. Beyond three times the reach the player is pointing at open lawn
+## or across the map, and has not asked a question this can answer.
+##
+## THROUGH `explain` RATHER THAN THE NETWORK'S SIGNAL DIRECTLY, so a remote player's fumbled press
+## does not print on the host's HUD. See [method MouseControl.explain].
+func _explain_reach(at: Vector2) -> void:
+	if _plane <= 0 or _player == null:
 		return
-	cursor.show_stroke(_network, _plane, id, progress, digging)
-
-
-func _show_blocked(cell: Vector2i) -> void:
-	var cursor := _cursor_for()
-	if cursor == null:
+	var root := _network.nearest_segment_point(_plane, at, aim_range)
+	if root.is_empty():
 		return
-	cursor.show_blocked(_network, _plane, cell)
+	var from: Vector2 = root[0]
+	var here := _player.global_position
+	if Vector2(here.x, here.z).distance_to(from) > dig_reach:
+		explain("too far -- dig at arm's length")
 
 
-func _cursor_for() -> DigCursor:
-	if not watched():
-		if _cursor != null:
-			# Hidden through its own door rather than by setting `visible`, so there is one place
-			# that decides what an absent target looks like.
-			_cursor.show_stroke(_network, _plane, -1, 0.0, false)
-		return null
-	if _cursor == null and _network != null:
-		# Parented to the network rather than to this node, so it sits in tunnel space -- a control
-		# is a plain Node with no transform of its own.
-		_cursor = DigCursor.new()
-		_network.add_child(_cursor)
-	return _cursor
+## Everything cosmetic that says "this mouse is digging", switched as one thing: the toon
+## scrabble the body wears and the dust coming off the face. One door, so the two cannot
+## disagree -- paws working a wall that sheds nothing, or a wall shedding under idle paws, are
+## both the same bug and this is where it would live.
+##
+## `digging` means the button is down on a stroke the network would cut. It stays true through
+## the cooldown between strokes on purpose -- the recharge is part of the effort, and dust that
+## started and stopped twice a second would flicker in exactly the rhythm the instant-stroke
+## model was built to remove.
+##
+## SINCE THE HOVER BOX WENT, THIS IS THE ONLY THING THAT DRAWS A DIG. Worth saying plainly here,
+## because it changes what a bug in this function costs: dust and pose used to be the decoration
+## on top of the cursor, and they are now the whole of the picture.
+func _dress(digging: bool, id: int) -> void:
+	if _player != null:
+		_player.set_digging(digging)
+	if digging and id >= 0 and _network != null:
+		_aim_dust(id)
+		_dust.set_active(true)
+	elif _dust != null:
+		_dust.set_active(false)
+
+
+## Point the emitter at the stroke being worked: at the WALL, and thrown back along the stroke
+## toward the digger, because that is the open side of it.
+##
+## A THIRD OF THE WAY ALONG, WHICH IS NOT WHERE THE STROKE IS. The obvious spot is the middle of
+## the earth being bought -- that is what the cursor's far half draws and what the dig actually
+## removes -- and it is wrong, because until the stroke lands that point is INSIDE SOLID GROUND.
+## Dust born there is depth-tested against the terrain and simply does not exist on screen; the
+## first version emitted at 0.55 and produced a perfectly healthy emitter, correctly aimed,
+## holding ten live puffs, that photographed as nothing at all.
+##
+## The stroke's origin is the centreline of the tunnel you are branching from (see
+## [method _aimed_id]), so the wall stands about half a width along it -- which is why the puffs
+## belong just short of that, in the open air the digger is standing in.
+func _aim_dust(id: int) -> void:
+	if _dust == null:
+		_dust = DigDust.new()
+		_dust.name = "DigDust"
+		# Parented to the network, like the cursor: dust stands in tunnel space, and a puff
+		# must hang where it was thrown rather than follow a mouse that walks off mid-dig.
+		_network.add_child(_dust)
+	var a := TunnelNetwork.segment_origin(id)
+	var b := TunnelNetwork.segment_end(id)
+	var face := a.lerp(b, 0.35)
+	_dust.aim(Vector3(face.x, _network.plane_y(_plane) + 0.12, face.y), a - b)
+
+
+func _exit_tree() -> void:
+	# The dust lives under the network, not under this controller, so a mouse leaving the match
+	# would otherwise strand its emitter there -- inert, invisible, and one per respawned seat.
+	if is_instance_valid(_dust):
+		_dust.queue_free()
+	_dust = null
 
 
 ## How fast whoever is driving opens a tile, as a multiplier on `dig_seconds`.
@@ -383,7 +474,7 @@ func _aimed_id() -> int:
 		return -1
 
 	var at := _aim_flat()
-	var root := _network.nearest_segment_point(_plane, at, dig_reach)
+	var root := _network.nearest_segment_point(_plane, at, aim_range)
 	if root.is_empty():
 		return -1
 
@@ -495,7 +586,7 @@ func _blocked_cell() -> Vector2i:
 		return Vector2i.MAX
 
 	var at := _aim_flat()
-	var root := _network.nearest_segment_point(_plane, at, dig_reach)
+	var root := _network.nearest_segment_point(_plane, at, aim_range)
 	if root.is_empty():
 		return Vector2i.MAX
 

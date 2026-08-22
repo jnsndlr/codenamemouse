@@ -302,6 +302,19 @@ var _creeping: bool = false
 ## The swipe. Built here rather than placed in the scenes so bot.tscn, player.tscn and a mouse a
 ## headless audit builds by hand all telegraph identically -- see swing_arc.gd.
 var _swing_arc: SwingArc
+## Whether whoever is driving is holding the dig button on a stroke it could cut. INTENT, set by
+## the dig controller every physics tick; the mouse only wears the pose. See [method _process].
+var _digging: bool = false
+## How much of the digging pose the body is currently wearing, 0..1, chased toward `_digging` so
+## the scrabble arrives and leaves in a few frames rather than snapping -- the same shape as
+## `_veil`, for the same reason: the state is a switch and the picture must not be.
+var _dig_lean: float = 0.0
+## Where in the scrabble cycle the paws are. Accumulated rather than read off a clock, so the
+## pose eases out from wherever it was instead of jumping when the button comes back down.
+var _dig_phase: float = 0.0
+## What `_fit_body` last scaled the model to, so the scrabble's squash can ride ON that scale
+## rather than silently undoing a Brute's width every time somebody digs.
+var _fitted_scale: Vector3 = Vector3.ONE
 
 
 func _ready() -> void:
@@ -429,7 +442,8 @@ func _fit_body() -> void:
 
 	if _visual != null:
 		var wide := model_radius / STANDARD_RADIUS
-		_visual.scale = Vector3(wide, height_ratio(), wide)
+		_fitted_scale = Vector3(wide, height_ratio(), wide)
+		_visual.scale = _fitted_scale
 
 
 ## How fast this mouse opens a tile, as a multiplier on the dig controller's own timing.
@@ -439,6 +453,63 @@ func _fit_body() -> void:
 ## the GDD. A crew without an Engineer can still get underground, slowly, in a pinch.
 func get_dig_speed() -> float:
 	return MouseClass.definition_of(mouse_class).dig_speed
+
+
+## Told by the dig controller, every physics tick, whether the paws are at the wall. A statement
+## of intent, not of result: it is true through the whole hold, cooldown included, because the
+## thing being pictured is EFFORT and the recharge is part of the effort. See [method _process].
+func set_digging(on: bool) -> void:
+	_digging = on
+
+
+## The toon scrabble: quick nose-down jabs and a little squash-and-stretch while digging.
+##
+## PROCEDURAL, LIKE EVERYTHING ELSE THE BODY DOES. There is one grey-box mouse model and no rig;
+## the swing is a drawn arc, the scruff is a rotation, and the dig is this -- a pitch oscillation
+## on `_visual` with a counter-squash in sync. When a rigged model with a real dig cycle arrives,
+## this function is the one seam it replaces.
+##
+## ON `_process`, NOT THE PHYSICS TICK, for two reasons that point the same way. It is decoration,
+## so it belongs on the drawn frame -- a 9Hz wobble sampled at 60Hz physics and shown at 144
+## stutters. And a client's local mouse is a PUPPET, whose `_physics_process` returns before it
+## simulates anything: the one machine whose player is actually holding the button would be the
+## one machine that never showed the pose.
+##
+## RIDES ONLY `rotation.x` AND `scale`. `rotation.y` is the facing and belongs to the drivers;
+## `rotation.z` is the scruff pose. A scruffed mouse gets no scrabble at all -- paws in the air,
+## laid on its side, still jabbing at nothing is exactly the cartoon this is not meant to be.
+func _process(delta: float) -> void:
+	if _visual == null:
+		return
+	# Eased on and off, EXCEPT out of a scruff, which is a cut rather than a fade: a mouse being
+	# knocked flat while it digs should stop digging in the same frame it goes down, not carry on
+	# jabbing at the wall for a tenth of a second on its side.
+	if _scruffed:
+		_dig_lean = 0.0
+	else:
+		_dig_lean = move_toward(_dig_lean, 1.0 if _digging else 0.0, delta * 8.0)
+	if _dig_lean <= 0.0:
+		if _dig_phase != 0.0:
+			_dig_phase = 0.0
+			_visual.rotation.x = 0.0
+			_visual.scale = _fitted_scale
+		return
+
+	# Nine strokes a second: fast enough to read as scrabbling rather than nodding, slow enough
+	# that a whole jab survives a 30fps frame. Deliberately unrelated to `dig_seconds` -- the
+	# paws are a picture of effort, and the strokes landing on their own beat under it is what
+	# makes the recharge feel like digging instead of like a metronome.
+	_dig_phase = wrapf(_dig_phase + delta * TAU * 9.0, 0.0, TAU)
+	var jab := 0.5 + 0.5 * sin(_dig_phase)
+	# Negative pitch is nose-DOWN for a model that faces -Z: the mouse works at the ground in
+	# front of it, between a slight lean and a full jab.
+	_visual.rotation.x = -_dig_lean * (0.10 + 0.16 * jab)
+	# The squash lands with the jab: down-and-wide on the strike, back up between. Multiplied
+	# onto the fitted scale so a Brute digs as a wide mouse, not as a standard one.
+	var squash := 1.0 - _dig_lean * 0.10 * jab
+	_visual.scale = _fitted_scale * Vector3(
+		1.0 + _dig_lean * 0.05 * jab, squash, 1.0 + _dig_lean * 0.05 * jab
+	)
 
 
 ## Whether this mouse fits down a shaft at all (GDD section 4 -- the Juggernaut does not).

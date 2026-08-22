@@ -190,7 +190,7 @@ func _check_paid(player: Mouse, controller: Node, network: TunnelNetwork) -> int
 	print("-- paid")
 	player.set_class(MouseClass.ENGINEER)
 	_stand(player, network)
-	_wait(player, controller, network, 200)
+	_frontier(player, controller, network, Vector2(-1.0, 1.0), 20)
 	_advance(player, controller, network, Vector2(-1.0, 1.0), 1)
 	if controller.get_dig_charge() >= 1.0:
 		printerr("   the setup stroke cost no recharge, so there is nothing to wait out")
@@ -210,7 +210,8 @@ func _check_sticks(player: Mouse, controller: Node, network: TunnelNetwork) -> i
 	print("")
 	print("-- sticks")
 	_stand(player, network)
-	_hold(player, controller, network.cell_to_world(PLANE, Vector2i(-1, 2)), 4, false)
+	_frontier(player, controller, network, Vector2(-1.0, 2.0), 20)
+	_aim_ahead(player, controller, Vector2(-1.0, 2.0))
 	if controller._target < 0:
 		printerr("   the setup never found a stroke to hold on to")
 		return 1
@@ -229,7 +230,8 @@ func _check_refuses(player: Mouse, controller: Node, network: TunnelNetwork) -> 
 	print("")
 	print("-- refuses")
 	_stand(player, network)
-	_hold(player, controller, network.cell_to_world(PLANE, Vector2i(1, -2)), 4, false)
+	_frontier(player, controller, network, Vector2(1.0, -2.0), 20)
+	_aim_ahead(player, controller, Vector2(1.0, -2.0))
 	if controller._target < 0:
 		printerr("   the setup never found a stroke to leave")
 		return 1
@@ -269,9 +271,21 @@ func _gap(
 ## THE PLAYER HAS TO MOVE, and a probe that leaves it standing still is testing the reach rule
 ## rather than the dig. Reach is measured from the MOUSE to where the cut happens (GDD section 3,
 ## and see `_aimed_id`), so a corridor run out past `dig_reach` from a mouse rooted to the spot
-## stops being diggable after two strokes -- which is the rule working, and is exactly the walking
-## the instant dig exists to make possible. Stepping to the stroke's own origin each frame is the
-## cheapest honest stand-in for a player following their own tunnel in.
+## stops being diggable -- which is the rule working, and is exactly the walking the instant dig
+## exists to make possible.
+##
+## `[REVISED]` WALKED TO THE TUNNEL POINT NEAREST ITS OWN CURSOR, rather than to the origin of
+## whatever stroke the controller is currently offering. The second version deadlocked the moment
+## `dig_reach` came down under a metre, and the way it deadlocked is worth keeping: it moved the
+## mouse only `if controller._target >= 0`, and the target is re-aimed AFTER a stroke lands, from
+## the position the mouse has not moved to yet. So the cut pushed the frontier one metre out, the
+## re-aim found it out of reach and answered -1, and the -1 was precisely what the step was
+## conditional on. The mouse stood one metre behind its own corridor for the remaining 399 frames,
+## and every check built on this reported "a held button did not produce two strokes".
+##
+## Asking the NETWORK where the tunnel is has no such circularity -- the ground is there whether
+## or not the controller is currently willing to cut, so the mouse follows its corridor in even on
+## the frames it is out of reach, which is what a player walking forward does.
 func _advance(
 	player: Mouse, controller: Node, network: TunnelNetwork, heading: Vector2, frames: int
 ) -> void:
@@ -279,10 +293,13 @@ func _advance(
 		var here := player.global_position
 		var aim := here + Vector3(heading.x, 0.0, heading.y).normalized() * 2.0
 		_hold(player, controller, aim, 1, true, i == 0)
-		if controller._target >= 0:
-			var root := TunnelNetwork.segment_origin(controller._target)
+		var root := network.nearest_segment_point(
+			PLANE, Vector2(aim.x, aim.z), controller.aim_range
+		)
+		if not root.is_empty():
+			var from: Vector2 = root[0]
 			player.global_position = Vector3(
-				root.x, network.plane_y(PLANE) + 0.05, root.y
+				from.x, network.plane_y(PLANE) + 0.05, from.y
 			)
 
 
@@ -290,6 +307,41 @@ func _advance(
 ## a check can start from without depending on what the check before it opened.
 func _stand(player: Mouse, network: TunnelNetwork) -> void:
 	player.global_position = network.cell_to_world(PLANE, Vector2i(0, 0)) + Vector3.UP * 0.05
+
+
+## Cut a short corridor off down `heading` and leave the mouse at its tip on a full charge.
+##
+## `[ADDED]` BECAUSE THE LANDING STOPPED BEING A PLACE YOU CAN DIG FROM, which is a consequence of
+## the reach coming down and took three checks with it when it arrived. Every check here starts by
+## standing on the shaft landing, and by the time the last three run, four earlier ones have
+## radiated corridors out of it in every direction -- so the ground within a stroke of that cell is
+## largely open already, and `opens_ground` rightly refuses what little is left.
+##
+## None of that showed while `dig_reach` was 2.6, because a root could be picked up two and a half
+## metres away at the far END of one of those corridors, out where the ground is still solid. Under
+## a metre a mouse can only branch from tunnel it is standing in -- and the landing is the most-dug
+## cell on the plane, which makes it the worst possible place to ask for fresh earth.
+##
+## So a check that needs a live stroke walks out to a frontier first, exactly as a player would.
+## The tip of a fresh corridor has solid ground in front of it whatever the landing looks like,
+## which is what makes this robust against however much the checks before it dug.
+func _frontier(
+	player: Mouse, controller: Node, network: TunnelNetwork, heading: Vector2, frames: int = 30
+) -> void:
+	_wait(player, controller, network, 200)
+	_advance(player, controller, network, heading, frames)
+	# Back to a known full charge, so a caller measuring what its own stroke costs is not reading
+	# the tail of one this left running.
+	_wait(player, controller, network, 200)
+
+
+## Point just past the mouse's own nose, WITHOUT pressing, so a check that is about the aim can
+## name a stroke without cutting one. A metre and a bit: far enough to be earth rather than the
+## corridor underfoot, close enough that the root it picks is the tunnel the mouse is standing in.
+func _aim_ahead(player: Mouse, controller: Node, heading: Vector2) -> void:
+	var here := player.global_position
+	var aim := here + Vector3(heading.x, 0.0, heading.y).normalized() * 1.2
+	_hold(player, controller, aim, 4, false)
 
 
 ## Let the recharge run out with the button up, so a check starts from a known full charge.

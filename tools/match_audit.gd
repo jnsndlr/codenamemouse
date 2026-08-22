@@ -3060,9 +3060,23 @@ func _check_controls() -> void:
 
 	# The cursor follows the eyes, not the authority. Both mice are simulated here; only one of
 	# them is being looked at, and only that one should be drawing a box on the ground.
+	#
+	# `[REVISED]` ASKED OF THE BRUTE'S CURSOR RATHER THAN THE DIGGER'S, because the digger no
+	# longer has one: holding dig draws itself in the world now (the paws scrabble, the face sheds
+	# earth) and the hover box was removed with it. Left pointed at `DigController` these two lines
+	# did not fail loudly -- the first one did, and the SECOND would have gone on passing forever,
+	# because a field that no longer exists reads as null on both mice. A check whose negative half
+	# cannot fail is worse than no check, so the invariant moved to a control that still has a
+	# per-viewer cursor rather than being quietly deleted with the thing it used to watch.
+	#
+	# [CaveIn] builds its cursor from `_process` on any watched mouse, before it looks at class or
+	# plane, which is what makes it a fair subject here: nothing about this scenario has to be
+	# arranged for it, exactly as nothing had to be for the dig.
 	await _advance(0.4)
-	_expect(mine.get("_cursor") != null, "so a cursor is built for the mouse on screen")
-	_expect(theirs.get("_cursor") == null, "and never for the one that is not")
+	var my_reach := player.get_node("CaveIn")
+	var their_reach := remote.get_node("CaveIn")
+	_expect(my_reach.get("_cursor") != null, "so a cursor is built for the mouse on screen")
+	_expect(their_reach.get("_cursor") == null, "and never for the one that is not")
 
 
 # ------------------------------------------------------------------------------ the harness

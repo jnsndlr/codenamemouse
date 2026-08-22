@@ -409,6 +409,22 @@ func _stroke_gap(
 	var seen := network.segment_count(1)
 	var first := -1
 	for i in range(400):
+		# THE DIGGER WALKS ITS OWN CORRIDOR, which it did not have to do when `dig_reach` was 2.6
+		# and does now. A stroke may only start within arm's length of the mouse, and opening one
+		# puts the next face a metre further on -- so a mouse rooted to the spot gets exactly one
+		# stroke and then stands there holding a button at ground it can no longer touch. That is
+		# the rule, not a fault, and it is what this loop was silently relying on the absence of:
+		# it failed as "a held button did not produce two strokes", which sounds like a broken
+		# repeat and was really a mouse standing too far back.
+		#
+		# Walked to the branch root rather than toward `at`, so the mouse follows the corridor it
+		# is cutting instead of trying to walk through the earth ahead of it. What is being timed
+		# is the GAP between strokes, which is the recharge and cares nothing for where the mouse
+		# stands, so keeping it in reach measures the same thing it always did.
+		var root := network.nearest_segment_point(1, Vector2(at.x, at.z), controller.aim_range)
+		if not root.is_empty():
+			var from: Vector2 = root[0]
+			player.global_position = Vector3(from.x, network.plane_y(1) + 0.05, from.y)
 		_hold_dig(player, controller, at, 1)
 		var now := network.segment_count(1)
 		if now <= seen:
