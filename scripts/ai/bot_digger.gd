@@ -327,11 +327,6 @@ func _underground(
 			_refused[_target] = true
 			_target = Vector2i.MAX
 			return {"at": bot.global_position, "plane": plane}
-		# Running into a seam teaches your crew where it goes (GDD section 3). A bot's crew learns
-		# the same way a player's does -- otherwise per-crew rock knowledge would be a fact about
-		# the human only, and the minimap would be telling the truth for one side of the match.
-		for side: Vector2i in TunnelNetwork.SIDES:
-			network.reveal_vein(plane, _target + side, bot.team)
 
 	_intent = "cutting a corridor"
 	return {"at": network.cell_to_world(plane, _target), "plane": plane}

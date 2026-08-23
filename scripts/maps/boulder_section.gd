@@ -57,9 +57,11 @@ func settle() -> void:
 	if network == null:
 		return
 	global_position = Vector3(cell.x * TunnelNetwork.CELL, 0.0, cell.y * TunnelNetwork.CELL)
-	# Known to everybody: this rock is visible from the lawn, so both crews already know what is
-	# under it. It is the counterweight to the seams, which are known to nobody until dug into.
-	_blocking = network.add_rock(1, cell, true)
+	# `[REVISED]` NO `known` FLAG. A boulder used to have to declare itself known-to-everybody, to
+	# tell it apart from a buried seam nobody had found yet. There are no hidden seams any more --
+	# rock is either standing out of the dirt where both crews can see it or it is not -- so being
+	# visible from the lawn is simply what a boulder IS, and needs no bit to say so.
+	_blocking = network.add_rock(1, cell)
 
 	var span := TunnelNetwork.CELL * 0.5
 	_build_mesh(span)
@@ -107,6 +109,13 @@ func _build_mesh(span: float) -> void:
 ##
 ## Slightly INSIDE the cell, so two neighbouring sections leave no seam a mouse can be caught on
 ## and a boulder does not claim ground its own footprint has not blocked.
+##
+## AND IT STANDS ON THE LAWN RATHER THAN IN IT: the cylinder runs from `y = 0` upwards and never
+## below. `WORLD_BIT` is masked by every mouse on every plane, so anything a surface rock hangs
+## below the grass it hangs into somebody's tunnel -- see rock_scatter.gd's `_add_body`, where
+## exactly that was wedging Brutes into the floor of plane 1. The damage scaling in
+## `Breakable._on_damaged` is about this node's origin, which is at ground level, so a chipped
+## boulder shrinks downward to nothing rather than sinking.
 func _build_body(span: float) -> void:
 	var shape := CylinderShape3D.new()
 	shape.radius = span * 0.92

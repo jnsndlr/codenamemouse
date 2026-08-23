@@ -274,7 +274,6 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 				# Said out loud through the network's own refusal, which is what tells the player
 				# the controls are working and the ground is not.
 				_network.dig_refused.emit("solid rock -- go round it, or go under it")
-				_learn_vein(rock)
 			# No dust and no scrabble on rock, deliberately: pressing on a seam achieves nothing,
 			# and paws visibly working it would promise otherwise.
 			_dress(false, -1)
@@ -303,46 +302,11 @@ func _update_dig(frame: InputFrame, delta: float) -> void:
 				# been pointed at anything -- a kick with no face to come off is no kick at all.
 				_aim_dust(cut)
 				_dust.kick()
-			_learn_exposed(cut)
 		# Re-aim immediately: the stroke just landed, so it is no longer a valid target and a held
 		# button should move on to the next one rather than sit on a stroke that no longer exists.
 		_target = _aimed_id()
 
 	_dress(_target >= 0 and held, _target)
-
-
-## Running into a seam teaches your crew where it goes (GDD section 3).
-##
-## HERE RATHER THAN IN `dig()`, because the network knows what the rock is and this knows who hit
-## it. Passing a team down into every dig and shaft call would put a parameter that only rock cares
-## about on four functions that mostly don't, and bots -- which never dig -- would have to supply it
-## anyway. The dig controller is already the one object that pairs a player with a cell.
-##
-## Cutting a cell open exposes whatever it now backs onto, and a face you can SEE is a face you
-## have found.
-##
-## THE PRESS ALONE WAS NEARLY NEVER ENOUGH, which only showed up on screen. Digging a corridor
-## along a seam draws its face in stone -- you are standing there looking at it -- and none of that
-## counted, because the reveal hung off deliberately pressing dig INTO the rock, which is the one
-## thing the game tells you not to bother doing: back when the hover box existed it went grey over
-## stone, and now the refusal says so in words. So the one action the feature waited for was the
-## action the interface talks you out of, and the vein you had plainly found stayed dark.
-##
-## Both paths reveal now. Running into it head-on still works and is what a player does when they
-## want to know how far it goes; exposing the face is what actually happens.
-func _learn_exposed(id: int) -> void:
-	for cell: Vector2i in _network.segment_cells(id):
-		for side: Vector2i in TunnelNetwork.SIDES:
-			_learn_vein(cell + side)
-
-
-## ON THE PRESS, not on the hover. Pointing at rock already greys the cursor, and that is the right
-## amount to give away for free: one cubic metre, while you look at it. Learning the shape of the
-## whole vein costs a cell -- either the one you swung at it with, or the one you opened beside it.
-func _learn_vein(cell: Vector2i) -> void:
-	if _player == null:
-		return
-	_network.reveal_vein(_plane, cell, _player.team)
 
 
 ## Why a press that named no stroke did nothing, when the answer is distance.
@@ -517,10 +481,16 @@ func _offers(id: int) -> bool:
 	# MIRRORS `TunnelNetwork.dig_segment`'S OWN REFUSALS, and must keep doing so. A stroke this
 	# offers but the network would refuse is a cursor that pulses invitingly over ground that will
 	# never open -- and worse here than merely misleading, because falling through to `-1` is what
-	# hands the frame to the rock branch. Without the stone test the seam got no cursor, no refusal
+	# hands the frame to the rock branch. Without the stone test the rock got no cursor, no refusal
 	# and no reveal: the player held the button on rock and the game said nothing at all.
+	#
+	# `[REVISED]` A BOULDER ONLY. The network stopped refusing strokes for touching a rock BODY --
+	# they stop at the stone and keep what they opened on the way (see `dig_segment`) -- so
+	# refusing them here would put the cursor back out of step with the ground in the other
+	# direction: no cursor over earth that will open perfectly well. A boulder still shuts its
+	# whole square and the network still refuses for it, so this still has to.
 	for cell: Vector2i in _network.segment_cells(id):
-		if not _network.in_bounds(cell) or _network.is_rock(_plane, cell):
+		if not _network.in_bounds(cell) or _network.boulder_shuts(_plane, cell):
 			return false
 	return true
 
@@ -600,15 +570,20 @@ func _blocked_cell() -> Vector2i:
 		return Vector2i.MAX
 
 	# Walked along the stroke it WOULD have cut, and the first stone on it is the one to name.
-	# A seam a stroke merely passes near is not what stopped you.
+	# Rock a stroke merely passes near is not what stopped you.
+	#
+	# ASKED AT THE POINT AND ANSWERED AS A CELL, which is the right shape for both ends now: a rock
+	# is a body with a real outline, so where the stroke MEETS it is a place rather than a square --
+	# but what this hands back is a cell, because the refusal is about the ground you are standing
+	# on rather than about a shape. Walking the points and naming the cell of the first one that is
+	# stone gets the near end of the rock rather than whichever square happened to be flagged.
 	var id := TunnelNetwork.segment_id(from, TunnelNetwork.direction_angle(heading))
 	var a := TunnelNetwork.segment_origin(id)
 	var b := TunnelNetwork.segment_end(id)
 	for i in range(1, 9):
 		var point := a.lerp(b, float(i) / 8.0)
-		var cell := _network.world_to_cell(Vector3(point.x, 0.0, point.y))
-		if _network.is_rock(_plane, cell):
-			return cell
+		if _network.is_stone_at(_plane, point):
+			return _network.world_to_cell(Vector3(point.x, 0.0, point.y))
 	return Vector2i.MAX
 
 

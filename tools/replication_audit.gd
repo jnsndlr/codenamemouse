@@ -305,12 +305,25 @@ func _check_the_scoreboard(host_said: String, client_said: String) -> void:
 
 	var first: Dictionary = client_board[0]
 	var last: Dictionary = client_board[-1]
-	var theirs: Dictionary = host_board[-1]
+	# THE HOST SAMPLE TAKEN NEAREST THIS ONE, not simply the host's last.
+	#
+	# THE TWO ENDS PRINT ON THEIR OWN FIVE-SECOND TIMERS AND NEITHER WAITS FOR THE OTHER, so the two
+	# final lines can be most of a period apart -- and everything compared below is a quantity that
+	# MOVES. Against the host's last line the stores check was really measuring "how much did the
+	# crews spend in the gap between two unrelated timers", which passed at a spend of three and
+	# failed at a spend of five with the replication provably correct both times: the two series
+	# agreed reading-for-reading at every clock they shared, and the host simply had one extra
+	# sample on the end with a burst of Scurries in it.
+	#
+	# Lining the samples up first is what makes the tolerance below mean what it says. It is also
+	# strictly the stronger test -- it removes the phase rather than allowing for it -- so the
+	# allowance can stay small and still be about delivery instead of about timing.
+	var theirs: Dictionary = _nearest_board(host_board, last["clock"] as int)
 	_check("its clock is running (%ds to %ds)" % [first["clock"], last["clock"]],
 		last["clock"] < first["clock"])
 
-	# Sampled up to five seconds apart on unsynchronised timers, so this is a tolerance rather than
-	# an equality -- and a client with no scoreboard at all is out by hundreds, not by seconds.
+	# Sampled on unsynchronised timers, so this is a tolerance rather than an equality even after
+	# the pairing above -- and a client with no scoreboard at all is out by hundreds, not by seconds.
 	var drift: int = absi(last["clock"] - theirs["clock"])
 	_check("and it is the host's clock (%ds apart)" % drift, drift <= CLOCK_DRIFT)
 
@@ -730,6 +743,20 @@ func _centre(samples: Array[Vector3]) -> Vector3:
 	for at: Vector3 in samples:
 		sum += at
 	return sum / maxf(1.0, float(samples.size()))
+
+
+## The reading nearest a given clock, so two series sampled on unsynchronised timers can be compared
+## at the same moment in the match rather than at the same position in their own lists.
+func _nearest_board(boards: Array, clock: int) -> Dictionary:
+	var best: Dictionary = boards[0]
+	var closest := 99999
+	for entry: Variant in boards:
+		var board: Dictionary = entry
+		var apart: int = absi((board["clock"] as int) - clock)
+		if apart < closest:
+			closest = apart
+			best = board
+	return best
 
 
 ## Every scoreboard line a process wrote, in order. Both ends log it from the same code, so this

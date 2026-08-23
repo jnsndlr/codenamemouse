@@ -39,7 +39,14 @@ enum Kind {
 	## shorts the cell did, in sixteenths of a metre, and the angle is the byte this grew by.
 	SEGMENT,
 	SHAFT,    ## A shaft descending from this plane, with its knowledge bits.
-	ROCK,     ## A seam this crew has found. The stone itself is generated, not sent.
+	## `[RETIRED]` A seam a crew had found. Rock is not per-crew knowledge any more -- a lump either
+	## stands out of the dirt where both crews can see it or it is buried and neither can, and both
+	## ends grow the identical stone from `rock_seed` -- so there is nothing left to tell anybody.
+	## The name is KEPT AND UNUSED rather than deleted because these are wire ordinals: removing it
+	## would renumber FORGET and everything after it, and a client on the old numbering would read
+	## every entry as the wrong kind. It costs one byte of enum and buys a version that cannot be
+	## silently mismatched.
+	ROCK,
 	FORGET,   ## A stroke that has aged out of the fog and must leave the client's world.
 	## A shaft that is GONE -- the Brute filled it in. Its own kind rather than a FORGET on the
 	## cell, because a shaft is recorded at the UPPER of the two planes it joins: the FORGET
@@ -109,7 +116,6 @@ func batch(peer: int, side: int) -> Array:
 	for plane: int in range(1, TunnelNetwork.PLANE_COUNT):
 		_gather_segments(side, plane, wanted)
 		_gather_shafts(side, plane, wanted)
-		_gather_rock(side, plane, wanted)
 		_gather_shoring(side, plane, wanted)
 
 	for key: String in wanted:
@@ -199,11 +205,6 @@ func _gather_shoring(side: int, plane: int, into: Dictionary) -> void:
 		if not _sight.knows(side, plane, cell):
 			continue
 		into[_key(Kind.SHORED, plane, cell)] = 1
-
-
-func _gather_rock(side: int, plane: int, into: Dictionary) -> void:
-	for cell: Vector2i in _network.known_rock_cells(plane, side):
-		into[_key(Kind.ROCK, plane, cell)] = _network.rock_known_bits(plane, cell)
 
 
 ## `extra` carries a segment's angle and is zero for every other kind. Part of the KEY rather than

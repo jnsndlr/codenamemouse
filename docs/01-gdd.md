@@ -248,28 +248,117 @@ at the moment you wanted out is finding out too late.
 > nothing that enforces the rule changes. It also means the zones can be laid before the
 > map is designed, which is the order these two things actually got built in.
 
-**Rock obstructions** — solid blocks that stop horizontal digging, scattered across
+**Rock obstructions** — buried boulders that stop horizontal digging, scattered across
 depth planes. Critically, **each plane has its own layout**: plane 2 may be blocked
-where plane 1 is open, and vice versa. **Built (M4)** — seeded seams in
-`tunnel_network.gd`, laid as random walks rather than discs so the edges are ragged, at
-9% of plane 1 rising to 16% of plane 3. A seam refuses the dig *and says so*, a shaft
-refuses to sink onto one, and the face where a corridor meets one is drawn in stone, so
-you learn where the rock is by paying for the knowledge rather than by being told.
+where plane 1 is open, and vice versa. **Built (M4), rebuilt as geometry (off-grid
+detour)** — seeded lumps in `tunnel_network.gd`, at 9% of plane 1's ground rising to 16%
+of plane 3. A rock refuses the dig *and says so*, a shaft refuses to sink onto one, and
+the face where a corridor meets one is drawn in stone, so you learn where the rock is by
+paying for the knowledge rather than by being told.
 
-> **Deeper is rockier, which is a second dial pointing the same way as dig time.** §3
-> already makes the deep planes slower to cut; making them more obstructed as well is what
-> keeps plane 1 worth using once you know the map. If the two ever need to disagree, this
-> is the one to move — dig time is felt every cell, rock only at the moment it stops you.
+> **They are shapes, not tiles, and that is the whole of the rework. `[REVISED]`** Rock
+> began as a set of whole cells laid as random walks. Digging stopped being made of cells
+> when strokes went off-grid, and the two descriptions of the earth then disagreed
+> everywhere they met: a stroke was refused if a cell it *claimed* held rock, but a
+> stroke's body is wider than the cells it claims — so a corridor run alongside a seam
+> took a bite out of the stone, and **you could dig inside the rock**. A rock is now a
+> union of discs subtracted from the same distance field the tunnels are cut into
+> (`rock_body.gd`), so the wall wraps it, the collision follows it, the cutaway cuts to
+> it and the routing graph refuses to walk through it — all for free, because all five
+> read one field.
+
+> **A stroke stops at the stone instead of being thrown away.** The old rule refused the
+> whole metre for touching rock, which was an approximation forced by tiles. Now a
+> corridor driven at a rock simply comes out shorter and curved around it, which is what
+> digging past a boulder should feel like. The refusal survives only for the case that
+> earns it: a stroke that would open *nothing*, which says so out loud.
+
+**They are objects you meet, not regions you route around. `[REVISED]`** A rock is a
+lump between about 0.6m and 4m across, drawn as a cluster of real stones — the same shape a
+barricade and a boulder are made of — and there are a few hundred per plane rather than a
+few dozen. Sizes are drawn skewed small, so most are things a corridor curves past without
+stopping and a handful are big enough to stop a stroke dead.
+
+> **The old numbers were an order of magnitude out, and the tile look was the symptom.** A
+> rock used to be 0.85–2.6m of *radius* — up to five metres across, against a corridor a
+> metre wide and a mouse forty centimetres tall. One lump claimed fifteen cells, which is
+> not an obstruction, it is a district. Tuning is now done against the **free run**: how
+> far a straight dig gets before it meets stone. Plane 1 sits at about 5.5m median, plane 3
+> at about 2m — the "deeper is rockier" gradient actually being felt rather than merely
+> stated. The coverage percentage is an input the generator takes; the free run is the
+> thing a player experiences, and the two stopped tracking each other the moment size
+> became a range.
+
+**You can see the big ones coming, because they stick out of the ground. `[REVISED]`** A
+layer of earth is 65cm thick, and a rock's height scales with its span — so a big lump
+breaks the dirt above it and stands where anybody can see it, and a small one is buried
+with nothing on the surface to give it away. About a third of them surface. Since the big
+ones are also the ones that can refuse a stroke outright, **the rock that blocks you is the
+rock you were shown.**
+
+> **This replaced a whole knowledge system, and that is the point. `[REVISED]`** Rock used
+> to be hidden information: running into a lump revealed it to your crew alone, recorded per
+> rock, mirrored onto cells, drawn as a flat plate on the ground, sent over the wire and
+> redrawn on the minimap. Five mechanisms answering "can this crew see this rock" — and the
+> answer is now a property of the stone instead of a property of the crew. Both crews look
+> at the same world. What is gained is that the tell is *physical*: you are looking at a
+> rock, not at a debug overlay of where a rock is.
+
+> **The plate was also the reason rock looked like tiles.** It was built from whole metre
+> squares, because the index it drew from was per-cell — in a game where nothing else has
+> been on the grid since digging went off it. A lobed three-metre lump came out as a
+> staircase of fifteen squares, hovering two centimetres over the dirt in a colour nothing
+> in the world is. The lid is plain dirt now, edge to edge.
+
+**Two grades of rock, and you can see which is which.** Roughly half of every plane's
+lumps are **breakable** — the pale stone players already know, and a Brute shifts it.
+The rest is **bedrock**: darker, flatter, and permanent. Both are drawn from the same
+size range on purpose, so the colour is the thing you read rather than the size — and the
+grade reads from above too, on the ones tall enough to surface.
+
+> **A Brute breaks it *up*, not away, and that is the collaboration.** A lump comes apart
+> a **lobe at a time** — four swings a bite, four to seven bites in a rock — and a bite
+> turns stone into ordinary *earth* rather than into corridor. The passage only advances
+> as far as some stroke had already reached, so the Brute runs out of face to work and
+> the Engineer runs out of ground: **it opens only when the two alternate.** That is the
+> point. Going round stays on the table the whole time, and the first bite is often
+> already a way through, so nobody is committed to a twenty-swing countdown.
+
+> **Bedrock has nothing to swing at at all.** No hit count, no damage flash, no scale
+> twitch — a Brute working it gets no feedback because there is none to give, and the
+> colour said so before the swing.
+
+> **Deeper is rockier — and no longer chunkier. `[REVISED]`** §3 already makes the deep
+> planes slower to cut; making them more obstructed as well is what keeps plane 1 worth
+> using once you know the map. The deep planes used to grow *bigger* lumps as well, which
+> was arithmetic rather than flavour — a plane saturates at high coverage in big pieces, and
+> the target could not be met with more small ones. At the sizes rock comes in now there is
+> no saturation to work around, and the ramp had quietly **inverted** what it was there to
+> serve: bigger rocks means fewer of them, and a corridor is stopped by a rock whatever its
+> size, so plane 3 came out with *longer* clear runs than plane 1 despite carrying nearly
+> twice the stone. Deeper is denser now, in the same sizes.
 
 > **Nests keep a clear radius.** A seeded layout that walled a crew in would do it in
 > exactly the same place every single match, which reads as the map being broken rather
 > than as a hard start.
 
-**What a seam teaches you, once you've hit it. `[DECIDED]`** Running into rock reveals the
-**whole connected vein** — not the one cell — and reveals it **to your crew only**. From then
-on it is drawn in its own colour on the ground above it, and it appears on the minimap for
-the plane you're standing on. The cell you spent is the price; the shape of the vein is what you
-bought, and the other crew still has to pay for its own copy.
+**~~What a rock teaches you, once you've hit it.~~ `[RETIRED]`** *Running into rock revealed
+the whole lump to your crew only, drawn on the ground above it and on the minimap for the
+plane you were standing on.* Retired in favour of physical visibility — see above. The
+arguments below are kept because they are the record of why it existed and why it went; the
+mechanism is gone from the code.
+
+> **What actually replaced it.** Nothing draws what a crew "knows" about rock any more. A
+> lump tall enough to break the dirt is visible to everyone; a buried one is visible to
+> nobody until a corridor is cut past it, at which point you are looking at the stone face
+> in the trench because the wall wraps it. The minimap shows the surfacing rock, to both
+> crews. No bits, no wire traffic, no per-crew redraw.
+
+> **What was lost, and it is worth naming.** This was the game's first per-team knowledge,
+> deliberately chosen as the small one — static, so getting the shape right here was free
+> rehearsal for M5's tunnels and sightings. That rehearsal is gone and M5 does it cold. The
+> trade was made anyway: the mechanism cost five moving parts to answer a question the
+> world can answer by standing there.
 
 > **Two ways to hit it, and the quiet one is the one that matters.** Swinging the cursor at a
 > seam and being refused counts — but so does simply **opening the cell beside it**, which draws
@@ -277,9 +366,15 @@ bought, and the other crew still has to pay for its own copy.
 > out over rock specifically to tell you not to hold the button there, so a rule that waited for
 > the head-on version would almost never fire.
 
-> **Why the vein and not the cell.** A seam is one object — it was grown as one — and chipping
+> **Why the lump and not the cell.** A rock is one object — it was grown as one — and chipping
 > along a wall a tile at a time to map something you can already see the shape of is bookkeeping,
-> not discovery. What you actually learn when the shovel rings is *"this seam is here"*.
+> not discovery. What you actually learn when the shovel rings is *"this rock is here"*.
+
+> **Which used to be a reconstruction and is now literal. `[REVISED]`** While rock was tiles this
+> flood-filled the connected cells of a seam, which is a guess at "one object" made from an index
+> that had no objects in it — and it got the edges wrong in both directions, joining two seams that
+> happened to touch and splitting one that pinched to a diagonal. The knowledge is a bit on the
+> rock now, and the cells inherit it.
 
 > **Why per crew, and why this one first.** This is the first knowledge in the game that one crew
 > has and the other doesn't, and it is deliberately the small one: rock never moves, so getting
@@ -489,7 +584,7 @@ without these.
 | Stats | High health, slow, heavy damage |
 | **Unique capability** | **Brings tunnels down.** `[REVISED]` **Built** — the whole of un-digging, in two postures: **`Q` underground** caves in the one cell you are pointing at, at arm's length; **`Q` on the lawn** is a **stomp** that drops a patch of the layers beneath your feet (planes 1–2 only) — thirteen cells one layer down, five the layer under that. Anyone caught is **buried** (§6). |
 | Ability | *Slam* — short-range knockback; **makes carriers drop the flag**. `[REVISED]` **Built** — `V`, a 2.5m shove in a circle around you on an 8s cooldown. The only attack in the game that does no damage at all. |
-| **Shifts rock** | **Built (M4)** — the only class that breaks a barricade (3 swings) or a boulder (**5 per cell**, so a four-cell rock is 20 and comes apart a quarter at a time). Anyone else may swing at one all day. |
+| **Shifts rock** | **Built (M4)** — the only class that breaks a barricade (3 swings), a boulder on the lawn (**5 per cell**, so a four-cell rock is 20 and comes apart a quarter at a time), or a breakable rock in the earth (**4 per lobe**, 4–7 lobes, and it needs a digger working with them — see §3). Anyone else may swing at one all day. |
 | Underground | Very slow, but **plugs a tunnel completely** |
 | Carries | **5 wedges** of cheese `[ADDED]` — the most in the game |
 | Weakness | Cannot chase, cannot flank, exposed in open ground |

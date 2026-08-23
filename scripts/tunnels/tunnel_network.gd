@@ -76,11 +76,14 @@ signal cell_unblocked(plane: int, cell: Vector2i)
 ## cooldown arriving and being eaten. The props listen to both; the audits listen to the second.
 signal cell_shored(plane: int, cell: Vector2i)
 signal shoring_broke(plane: int, cell: Vector2i)
-## A crew found out where some rock is, or a boulder stopped being rock. Carries the teams affected
-## as a bit mask rather than the cells, because both things that listen -- the caps drawn in the
-## world and the minimap -- redraw a whole plane anyway, and a per-cell signal would have them
-## rebuild the same mesh forty times for one vein.
-signal rock_revealed(plane: int, teams: int)
+## The stone on a plane changed: a boulder broken up, a lobe taken off a rock, a lump cleared away.
+##
+## `[REVISED]` NO LONGER ABOUT KNOWLEDGE. This used to fire when a crew LEARNED where some rock was,
+## and carried the crews affected, because rock was hidden information a dig bought you. It is not
+## any more -- a rock either stands above the dirt where anyone can see it or it is buried, and both
+## crews look at the same world -- so what is left is the layout itself changing, which the minimap
+## and the drawn lumps both redraw a whole plane for.
+signal rock_changed(plane: int)
 ## A crew's map of the tunnel network changed. Tunnel geometry is shared by the world, but the
 ## minimap is not omniscient: each crew only gets the cells and shafts it cut itself.
 signal tunnel_revealed(plane: int, teams: int)
@@ -194,8 +197,7 @@ const WALK_SAMPLE: float = 0.1
 ## regardless of depth.
 const WORLD_BIT: int = 1
 
-## Both crews, as the bit mask `_known` stores. For the things everybody can see: a boulder is
-## rock you learn about by looking at it rather than by digging into it.
+## Both crews, as the knowledge masks store it. For the things everybody can see.
 const TEAM_BITS: int = 0b11
 
 const SIDES: Array[Vector2i] = [
@@ -303,27 +305,100 @@ const SIDES: Array[Vector2i] = [
 @export var earth_min_thickness: float = 0.075
 
 @export_group("Rock")
-## Per-plane rock obstructions (GDD section 3). Solid seams scattered through the earth that stop
-## horizontal digging, with A DIFFERENT LAYOUT ON EVERY PLANE -- which is the whole idea. Rock in
-## one place on every layer would be a flat maze repeated three times; rock that moves as you go
-## down makes getting past an obstruction a question of which LAYER to go around it on, and turns
-## map knowledge into four floors of map knowledge rather than one.
+## Per-plane rock obstructions (GDD section 3). Boulders buried in the earth that stop horizontal
+## digging, with A DIFFERENT LAYOUT ON EVERY PLANE -- which is the whole idea. Rock in one place on
+## every layer would be a flat maze repeated three times; rock that moves as you go down makes
+## getting past an obstruction a question of which LAYER to go around it on, and turns map knowledge
+## into four floors of map knowledge rather than one.
 ##
-## A rock cell is not a new kind of thing. It is earth that can never be dug, so it is drawn by
-## the same wall the surrounding earth is (in stone, so you can see what stopped you), collides as
-## the same wall, and is invisible until somebody digs up against it -- which is exactly right for
-## a game about hidden information: you learn where the rock is by paying for the knowledge.
+## `[REVISED]` BOULDERS RATHER THAN TILES, AND THAT IS A CORRECTION RATHER THAN A NEW FEATURE. Rock
+## used to be a set of whole cells, laid as random walks. Digging stopped being made of cells two
+## milestones ago -- a stroke is a capsule at a free angle contoured into a distance field -- and
+## the two descriptions of the earth disagreed everywhere they met: a stroke was refused if a cell
+## it CLAIMED held rock, but its body is wider than the cells it claims, so a corridor run alongside
+## a seam took a bite out of the stone. The wall was drawn through the middle of a rock cell and the
+## mouse walked into ground the rules called permanent. You could dig inside the rock.
+##
+## So a rock is a [RockBody] now: a union of discs with a real distance function, subtracted from
+## the dug field one `min` per sample. The stone is the same object to the wall mesh, the collision
+## trimesh, the cutaway and the routing graph as it is to the dig rule, because all five read the
+## one field. See rock_body.gd, which is where the argument is written out in full.
+##
+## A rock is still not a new kind of thing to the rest of the file. It is earth that will not open,
+## drawn by the same wall the surrounding earth is (in stone, so you can see what stopped you), and
+## invisible until somebody digs up against it -- which is exactly right for a game about hidden
+## information: you learn where the rock is by paying for the knowledge.
 @export var rock_seed: int = 20260801
-## Fraction of plane 1 that is rock. Nothing on the surface: the lawn is not diggable in the first
-## place, and a "rock" up there is just a prop.
-@export_range(0.0, 0.5, 0.01) var rock_density: float = 0.09
-## Added per plane below the first. Deeper is rockier, which gives the shallow planes a reason to
+## Fraction of plane 1's ground covered by rock. Nothing on the surface: the lawn is not diggable in
+## the first place, and a "rock" up there is just a prop.
+##
+## `[REVISED]` DOWN FROM 9% WITH THE SHRINK, AND THE DIAL MEANS SOMETHING DIFFERENT NOW. Coverage is
+## a poor proxy for the thing that is actually felt, which is HOW FAR YOU GET BEFORE YOU MEET STONE
+## -- and the two came apart when the pieces got small. A corridor is a metre wide and nearly every
+## rock is wider than that, so a rock blocks a run whatever its area: cutting the radius by two
+## thirds at constant coverage multiplied the number of blockers by ten. Measured, the median
+## straight dig before hitting stone fell from 4.9 metres to 1.75 -- rock every other stroke, which
+## is not an obstruction, it is a texture.
+##
+## 5% puts plane 1's median back to about 5.5 metres and its mean to 7.5, which is a rock every few
+## strokes: often enough to plan around, rare enough to be an event. Plane 3 comes out at about 2
+## metres, which is the "deeper is rockier" gradient actually being felt rather than merely stated.
+##
+## MOVE THIS AGAINST THE MEASUREMENT, NOT AGAINST THE PERCENTAGE. The percentage is an input the
+## generator happens to take; the free run is the thing a player experiences, and the two stopped
+## tracking each other the moment rock size became a range. See the free-run probe in the scratch
+## tooling, and `_check_surfacing` for the visibility half of the same tuning.
+@export_range(0.0, 0.5, 0.005) var rock_density: float = 0.05
+## Added per plane below the first. Kept at the same RATIO to the base as before -- plane 3 comes out
+## a bit under twice plane 1 -- because the argument for it never had anything to do with the
+## absolute number. Deeper is rockier, which gives the shallow planes a reason to
 ## exist once the deep ones are faster to cross -- and it is the same direction section 3 sends
 ## dig TIMES, so the two dials push the same way instead of cancelling.
-@export_range(0.0, 0.2, 0.01) var rock_density_deeper: float = 0.035
-## Cells in one seam. Seams rather than single blocked cells, because one cell is a thing you step
-## around without noticing and a seam is a thing you have to make a decision about.
-@export var rock_seam_cells: Vector2i = Vector2i(3, 11)
+@export_range(0.0, 0.2, 0.005) var rock_density_deeper: float = 0.008
+## `[REVISED]` SIZED FOR A THING YOU MEET, NOT A REGION YOU ROUTE AROUND, and the old numbers were
+## a full order of magnitude out on that. A rock used to be 0.85 to 2.60 metres of RADIUS -- one and
+## three quarters to over five metres across, against a corridor a metre wide and a mouse forty
+## centimetres tall. One lump covered fifteen cells. Nothing that size can be a rock you run into
+## while digging; it is a district, and the only honest way to draw it was the cell footprint that
+## started this. At this range a rock is between two thirds of a corridor's width and a bit over
+## two, so meeting one is an event in a stroke rather than a fact about the map.
+##
+## THE COVERAGE DIAL IS UNCHANGED AND MEANS THE SAME THING, which is the point of aiming
+## `_generate_rock` at an area rather than a count: the same fraction of ground is stone, in many
+## more, much smaller pieces. That is a different game -- you meet rock often and go round it
+## quickly, instead of meeting it rarely and going round it for ten seconds -- and it is the one
+## the design asks for.
+## Nominal radius of one rock, in metres. The upper end is deliberately most of a corridor's turning
+## room: these took over from a seam that could run eleven cells, and an obstruction you step round
+## without noticing is not an obstruction. The outer reach of a finished lump comes out a little
+## past this -- see [method RockBody.reach].
+##
+## `[REVISED]` THE TOP OF THE RANGE EXISTS TO KEEP THE REFUSAL ALIVE, and that is the whole reason it
+## is not simply the bottom plus a bit. A stroke is refused only when it would open NOTHING, so a
+## rock has to be able to swallow a whole one -- a metre long and a metre wide -- before the words
+## *"solid rock: go round it, or go under it"* can ever be said. Shrunk to a top span of 1.10 the
+## widest full-corridor band of stone anywhere on the map measured 0.88m, so no rock on any plane
+## could refuse anything: every encounter became a corridor curving past a pebble, the refusal was
+## dead code, and the one message that teaches a player they can go DOWN never appeared.
+##
+## So the range is wide and the draw is skewed (see `_generate_rock`). Most rocks are small things
+## you curve around without stopping. A few are big enough to stop you dead -- and because height
+## scales with span, those are also the ones standing out of the dirt where you could see them
+## coming. The rock that blocks you is the rock you were shown.
+@export var rock_span: Vector2 = Vector2(0.30, 1.95)
+## How many of them a Brute can shift. The rest are bedrock: permanent, and drawn in their own
+## colour so that "can this be broken" is a question you answer by looking rather than by swinging.
+##
+## Both kinds draw from the same size range on purpose. If the big ones were always the breakable
+## ones the colour would be decoration -- you would read the size and never look at it -- and the
+## interesting decision (is it worth fetching a Brute, or is going round cheaper?) would have been
+## made for the player by the generator.
+@export_range(0.0, 1.0, 0.01) var rock_breakable_fraction: float = 0.55
+## Brute swings to take ONE LOBE off a breakable rock. A lump is four to seven lobes, so clearing a
+## whole one is twenty to thirty swings and it comes apart a bite at a time -- which is what makes
+## it collaboration rather than a countdown: the Engineer can start digging round the moment the
+## first bite opens a way through, and does not have to wait for the rock to be gone.
+@export var rock_hits_per_lobe: int = 4
 ## Clear ground around every nest, in metres, so a crew can always get underground at home. A crew
 ## whose only entrance was blocked by generation would read as the map being broken, and it would
 ## happen identically every match because the layout is seeded.
@@ -346,18 +421,21 @@ const SIDES: Array[Vector2i] = [
 @export var lid_color: Color = Color(0.24, 0.18, 0.13)
 ## The mouth of a shaft leading down. Near-black, because it is a hole.
 @export var shaft_down_color: Color = Color(0.05, 0.03, 0.02)
-## The face of a rock seam where a tunnel runs into one. Cool and pale against the warm earth --
-## the message is "this is not the same stuff, and it is not going to open", and it has to land
+## The face of a breakable rock where a tunnel runs into one. Cool and pale against the warm earth
+## -- the message is "this is not the same stuff, and it is not going to open", and it has to land
 ## from across a corridor with no legend to read.
-@export var rock_color: Color = Color(0.60, 0.64, 0.70)
-## The same seam seen from ABOVE, once your crew has found it -- the cap over the solid cube you
-## have run into (GDD section 3).
 ##
-## PALE LIKE THE EXPOSED FACE. The old cap was both too dark and back-face culled from above, so a
-## rock cube read as stone from the side and earth from the top. Matching the face's cool value
-## makes the whole obstruction read as one material. Unknown rock still has no cap at all: this
-## improves the revealed object without leaking seams.
-@export var rock_top_color: Color = Color(0.60, 0.64, 0.70)
+## UNCHANGED FROM WHEN THIS WAS A SEAM'S COLOUR, deliberately. The stone a Brute can break is the
+## stone players have already learned to recognise; making the NEW thing (bedrock, below) the one
+## that looks different is what keeps the existing reading intact.
+@export var rock_color: Color = Color(0.60, 0.64, 0.70)
+## The face of bedrock: the rock nothing shifts.
+##
+## DARKER AND FLATTER, not a different hue. The two have to read as the same material in different
+## grades -- both are stone, and the question the colour answers is "is this one worth a Brute", not
+## "what is this made of". A contrasting hue would say the second thing and would also stop reading
+## as rock at all in lamplight, which is the only light down there.
+@export var bedrock_color: Color = Color(0.34, 0.36, 0.41)
 
 @export_group("Light rays")
 ## A shaft you can climb announces itself with the light falling out of it, not with a painted
@@ -433,17 +511,34 @@ var _cells: Array[Dictionary] = []
 ## what makes E unambiguous without a modifier -- there is only ever one shaft touching a
 ## cell, so there is only ever one direction to go.
 var _shafts: Array[Dictionary] = []
-## plane -> {cell: true}: earth that will never open. Laid once at startup, and then edited by
-## exactly one thing -- a boulder on the lawn adding its footprint to plane 1, and giving it back
-## when a Brute breaks it. That was the `[DECIDE]` in GDD section 4 about destructible rock, and
-## the answer turned out to be "the rock you can SEE, and only that".
-var _rock: Array[Dictionary] = []
-## plane -> {cell: team bits}: which crews have found out that a rock cell is there. Empty for a
-## cell nobody has run into, and hidden information until they do (GDD section 3).
+## plane -> {cell: true}: earth that will never open, at CELL granularity.
 ##
-## A BIT MASK RATHER THAN TWO DICTIONARIES, so a boulder -- which both crews can see from the
-## first second -- is one entry rather than the same cell recorded twice under different keys.
-var _known: Array[Dictionary] = []
+## `[REVISED]` A DERIVED INDEX NOW, NOT THE RECORD OF WHERE THE ROCK IS. The stone itself lives in
+## `_rock_bodies` as shapes; this is the answer to the questions that are about squares anyway --
+## may a shaft land here, may a bot plan to dig here, what does the minimap draw, which cells does
+## a crew know about. A cell is in here when its CENTRE is inside a rock, plus the cells a boulder
+## on the lawn shuts wholesale.
+##
+## WHICH IS WHY `_rock_owner` EXISTS. The two entries mean different things to the dig: a boulder
+## shuts the whole square (there is a rock standing on top of it and no part of it can open), while
+## a rock body only shuts the stone, and there may be perfectly good earth in the rest of the cell.
+## Anything deciding whether ground can open has to tell them apart -- see [method _is_earth].
+var _rock: Array[Dictionary] = []
+## plane -> [RockBody]: the stone, as shapes. Grown once from `rock_seed`, and edited by exactly one
+## thing after that -- a Brute taking a lobe off a breakable one.
+##
+## THE ARRAY POSITION IS THE ROCK'S NAME, on both ends of a wire and for the whole match: the seed
+## grows them in the same order everywhere, so an index is enough to address one without any of the
+## geometry crossing. Broken rocks leave a null in place rather than being removed, because
+## compacting the array would rename every rock after them.
+var _rock_bodies: Array[Array] = []
+## plane -> {cell: index into `_rock_bodies`}, or -1 for a cell a boulder shut. The other half of
+## `_rock`; see its note.
+var _rock_owner: Array[Dictionary] = []
+## plane -> {cell: [index, ...]}: which rocks come anywhere near a cell, for asking "is this point
+## stone" without walking every rock on the plane. A rock registers in every cell its bounding box
+## touches, so a lookup is one dictionary hit and then a handful of distance tests.
+var _rock_near: Array[Dictionary] = []
 ## plane -> {cell: team bits}: which crews know a dug cell as part of their own network.
 ##
 ## This deliberately does NOT flood-fill through connected floor. If a blue corridor meets a red
@@ -505,6 +600,8 @@ var _carving: Array[Dictionary] = []
 
 ## The disc [method _thin_earth] searches, flattened for one window width, each offset's length in
 ## metres, and the width and radius the pair was built for.
+## A reused per-window stone mask. See [method _stone_scratch].
+var _stone_mask: PackedByteArray = PackedByteArray()
 var _thin_offsets: PackedInt32Array = PackedInt32Array()
 var _thin_spans: PackedFloat32Array = PackedFloat32Array()
 var _thin_offsets_for: Vector2i = Vector2i(-1, -1)
@@ -521,17 +618,78 @@ var _walls: Array[MeshInstance3D] = []
 ## The faces of the wall that turned out to be stone. Drawn separately from the earth walls only
 ## so they can carry a different material -- geometrically they are the same quads.
 var _rock_faces: Array[MeshInstance3D] = []
-## The tops of the seams a crew has found, one flat sheet per plane, drawn against the underside of
-## that plane's lid. Rebuilt whole when knowledge changes, which is a few times a match.
-var _rock_caps: Array[MeshInstance3D] = []
-## Whose knowledge the caps are showing. -1 until somebody asks, because a network in a headless
-## audit has no player and should draw nothing.
+## The same, for the faces standing on bedrock. A third mesh rather than a second material on the
+## same one, because a mesh carries exactly one material per surface and the split is already being
+## made a triangle at a time in [method _split_stone] -- so this costs one more draw call per plane
+## and no new machinery at all.
+var _bedrock_faces: Array[MeshInstance3D] = []
+## The stone standing above a plane's dirt, one batched surface per plane. Only the rocks tall
+## enough to break the ground are in it, and only the part of them above the ground is drawn: the
+## rest is already the wall face the contour wrapped round the stone. Built once, when the layout
+## is, and edited only when a Brute takes a lobe off one.
+var _rock_lumps: Array[MeshInstance3D] = []
+## The same, for bedrock, and a second surface for the same reason the faces have one: a mesh
+## carries one material per surface and the two grades have to be told apart on sight.
+var _bedrock_lumps: Array[MeshInstance3D] = []
+## Whose knowledge the world is being drawn for. -1 until somebody asks, because a network in a
+## headless audit has no player and should draw nothing.
 var _view_team: int = -1
 var _bodies: Array[StaticBody3D] = []
-var _shapes: Array[CollisionShape3D] = []
+## One collision shape per CHUNK, hung on that plane's one body: `_chunk_shapes[plane][key]`.
+##
+## `[REVISED]` IT USED TO BE ONE SHAPE PER PLANE, and that was the single most expensive thing a dig
+## did. A `ConcavePolygonShape3D` cannot be edited -- faced, it throws its tree away and builds
+## another from every triangle it was given -- so a plane-wide shape charged a dig for the whole map
+## every time, and a carve pays that four times a metre. Measured against a network of two hundred
+## strokes it was fifteen milliseconds per dig and climbing linearly: a guaranteed dropped frame,
+## paid by every mouse on the map because it runs on the main thread, and it got worse the longer a
+## match went on.
+##
+## The chunk was already the unit of re-contouring. Making it the unit of collision too turns that
+## into a bounded cost -- a dig re-faces the two to five chunks it actually moved, whatever the map
+## looks like around them.
+##
+## MANY SHAPES, ONE BODY, which keeps everything else in this file true: the layer, the mask and the
+## node the audits look for are all still per plane, and a mouse still collides with exactly the one
+## layer it is standing on.
+var _chunk_shapes: Array[Dictionary] = []
+## The union of every COMMITTED stroke over one chunk's window, kept so a carve does not have to
+## re-derive it: `_committed_field[plane][key]` is `{shape, seen, hidden, wide, knowledge}`.
+##
+## WHAT THIS IS FOR. Composing a chunk means walking every stroke that reaches into its window and
+## painting a metre of graded distance from each -- and at the density a mid-match corridor network
+## reaches, that is thirty-odd strokes and about two milliseconds a chunk. A dig moves a handful of
+## chunks, so a commit pays it several times over; a CARVE pays it sixteen times a second while
+## somebody holds the button, and every one of those rebuilds repainted thirty strokes that had not
+## moved in order to advance one tip by a centimetre.
+##
+## So the committed half is composed once and kept. A carve step copies it and unions its own
+## growing stroke on top, which is the one thing that actually changed.
+##
+## INVALIDATED BY DIRTYING, WHICH IS THE ONLY RULE. Every path that can change what a committed
+## stroke contributes goes through [method _touch_span], [method _touch_box] or
+## [method _rebuild_mask], and all three drop the entry -- the growing-carve step is the single
+## exception, and it is the only caller that knows the committed strokes have not moved.
+##
+## AND BY A KNOWLEDGE STAMP ON TOP, because what a chunk paints also depends on which strokes THIS
+## crew has been told about (see [method _segment_wants]) -- a thing that changes without any earth
+## moving. [member _knowledge_age] is what makes that structurally impossible to get wrong rather
+## than a list of callers somebody has to remember to extend.
+var _committed_field: Array[Dictionary] = []
+## Bumped whenever what a crew knows changes, so a cached committed field built under the old
+## answer cannot be mistaken for one built under the new. Per plane, because knowledge is.
+var _knowledge_age: Array[int] = []
+## Chunks whose triangles have moved since the physics engine was last told about them.
+##
+## KEPT AS A SET RATHER THAN ACTED ON IMMEDIATELY, because a growing carve re-contours on every step
+## and only hands the result to physics every quarter metre (see [constant CARVE_COLLIDE_STEP]). The
+## chunks it moved in between still have to be caught up, and the dirty list they came from has been
+## cleared by then -- so the debt is recorded here and settled by the next commit that collides.
+var _stale_collision: Array[Dictionary] = []
 var _floor_materials: Array[StandardMaterial3D] = []
 var _wall_materials: Array[StandardMaterial3D] = []
 var _rock_materials: Array[StandardMaterial3D] = []
+var _bedrock_materials: Array[StandardMaterial3D] = []
 ## One texel per cell, per plane: 255 where dug. Read by earth_cutaway.gdshader to punch the
 ## lid above that plane. Digging writes a texel instead of rebuilding anything.
 var _mask_images: Array[Image] = []
@@ -570,11 +728,17 @@ func _init() -> void:
 		_carving.append({})
 		_chunk_cache.append({})
 		_dirty_chunks.append({})
+		_chunk_shapes.append({})
+		_stale_collision.append({})
+		_committed_field.append({})
+		_knowledge_age.append(0)
 		_mark_nodes.append({})
 		_cells.append({})
 		_shafts.append({})
 		_rock.append({})
-		_known.append({})
+		_rock_bodies.append([])
+		_rock_owner.append({})
+		_rock_near.append({})
 		_tunnel_known.append({})
 		_shaft_known.append({})
 		_glimpsed.append({})
@@ -595,7 +759,8 @@ func _ready() -> void:
 		var wall_material := _make_material(wall_color)
 		_floor_materials.append(floor_material)
 		_wall_materials.append(wall_material)
-		_rock_materials.append(_make_rock_material())
+		_rock_materials.append(_make_rock_material(rock_color))
+		_bedrock_materials.append(_make_rock_material(bedrock_color))
 
 		# Zero is "far outside the tunnel" once encoded, so an empty plane is a field of solid
 		# earth without anything having to say so.
@@ -608,6 +773,16 @@ func _ready() -> void:
 		floor_mesh.name = "Floor%d" % plane
 		floor_mesh.position = Vector3(0.0, plane_y(plane), 0.0)
 		floor_mesh.material_override = floor_material
+		# NO SHADOW FROM THE EARTH ITSELF. A plane's geometry is only ever drawn while you are
+		# standing in it, and down there the sun does not reach and the lamps cast none by
+		# deliberate choice (see [method _rebuild_lamps]) -- so every triangle of floor, wall,
+		# stone and lump was being drawn into the directional light's shadow cascades to change
+		# nothing whatever. Photographed with and without: the two frames are the same picture.
+		#
+		# AND IT IS FOUR FIFTHS OF THE UNDERGROUND FRAME. The cascades redraw this geometry four
+		# more times, so a hundred thousand triangles of corridor came to half a million primitives
+		# -- on a mesh that also grows for every metre anybody digs, all match.
+		floor_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(floor_mesh)
 		_floors.append(floor_mesh)
 
@@ -620,25 +795,40 @@ func _ready() -> void:
 		var wall := MeshInstance3D.new()
 		wall.name = "Walls%d" % plane
 		wall.position = Vector3(0.0, plane_y(plane), 0.0)
+		wall.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(wall)
 		_walls.append(wall)
 
 		var stone := MeshInstance3D.new()
 		stone.name = "Rock%d" % plane
 		stone.position = Vector3(0.0, plane_y(plane), 0.0)
+		stone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(stone)
 		_rock_faces.append(stone)
 
-		# The vein seen from ABOVE, for the cells this crew has found. Sits just under the lid it
-		# is drawn against rather than at the floor, because what it represents is a body of rock
-		# filling the earth from one to the other -- and because at this camera angle a mark on the
-		# floor of a plane you cannot see into is a mark on nothing.
-		var cap := MeshInstance3D.new()
-		cap.name = "RockTop%d" % plane
-		cap.position = Vector3(0.0, plane_y(plane), 0.0)
-		cap.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		add_child(cap)
-		_rock_caps.append(cap)
+		var hard := MeshInstance3D.new()
+		hard.name = "Bedrock%d" % plane
+		hard.position = Vector3(0.0, plane_y(plane), 0.0)
+		hard.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(hard)
+		_bedrock_faces.append(hard)
+
+		# The stone that stands PROUD of this layer's dirt: the top of every rock tall enough to
+		# break the ground above it, drawn as real lumps. Two surfaces because there are two grades
+		# and the colour is what a player reads them by -- see [method _rebuild_rock_lumps].
+		var lumps := MeshInstance3D.new()
+		lumps.name = "RockLumps%d" % plane
+		lumps.position = Vector3(0.0, plane_y(plane), 0.0)
+		lumps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(lumps)
+		_rock_lumps.append(lumps)
+
+		var hard_lumps := MeshInstance3D.new()
+		hard_lumps.name = "BedrockLumps%d" % plane
+		hard_lumps.position = Vector3(0.0, plane_y(plane), 0.0)
+		hard_lumps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(hard_lumps)
+		_bedrock_lumps.append(hard_lumps)
 
 		var lamps := Node3D.new()
 		lamps.name = "Lamps%d" % plane
@@ -658,10 +848,9 @@ func _ready() -> void:
 		body.collision_layer = plane_bit(plane)
 		body.collision_mask = 0
 		add_child(body)
-		var shape := CollisionShape3D.new()
-		body.add_child(shape)
+		# No shape here: they are made one per chunk, on the first dig that puts a triangle in one.
+		# See [member _chunk_shapes].
 		_bodies.append(body)
-		_shapes.append(shape)
 
 		_build_lid(plane)
 
@@ -829,9 +1018,16 @@ func opens_ground(plane: int, origin: Vector2, angle: int) -> bool:
 ## Is this spot solid ground -- neither already dug, nor stone?
 ##
 ## Rock counts as NOT earth here, which reads oddly until you remember what the question is for:
-## this decides whether there is anything to be gained by digging, and a seam is the one thing you
-## can point at all day and never move. A stroke whose only unopened part is stone is refused for
-## being stone (see [method dig_segment]), and it must not be offered on the way there either.
+## this decides whether there is anything to be gained by digging, and stone is the one thing you
+## can point at all day and never move. A stroke whose only unopened part is rock is refused for
+## being rock (see [method dig_segment]), and it must not be offered on the way there either.
+##
+## `[REVISED]` AND IT IS ASKED AT THE POINT NOW, WHICH IS THE FIX FOR DIGGING INSIDE A ROCK. The old
+## test was "is this sample's CELL flagged as rock", which is a square answer to a question the
+## earth stopped answering in squares: it refused perfectly good ground in the open part of a cell
+## a seam merely clipped, and -- much worse -- said nothing at all about the part of a stroke's
+## body that reached past the cell boundary into stone. A corridor run alongside a seam took a bite
+## out of it, every time, and the only way to notice was to look at the wall.
 ##
 ## SWALLOWED ISLANDS COUNT AS NOT EARTH FOR THE SAME REASON. A scrap the contour has already opened
 ## (see [member island_max_span]) still measures as solid against the strokes, because no stroke
@@ -841,7 +1037,7 @@ func opens_ground(plane: int, origin: Vector2, angle: int) -> bool:
 ## `except` is a stroke whose own carve is to be ignored; see [method opens_ground].
 func _is_earth(plane: int, point: Vector2, except: int = -1) -> bool:
 	var cell := world_to_cell(Vector3(point.x, 0.0, point.y))
-	if _rock[plane].has(cell):
+	if _is_stone(plane, point):
 		return false
 	if _in_culled_island(plane, point):
 		return false
@@ -863,6 +1059,22 @@ func _is_earth(plane: int, point: Vector2, except: int = -1) -> bool:
 				if distance <= 0.0:
 					return false
 	return true
+
+
+## Is this exact spot permanent -- a rock body, or ground a boulder has shut?
+##
+## THE ONE PREDICATE FOR "THIS WILL NEVER OPEN", and having exactly one is the point. There are two
+## kinds of permanent earth in this game and they are stored differently for good reasons -- a
+## boulder shuts whole cells of plane 1 because it is a thing standing ON those cells, and a rock
+## body is a shape in the earth -- but nothing asking the question cares which it met. Every place
+## that used to read `_rock[plane].has(cell)` and mean "is there stone here" reads this instead.
+func _is_stone(plane: int, point: Vector2) -> bool:
+	var cell := world_to_cell(Vector3(point.x, 0.0, point.y))
+	# A boulder: the whole square is shut, exactly as it always was. Told apart from a rock body's
+	# derived cells by the owner book -- see `_rock`.
+	if _rock[plane].has(cell) and int(_rock_owner[plane].get(cell, -1)) < 0:
+		return true
+	return rock_depth(plane, point) > 0.0
 
 
 ## The point on an existing stroke nearest to `at`, within `reach` of it, and the id it belongs to
@@ -905,7 +1117,13 @@ func segments_in_cell(plane: int, cell: Vector2i) -> Array:
 
 
 ## Every cell the stroke opens somewhere standable. See [constant CELL_PROBE_REACH].
-func _segment_cells(id: int) -> Array[Vector2i]:
+##
+## `plane` IS FOR THE STONE, and -1 asks the question without it. A stroke run alongside a rock has
+## a body that reaches into cells the rock is standing in, and claiming those would put a graph node
+## -- a place a bot will plan to walk to -- inside solid stone. Callers that are asking about the
+## STROKE rather than about the ground (what does this cut back onto, which shafts go with it when
+## it is forgotten) pass -1 and get the old answer.
+func _segment_cells(id: int, plane: int = -1) -> Array[Vector2i]:
 	var a := segment_origin(id)
 	var b := segment_end(id)
 	var reach := SEG_HALF_WIDTH + CELL_PROBE_REACH
@@ -927,7 +1145,7 @@ func _segment_cells(id: int) -> Array[Vector2i]:
 			# index simply does not name it -- which is exactly what `in_bounds` has always meant.
 			if not in_bounds(cell):
 				continue
-			if _probe_cell(cell, a, b)[1] <= -STANDING_CLEARANCE:
+			if _probe_cell(plane, cell, a, b)[1] <= -STANDING_CLEARANCE:
 				found.append(cell)
 	return found
 
@@ -961,7 +1179,8 @@ func _segment_cells(id: int) -> Array[Vector2i]:
 ## the gaps between them: a straight corridor came out as a row of points all shoved to one side,
 ## and a route down it measured a length no corridor has. The centre is the honest tie-break, and
 ## it is also the one a player would name.
-static func _probe_cell(cell: Vector2i, a: Vector2, b: Vector2) -> Array:
+## `plane` of -1 skips the stone test; see [method _segment_cells].
+func _probe_cell(plane: int, cell: Vector2i, a: Vector2, b: Vector2) -> Array:
 	var origin := Vector2(float(cell.x) * CELL, float(cell.y) * CELL)
 	var along := b - a
 	var length_squared := along.length_squared()
@@ -978,6 +1197,12 @@ static func _probe_cell(cell: Vector2i, a: Vector2, b: Vector2) -> Array:
 				var t := (point - a).dot(along) / length_squared
 				if t < 0.0 or t > 1.0:
 					continue
+			# STONE IS NOT SOMEWHERE TO STAND, and it is rejected sample by sample rather than cell
+			# by cell. A rock is a shape now, so a cell can be part stone and part corridor -- and
+			# both halves of that are real: the open half is a place a mouse walks and the graph
+			# must know about, and the stone half is a place a waypoint must never land.
+			if plane >= 0 and rock_depth(plane, point) > 0.0:
+				continue
 			var distance := TunnelContour.segment_distance(point, a, b, SEG_HALF_WIDTH)
 			var gap := point.distance_squared_to(origin)
 			# A centimetre of depth is the width of the tie: below that the two samples are the
@@ -1000,7 +1225,7 @@ func standing_point(plane: int, cell: Vector2i) -> Vector3:
 	var best := 1000.0
 	var at := Vector2(float(cell.x) * CELL, float(cell.y) * CELL)
 	for id: int in segments_in_cell(plane, cell):
-		var probe := _probe_cell(cell, segment_origin(id), segment_end(id))
+		var probe := _probe_cell(plane, cell, segment_origin(id), segment_end(id))
 		if (probe[1] as float) < best:
 			best = probe[1]
 			at = probe[0]
@@ -1153,7 +1378,7 @@ func _occupy(plane: int, id: int) -> Array[Vector2i]:
 			_cell_segments[plane][cell] = here
 		(here as Dictionary)[id] = true
 	var fresh: Array[Vector2i] = []
-	for cell: Vector2i in _segment_cells(id):
+	for cell: Vector2i in _segment_cells(id, plane):
 		if not _cells[plane].has(cell):
 			_cells[plane][cell] = true
 			fresh.append(cell)
@@ -1174,7 +1399,7 @@ func _vacate(plane: int, id: int) -> Array[Vector2i]:
 			_cell_segments[plane].erase(cell)
 
 	var emptied: Array[Vector2i] = []
-	for cell: Vector2i in _segment_cells(id):
+	for cell: Vector2i in _segment_cells(id, plane):
 		# THE LAST STROKE OUT CLOSES THE CELL. This is the whole reason the index stores a set of
 		# ids rather than a flag: with a flag there is no way to tell "nothing reaches here any
 		# more" from "one of the three that did has gone", and the corridor would either linger
@@ -1197,7 +1422,7 @@ func _still_stood_in(plane: int, cell: Vector2i) -> bool:
 func _segments_standing_in(plane: int, cell: Vector2i) -> Array[int]:
 	var found: Array[int] = []
 	for id: int in segments_in_cell(plane, cell):
-		var reach: float = _probe_cell(cell, segment_origin(id), segment_end(id))[1]
+		var reach: float = _probe_cell(plane, cell, segment_origin(id), segment_end(id))[1]
 		if reach <= -STANDING_CLEARANCE:
 			found.append(id)
 	return found
@@ -1239,7 +1464,15 @@ func _touch(plane: int, id: int) -> void:
 ##
 ## `cull` is whether to reach out far enough for the field rules to be re-decided at a distance;
 ## see the reach below for what that costs and [method carve] for why a growing carve declines it.
-func _touch_span(plane: int, a: Vector2, b: Vector2, cull: bool = true) -> void:
+##
+## `carving` says the COMMITTED strokes have not moved -- only the tip of a stroke somebody is
+## part-way through cutting. It is the one caller allowed to keep the cached composition of the
+## earth around it; see [member _committed_field]. Stated separately from `cull` on purpose: the two
+## happen to be asked by the same caller today, and folding them into one flag would make the next
+## caller that wants a cheap reach silently keep a field it had every right to change.
+func _touch_span(
+	plane: int, a: Vector2, b: Vector2, cull: bool = true, carving: bool = false
+) -> void:
 	# Grown by the half-width plus a texel, so the chunk holding the far side of a rounded end is
 	# included. Missing one leaves a notch of un-rebuilt wall that only appears at some angles.
 	#
@@ -1266,7 +1499,10 @@ func _touch_span(plane: int, a: Vector2, b: Vector2, cull: bool = true) -> void:
 		for cx in range(low.x, high.x + 1):
 			if cx < 0 or cy < 0 or cx >= FIELD_CHUNKS or cy >= FIELD_CHUNKS:
 				continue
-			_dirty_chunks[plane][cy * FIELD_CHUNKS + cx] = true
+			var key := cy * FIELD_CHUNKS + cx
+			_dirty_chunks[plane][key] = true
+			if not carving:
+				_committed_field[plane].erase(key)
 
 
 ## Which chunk a world point falls in.
@@ -1302,13 +1538,47 @@ func apply_plane_collision(body: CollisionObject3D, plane: int) -> void:
 # ------------------------------------------------------------------------- rock
 
 
-## Lay the seams. Once, at startup, per plane, from a seed.
+## Clear ground between two rocks, in metres. A stride and a bit: wider than a corridor, so the gap
+## between two lumps is somewhere a stroke can actually be threaded rather than a crevice the
+## field's own thinning rule would close before anybody got through it.
+## `[REVISED]` DOWN FROM 1.4 WITH THE ROCKS. The gap has to stay wide enough to thread a stroke
+## through -- that is what it is for -- but a metre is a corridor's full width, and at the old
+## figure a plane of the new small rocks could not be packed densely enough to meet any coverage
+## worth having: every candidate landed inside somebody's ring and the generator ran out of tries.
+const ROCK_SPACING: float = 1.0
+
+## How far a drawn lump is sunk below the dirt it comes through, in metres.
+##
+## A rock's mesh is built standing on its own base, so without this the base sits exactly on the
+## ground plane -- and at this camera angle a stone resting on a surface with no part of it below
+## the surface reads as a prop dropped on top of the map rather than as something coming out of it.
+## A finger's depth is enough to hide the join from every angle the camera can reach.
+const LUMP_SKIRT: float = 0.06
+
+## How much of a lobe's radius the lump above ground is drawn at.
+##
+## UNDER ONE, because what breaks the surface is the CAP of a stone and a cap is narrower than the
+## body it is cut from. Drawn at the full radius, a rock poking two centimetres out of the ground
+## comes out as a broad flat disc of stone the width of the whole lobe -- which reads as a paving
+## slab, and is the failure the cap sheet had. Narrowed, the same rock is a knuckle of stone in the
+## dirt, and a rock standing well proud of the ground still shows most of its width because the
+## lump is widest around its own middle.
+const LUMP_SPREAD: float = 0.72
+
+
+
+## Lay the stone. Once, at startup, per plane, from a seed.
 ##
 ## SEEDED AND PER-PLANE, which are the two things that matter. Seeded, because a map you cannot
-## replay is a map you cannot learn (GDD section 8 wants layouts to be a recipe plus a seed), and
-## because a bug that only happens on one layout is a bug you can only reproduce by luck. Per
+## replay is a map you cannot learn (GDD section 8 wants layouts to be a recipe plus a seed),
+## because a bug that only happens on one layout is a bug you can only reproduce by luck, and
+## because it is what lets the stone cross a network without a byte of geometry on the wire. Per
 ## plane, because rock in the same place on every layer is a flat maze drawn three times -- the
 ## point of section 3's obstructions is that going AROUND one may mean going down.
+##
+## AIMED AT AN AREA RATHER THAN AT A COUNT, which is what keeps `rock_density` meaning the same
+## thing it always did while the objects underneath it changed from tiles to boulders. A plane is
+## rocky by the fraction of its ground that is stone, not by how many lumps that took.
 func _generate_rock() -> void:
 	if rock_density <= 0.0:
 		return
@@ -1320,53 +1590,379 @@ func _generate_rock() -> void:
 		# 3 as well, and every screenshot of the deep layers would stop being comparable.
 		rng.seed = rock_seed + plane * 7919
 
-		var span := half_extent_cells
-		var area := float((span * 2 + 1) * (span * 2 + 1))
-		var wanted := int(area * (rock_density + rock_density_deeper * float(plane - 1)))
-		var placed := 0
+		var span := float(half_extent_cells) * CELL
+		var ground := (span * 2.0 + CELL) * (span * 2.0 + CELL)
+		var wanted := ground * (rock_density + rock_density_deeper * float(plane - 1))
+		var covered := 0.0
 		var attempts := 0
-		while placed < wanted and attempts < wanted:
+		# Capped on attempts rather than run until satisfied: a dense plane with a big nest
+		# clearance and a spacing rule can simply run out of room, and a generator that spins
+		# looking for a spot that is not there is a startup that never finishes. `[REVISED]` Raised
+		# with the shrink -- the same coverage in rocks a third the radius is most of an order of
+		# magnitude more of them, and each one is a fresh draw that may land inside a neighbour's
+		# ring. The first version stopped at four hundred and quietly under-delivered every density
+		# by a third, which is the kind of miss that reads as the dial not working.
+		while covered < wanted and attempts < 12000:
 			attempts += 1
-			var start := Vector2i(rng.randi_range(-span, span), rng.randi_range(-span, span))
-			if not _rock_allowed(plane, start):
+			# `[REVISED]` DEEPER IS ROCKIER, AND NO LONGER CHUNKIER -- the size ramp has been taken
+			# out, and it is worth saying why it was ever there. It existed because a plane
+			# SATURATES: at 16% coverage in metre-radius lumps, past a certain count every new one
+			# lands inside somebody's spacing ring and the generator runs out of tries with the
+			# target unmet, so the deep planes had to grow bigger rocks to hit their number at all.
+			#
+			# At the sizes and densities rock comes in now there is no saturation to work around --
+			# and the ramp had quietly inverted the thing it was there to serve. Bigger rocks means
+			# FEWER of them, and a corridor is stopped by a rock whatever its size, so plane 3 came
+			# out with longer clear runs than plane 1 despite carrying nearly twice the stone.
+			# Measured: 6.25 metres median against 5.25. "Deeper is harder" was true of the
+			# percentage and false of the digging, which is the only place a player meets it.
+			# SKEWED SMALL, WHICH IS WHAT MAKES A WIDE RANGE USABLE. Drawn uniformly, half of every
+			# plane's rocks come out in the top half of the range and the map is back to being
+			# districts. Squaring the draw puts most rocks near the bottom of the range and leaves
+			# a handful at the top, which is both what a field of stones looks like and what the
+			# rest of the design needs: see `rock_span` for why the big end has to exist at all.
+			var roll := rng.randf()
+			var size := lerpf(rock_span.x, rock_span.y, roll * roll)
+			var at := Vector2(
+				rng.randf_range(-span, span), rng.randf_range(-span, span)
+			)
+			var can_break := rng.randf() < rock_breakable_fraction
+			var rock := RockBody.grow(plane, at, size, can_break, rng)
+			if not _rock_fits(rock):
 				continue
-			placed += _grow_seam(plane, start, rng)
+			rock.index = _rock_bodies[plane].size()
+			_rock_bodies[plane].append(rock)
+			_register_rock(rock)
+			# MEASURED IN CELLS ACTUALLY CLAIMED, not as a disc of the outer reach. A lobed rock
+			# fills well under the circle that contains it, so pricing it at its reach counted
+			# about a third more ground than there is stone on -- which made `rock_density` a dial
+			# whose number bore no relation to what a player walks past.
+			covered += float(rock.cells(CELL, half_extent_cells).size()) * CELL * CELL
+
+		_spawn_breakers(plane)
+		_rebuild_rock_lumps(plane)
 
 
-## A seam, grown as a random walk rather than as a disc. A disc is a circle, and a circle in the
-## ground is the one shape that reads as placed by a level designer; a walk wanders, doubles back
-## on itself and leaves the ragged edge a mineral seam actually has.
-func _grow_seam(plane: int, start: Vector2i, rng: RandomNumberGenerator) -> int:
-	var length := rng.randi_range(rock_seam_cells.x, maxi(rock_seam_cells.x, rock_seam_cells.y))
-	var at := start
-	var laid := 0
-	for i in range(length):
-		if _rock_allowed(plane, at):
-			_rock[plane][at] = true
-			laid += 1
-		at += SIDES[rng.randi_range(0, SIDES.size() - 1)]
-		if not in_bounds(at):
-			break
-	return laid
-
-
-## Whether generation may put rock in this cell.
+## May this rock stand where it has grown?
 ##
-## The nest clearance is the load-bearing one. A crew whose ground is rock to the horizon cannot
-## get underground at home, and because the layout is seeded that would happen in exactly the same
-## place every single match -- which reads as the map being broken rather than as a hard start.
-func _rock_allowed(plane: int, cell: Vector2i) -> bool:
-	if not in_bounds(cell) or _rock[plane].has(cell):
+## THE NEST RULE IS THE LOAD-BEARING ONE, and it is measured to the stone's outer reach rather than
+## to its centre -- a three-metre lump whose middle is just outside the clearance still puts rock
+## inside it. A crew whose ground is stone to the horizon cannot get underground at home, and
+## because the layout is seeded that would happen in exactly the same place every single match,
+## which reads as the map being broken rather than as a hard start.
+##
+## AND THEY DO NOT TOUCH EACH OTHER. Two overlapping rocks read as one bigger rock with a seam in
+## it, and if one is breakable and the other is not the player is looking at a single object that
+## is half shiftable -- which is a rule nothing on screen can express. The gap between two rocks is
+## also where the interesting digging is, exactly as it is between two boulders on the lawn.
+func _rock_fits(rock: RockBody) -> bool:
+	var reach := rock.reach()
+	var limit := float(half_extent_cells) * CELL - reach
+	if absf(rock.centre.x) > limit or absf(rock.centre.y) > limit:
 		return false
-	var here := Vector2(float(cell.x) * CELL, float(cell.y) * CELL)
-	if is_inside_tree() and Nest.blocks(get_tree(), here, rock_nest_clearance):
+	if is_inside_tree() and Nest.blocks(get_tree(), rock.centre, rock_nest_clearance + reach):
 		return false
+	for other: Variant in _rock_bodies[rock.plane]:
+		if other == null:
+			continue
+		var near := other as RockBody
+		if rock.centre.distance_to(near.centre) < reach + near.reach() + ROCK_SPACING:
+			return false
 	return true
+
+
+## Put a rock into the coarse indexes: the cells it fills, and the cells it comes near.
+##
+## BOTH ARE DERIVED AND BOTH ARE REBUILT WHOLE when a lobe goes, rather than patched. A rock that
+## has lost a bite covers different cells and reaches a different distance, and the difference
+## between "recompute the two dictionaries for this one rock" and "work out the delta" is a few
+## dozen cells against a class of bug where a broken rock keeps blocking a shaft.
+func _register_rock(rock: RockBody) -> void:
+	var plane := rock.plane
+	for cell: Vector2i in rock.cells(CELL, half_extent_cells):
+		_rock[plane][cell] = true
+		_rock_owner[plane][cell] = rock.index
+	var box := rock.bounds()
+	var low := world_to_cell(Vector3(box.position.x, 0.0, box.position.y))
+	var high := world_to_cell(Vector3(box.end.x, 0.0, box.end.y))
+	for y in range(low.y - 1, high.y + 2):
+		for x in range(low.x - 1, high.x + 2):
+			var cell := Vector2i(x, y)
+			var here: Variant = _rock_near[plane].get(cell)
+			if here == null:
+				here = []
+				_rock_near[plane][cell] = here
+			(here as Array).append(rock.index)
+
+
+## And take it out again, before it is put back changed or dropped entirely.
+func _unregister_rock(rock: RockBody) -> void:
+	var plane := rock.plane
+	for cell: Vector2i in _rock_owner[plane].keys():
+		if int(_rock_owner[plane][cell]) == rock.index:
+			_rock_owner[plane].erase(cell)
+			# A boulder on the lawn writes `_rock` without an owner, so only owned cells go -- and
+			# the owner test above is exactly that guard.
+			_rock[plane].erase(cell)
+	for cell: Vector2i in _rock_near[plane].keys():
+		var here: Array = _rock_near[plane][cell]
+		here.erase(rock.index)
+		if here.is_empty():
+			_rock_near[plane].erase(cell)
+
+
+## A hittable target for each breakable rock, so a Brute has something to swing at.
+##
+## A NODE WITH NO COLLIDER AND NO MESH, which is worth being explicit about because every other
+## breakable thing in this game has both. The stone is already drawn -- it is the wall the contour
+## wrapped round it -- and it is already solid, because that same wall is in the collision trimesh.
+## What is missing is only the one thing a shape in a distance field cannot be: something in
+## `Breakable.GROUP` for the swing to find. See underground_rock.gd.
+##
+## LOADED BY PATH RATHER THAN NAMED, AND THAT IS A CYCLE BREAK. `UndergroundRock` extends
+## `Breakable`, which is written against `Mouse`, which is written against this file -- so naming
+## the class here closes a ring of four and GDScript refuses to compile any of them, with an error
+## that names one file and blames an identifier that is perfectly well declared. This file is the
+## honest place to break the ring: it is the one that does not need the type, only the constructor.
+## Same trick, and the same reason, as the shader loads elsewhere in this file.
+func _spawn_breakers(plane: int) -> void:
+	var breaker: GDScript = load("res://scripts/maps/underground_rock.gd") as GDScript
+	if breaker == null:
+		push_warning("rock: no breaker script -- breakable rock could not be broken")
+		return
+	for entry: Variant in _rock_bodies[plane]:
+		var rock := entry as RockBody
+		if rock == null or not rock.breakable:
+			continue
+		breaker.call("place", self, rock)
+
+
+
+## How far into stone a point is, in metres. Zero or less is earth.
+##
+## THE EXACT QUESTION EVERYTHING ABOUT DIGGING NOW ASKS, and the reason it can be asked at all. The
+## old cell test could only answer at the resolution of a square, which is eight times coarser than
+## the field the earth is actually stored in -- so a stroke either lost a whole cell it had every
+## right to or ate a bite of stone it had none.
+##
+## Bucketed by cell, so a plane with two dozen rocks on it costs one dictionary lookup and two or
+## three distance tests rather than a walk over every rock. This is called once per texel of every
+## chunk rebuild that touches stone, so the constant matters.
+func rock_depth(plane: int, point: Vector2) -> float:
+	if plane < 0 or plane >= PLANE_COUNT:
+		return -1000.0
+	var near: Variant = _rock_near[plane].get(world_to_cell(Vector3(point.x, 0.0, point.y)))
+	if near == null:
+		return -1000.0
+	var deepest := -1000.0
+	for i: int in (near as Array):
+		var rock := _rock_bodies[plane][i] as RockBody
+		if rock == null:
+			continue
+		deepest = maxf(deepest, rock.depth(point))
+	return deepest
+
+
+## Which rock holds this point, or null. What the wall material and the swing both ask.
+func rock_holding(plane: int, point: Vector2) -> RockBody:
+	if plane < 0 or plane >= PLANE_COUNT:
+		return null
+	var near: Variant = _rock_near[plane].get(world_to_cell(Vector3(point.x, 0.0, point.y)))
+	if near == null:
+		return null
+	for i: int in (near as Array):
+		var rock := _rock_bodies[plane][i] as RockBody
+		if rock != null and rock.depth(point) > 0.0:
+			return rock
+	return null
+
+
+## Every rock still standing on a plane. For the audits, the breakers and anything drawing a layout.
+func rock_bodies(plane: int) -> Array:
+	var out: Array = []
+	if plane < 0 or plane >= PLANE_COUNT:
+		return out
+	for entry: Variant in _rock_bodies[plane]:
+		if entry != null:
+			out.append(entry)
+	return out
+
+
+func rock_body(plane: int, index: int) -> RockBody:
+	if plane < 0 or plane >= PLANE_COUNT:
+		return null
+	if index < 0 or index >= _rock_bodies[plane].size():
+		return null
+	return _rock_bodies[plane][index] as RockBody
+
+
+## Take one bite out of a breakable rock: the Brute's swing, landed.
+##
+## THE EARTH REOPENS IMMEDIATELY, before any debris has finished falling, exactly as a barricade
+## reopens its corridor on the swing that breaks it. A Brute who has just earned a metre of ground
+## must not be stopped by stone that is visibly in pieces.
+##
+## RETURNS WHETHER THE ROCK IS FINISHED, so the node standing in for it knows whether to go too.
+func break_rock_lobe(plane: int, index: int, at: Vector2) -> bool:
+	# THE SAME GUARD EVERY OTHER WORLD EDIT CARRIES, and it belongs here for the reason `_puppet`'s
+	# own note gives: refusing at the state is what makes it structurally impossible for a client to
+	# change the earth, rather than depending on every caller remembering to ask.
+	if _puppet:
+		return false
+	var rock := rock_body(plane, index)
+	if rock == null or not rock.breakable:
+		return true
+	var lobe := rock.nearest_lobe(at)
+	if lobe < 0:
+		return true
+	var box := RockBody.lobe_bounds(rock.lobes[lobe], 0.0)
+
+	_unregister_rock(rock)
+	rock.drop_lobe(lobe)
+	var gone := rock.is_gone()
+	if gone:
+		_rock_bodies[plane][index] = null
+	else:
+		_register_rock(rock)
+
+	# The field around the bite is a different shape now, so every chunk it could have written has
+	# to re-contour. Grown by the cull's reach for the same reason a stroke's touch is: opening
+	# ground can pinch off -- or free -- a scrap of earth a chunk away.
+	_touch_box(plane, box)
+	_rebuild_walls(plane)
+	# Cells the stone was standing in may be standable now. Nothing else re-derives them, because
+	# nothing else changes the earth without a stroke being involved.
+	_reclaim(plane, box)
+	# THE LUMPS FOLLOW THE SHAPE. A rock that has lost a lobe is a different silhouette above the
+	# ground as well as below it, and rebuilding the plane's batch is the only way to say so --
+	# there is no per-lobe mesh to hide, deliberately, because one draw call for a plane's stone is
+	# worth more than the ability to edit it in place.
+	_rebuild_rock_lumps(plane)
+	rock_changed.emit(plane)
+	return gone
+
+
+## Mark every chunk overlapping a square as needing re-contouring. The rock's equivalent of
+## [method _touch_span], and grown by the same reach for the same reason.
+func _touch_box(plane: int, box: Rect2) -> void:
+	var reach := TunnelContour.TEXEL * 2.0 + float(_cull_pad()) * TunnelContour.TEXEL
+	var low := _chunk_at(box.position - Vector2(reach, reach))
+	var high := _chunk_at(box.end + Vector2(reach, reach))
+	for cy in range(low.y, high.y + 1):
+		for cx in range(low.x, high.x + 1):
+			if cx < 0 or cy < 0 or cx >= FIELD_CHUNKS or cy >= FIELD_CHUNKS:
+				continue
+			var key := cy * FIELD_CHUNKS + cx
+			_dirty_chunks[plane][key] = true
+			# A rock has come or gone, so the earth these chunks were composed from has changed.
+			_committed_field[plane].erase(key)
+
+
+## Ground that stone was standing in, given back to whichever strokes already reach it.
+##
+## WHY THIS IS NOT AUTOMATIC. `_cells` is a claim about where a mouse can STAND, and it is written
+## when a stroke is dug -- at which point the answer included the rock. Take the rock away and the
+## strokes have not changed, so nothing would ever re-ask. The corridor would be visibly open, the
+## collision would let a mouse walk down it, and the routing graph would refuse to plan through it:
+## a bot standing at the mouth of a passage a Brute just opened, declining to use it.
+func _reclaim(plane: int, box: Rect2) -> void:
+	var low := world_to_cell(Vector3(box.position.x, 0.0, box.position.y)) - Vector2i.ONE
+	var high := world_to_cell(Vector3(box.end.x, 0.0, box.end.y)) + Vector2i.ONE
+	for y in range(low.y, high.y + 1):
+		for x in range(low.x, high.x + 1):
+			var cell := Vector2i(x, y)
+			if _cells[plane].has(cell) or not in_bounds(cell):
+				continue
+			if _segments_standing_in(plane, cell).is_empty():
+				continue
+			_cells[plane][cell] = true
+			# KNOWN TO WHOEVER ALREADY KNEW THE GROUND BESIDE IT, and not through
+			# `_learn_tunnel_cell`, whose rules are about a LIVE dig -- it takes a crew and has a
+			# junction rule for breaking into an enemy corridor, and neither is what happened here.
+			# A rock coming apart brings no new crew to the cell; it widens ground somebody has
+			# already cut, so the honest answer is the bits that ground already carries.
+			var bits := 0
+			for side: Vector2i in SIDES:
+				bits |= int(_tunnel_known[plane].get(cell + side, 0))
+			_tunnel_known[plane][cell] = bits if bits != 0 else TEAM_BITS
+			tunnel_revealed.emit(plane, _tunnel_known[plane][cell])
+			cell_opened.emit(plane, cell)
 
 
 ## Earth that will never open, however long you hold the button.
 func is_rock(plane: int, cell: Vector2i) -> bool:
 	return plane >= 0 and plane < PLANE_COUNT and _rock[plane].has(cell)
+
+
+## Is this cell shut by a BOULDER -- an object standing on the lawn above it -- as opposed to by a
+## rock body in the earth?
+##
+## The two refuse a dig differently and anything mirroring the dig rule has to tell them apart. See
+## [method dig_segment], which is the rule this exists to let the cursor copy.
+func boulder_shuts(plane: int, cell: Vector2i) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return false
+	return _rock[plane].has(cell) and int(_rock_owner[plane].get(cell, -1)) < 0
+
+
+## Is this exact spot open corridor -- somewhere a mouse is physically inside the tunnel?
+##
+## THE FIELD'S OWN ANSWER, unfiltered by the ring test [method _stands_at] adds. That one asks
+## whether there is ROOM for a body here, which is the right question for routing and the wrong one
+## for "did the earth open", because a point a centimetre inside a wall fails it either way. This
+## is for anything checking the shape of the world against something else's model of it.
+func is_open_at(plane: int, point: Vector2) -> bool:
+	if plane < 0 or plane >= PLANE_COUNT:
+		return false
+	return TunnelContour.decode(_field_at(plane, point)) < 0.0
+
+
+## Is this exact spot stone? The public face of [method _is_stone], for the cursor -- which walks a
+## prospective stroke a point at a time and wants the same answer the dig will give.
+func is_stone_at(plane: int, point: Vector2) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return false
+	return _is_stone(plane, point)
+
+
+## The rock that reaches into this cell's square, if any.
+##
+## LOOSER THAN OWNERSHIP, and that is what makes a reveal work at the edges. `_rock_owner` records
+## the cells a rock's middle covers, which is the right index for "may a shaft land here"; running
+## a shovel into stone happens in whichever square you were digging in, and a rounded rock clips
+## plenty of squares whose centres are earth. Owner first, because it is a dictionary hit and it is
+## the common case.
+func rock_touching(plane: int, cell: Vector2i) -> RockBody:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return null
+	var owned := rock_body(plane, int(_rock_owner[plane].get(cell, -1)))
+	if owned != null:
+		return owned
+	var near: Variant = _rock_near[plane].get(cell)
+	if near == null:
+		return null
+	var centre := Vector2(float(cell.x) * CELL, float(cell.y) * CELL)
+	for i: int in (near as Array):
+		var rock := _rock_bodies[plane][i] as RockBody
+		if rock != null and rock.touches_cell(centre, CELL * 0.5):
+			return rock
+	return null
+
+
+## Can a Brute shift the stone in this cell?
+##
+## FOR THE PANEL AS MUCH AS FOR THE RULES. Which rock is breakable is the one thing a player decides
+## a route on -- go round, or fetch the class that opens it -- and that decision is made looking at
+## the minimap at least as often as looking at the wall.
+##
+## A CELL A BOULDER SHUT COUNTS AS BREAKABLE, which is not a fudge: there is a rock standing on the
+## lawn above it and five Brute swings take it off. The cell is shut by something destructible
+## either way, which is exactly what this question means.
+func rock_breakable_at(plane: int, cell: Vector2i) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return false
+	var rock := rock_body(plane, int(_rock_owner[plane].get(cell, -1)))
+	return true if rock == null else rock.breakable
 
 
 ## Every rock cell on a plane. For the audits, and for anything that wants to draw the layout.
@@ -1381,11 +1977,11 @@ func rock_cells(plane: int) -> Array:
 ## right places, and a boulder that used a parallel mechanism would have to be taught to each of
 ## them separately -- which is four chances to miss one.
 ##
-## `known` is what makes a boulder feel completely different from a seam despite being the same
-## thing underneath. A seam is hidden until somebody pays to find it; a boulder is sitting on the
-## lawn in front of you, so the crew that can see it already knows what is under it, and pretending
-## otherwise would be a puzzle about the camera rather than about the map.
-func add_rock(plane: int, cell: Vector2i, known: bool = false) -> bool:
+## `[REVISED]` NO `known` FLAG ANY MORE. A boulder used to have to be marked as known-to-everybody
+## to tell it apart from a hidden seam; there are no hidden seams now. A rock is either standing
+## above the dirt where both crews can see it or it is buried, and that is a fact about the rock
+## rather than a fact about who has been told.
+func add_rock(plane: int, cell: Vector2i) -> bool:
 	if plane <= 0 or plane >= PLANE_COUNT or not in_bounds(cell):
 		return false
 	# Never over a tunnel somebody already dug. Rock arriving on top of an open corridor would make
@@ -1394,9 +1990,7 @@ func add_rock(plane: int, cell: Vector2i, known: bool = false) -> bool:
 	if _cells[plane].has(cell) or _rock[plane].has(cell):
 		return false
 	_rock[plane][cell] = true
-	if known:
-		_known[plane][cell] = TEAM_BITS
-		_announce_rock(plane, TEAM_BITS)
+	rock_changed.emit(plane)
 	return true
 
 
@@ -1404,92 +1998,75 @@ func add_rock(plane: int, cell: Vector2i, known: bool = false) -> bool:
 func remove_rock(plane: int, cell: Vector2i) -> bool:
 	if plane <= 0 or plane >= PLANE_COUNT or not _rock[plane].has(cell):
 		return false
+	# NOT SOMEBODY ELSE'S STONE. This is the boulder's way of giving its cell back, and a boulder
+	# never gets one that a rock body already holds -- `boulder_field.gd` asks `is_rock` before
+	# placing. The guard is for the day something else calls this: erasing a cell a rock body owns
+	# would leave the index disagreeing with the shape, and the shape is what the earth is built
+	# from, so the cell would come back the next time the rock was re-indexed and be gone again
+	# after that. See [method break_rock_lobe], which is how a rock body's ground is really freed.
+	if int(_rock_owner[plane].get(cell, -1)) >= 0:
+		return false
 	_rock[plane].erase(cell)
-	_known[plane].erase(cell)
 	# The face of the seam was drawn in stone by whichever corridors had run up against it, and it
 	# is ordinary earth now. Cheap, and only ever on a Brute's last swing.
 	_rebuild_walls(plane)
-	_announce_rock(plane, TEAM_BITS)
+	rock_changed.emit(plane)
+	return true
+
+
+## Take whatever stone is in this cell out of the world entirely -- a whole rock body, or a cell a
+## boulder had shut.
+##
+## SCAFFOLDING, NOT A GAME RULE, and it is worth saying which. Nothing a player does calls this: a
+## Brute takes rock apart a lobe at a time through [method break_rock_lobe], and a boulder gives its
+## own cell back through [method remove_rock]. This is for the places that need a NAMED COORDINATE
+## to be diggable whatever the seed grew there -- the replication audit stands its hidden controls
+## at fixed cells, and a generated rock landing on one would make the run fail on the layout rather
+## than on the wire.
+##
+## THE WHOLE ROCK GOES, not the one cell. Erasing a single cell of a body would leave the index
+## disagreeing with the shape it is derived from, and the shape is what the earth is built out of --
+## so the cell would come back the next time the rock was re-indexed. See [method remove_rock],
+## which refuses that for the same reason.
+func clear_rock_at(plane: int, cell: Vector2i) -> bool:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return false
+	var rock := rock_touching(plane, cell)
+	if rock == null:
+		return remove_rock(plane, cell)
+	var box := rock.bounds()
+	_unregister_rock(rock)
+	_rock_bodies[plane][rock.index] = null
+	# The group name written out rather than read off `UndergroundRock.ROCK_GROUP`, for the cycle
+	# reason `_spawn_breakers` gives at length: naming that class here is what GDScript refuses to
+	# compile. The breaker is freed from out here rather than told, because a rock removed by
+	# scaffolding never "broke" -- there is nobody to credit and nothing to throw.
+	for node in get_tree().get_nodes_in_group(&"underground_rock"):
+		var breaker: Node = node
+		if (
+			int(breaker.get("plane_index")) == plane
+			and int(breaker.get("rock_index")) == rock.index
+		):
+			breaker.queue_free()
+	_touch_box(plane, box)
+	_rebuild_walls(plane)
+	_reclaim(plane, box)
+	_rebuild_rock_lumps(plane)
+	rock_changed.emit(plane)
 	return true
 
 
 # ------------------------------------------------------------------------- what a crew knows
-
-
-## Learn where a vein goes, by running into it.
-##
-## THE WHOLE CONNECTED VEIN, not the one cell you hit. A seam is grown as a random walk and reads as
-## a single object -- the thing you have actually learned when your Engineer's shovel rings off it
-## is "this seam is here", and drip-feeding it a tile at a time would mean chipping along a wall to
-## map something you can already see the shape of. The cell is the price; the vein is the knowledge.
-##
-## PER CREW, which is the part that makes it worth storing at all. Rock is hidden information (GDD
-## section 3) and the crew that spent the digs is the crew that gets to route around it. This is the
-## first per-team knowledge in the game and it is deliberately the small one -- M5 has to do the
-## same trick for tunnels and for sightings, and doing it once on something static is how the shape
-## gets found before it matters.
-func reveal_vein(plane: int, cell: Vector2i, team: int) -> int:
-	if _puppet:
-		return 0
-	if plane <= 0 or plane >= PLANE_COUNT or not _rock[plane].has(cell):
-		return 0
-	var bit := 1 << clampi(team, 0, 1)
-	if int(_known[plane].get(cell, 0)) & bit != 0:
-		return 0
-
-	# Flood fill over shared faces only, which is the same connectivity the walls and the routing
-	# graph use. Eight-way would join two seams that touch at a corner -- and a corner is exactly
-	# the place a mouse cannot get through, so they are not one vein to anybody who has to dig.
-	var found := 0
-	var queue: Array[Vector2i] = [cell]
-	var seen := {cell: true}
-	while not queue.is_empty():
-		var at: Vector2i = queue.pop_back()
-		if int(_known[plane].get(at, 0)) & bit == 0:
-			_known[plane][at] = int(_known[plane].get(at, 0)) | bit
-			found += 1
-		for side: Vector2i in SIDES:
-			var beside := at + side
-			if seen.has(beside) or not _rock[plane].has(beside):
-				continue
-			seen[beside] = true
-			queue.append(beside)
-
-	if found > 0:
-		_announce_rock(plane, bit)
-	return found
-
-
-## Somebody's picture of a plane changed. Redraws the caps if it was the crew being drawn for, and
-## tells everything else once.
-##
-## The rebuild is HERE rather than on a connection to this file's own signal, because a listener
-## that has to be wired up in `_ready` is a listener somebody can delete and not notice: the caps
-## would simply stop updating, which looks exactly like the reveal not working.
-func _announce_rock(plane: int, teams: int) -> void:
-	if _view_team >= 0 and teams & (1 << _view_team) != 0:
-		_rebuild_rock_caps(plane)
-	rock_revealed.emit(plane, teams)
-
-
-func is_rock_known(plane: int, cell: Vector2i, team: int) -> bool:
-	if plane < 0 or plane >= PLANE_COUNT:
-		return false
-	return int(_known[plane].get(cell, 0)) & (1 << clampi(team, 0, 1)) != 0
-
-
-## Every rock cell on a plane that `team` has found. For the cap mesh and the minimap -- the two
-## things that draw what a crew knows.
-func known_rock_cells(plane: int, team: int) -> Array[Vector2i]:
-	var found: Array[Vector2i] = []
-	if plane < 0 or plane >= PLANE_COUNT:
-		return found
-	var bit := 1 << clampi(team, 0, 1)
-	for cell: Vector2i in _known[plane]:
-		if int(_known[plane][cell]) & bit != 0:
-			found.append(cell)
-	return found
-
+#
+# `[REVISED]` ROCK USED TO BE HERE, AND DELIBERATELY IS NOT ANY MORE. A seam was hidden information:
+# running into one revealed the whole lump to your crew alone, which was recorded per rock, mirrored
+# onto cells, drawn as a plate on the ground, sent over the wire and re-drawn on the minimap. All of
+# that existed to answer "can this crew see this rock", and the answer is now a property of the rock
+# instead of a property of the crew -- it is either tall enough to stand out of the dirt, where
+# anybody can see it, or it is buried and nobody can. Five mechanisms replaced by one subtraction;
+# see [method _rebuild_rock_lumps].
+#
+# What is left under this heading is tunnels and shafts, which are genuinely per-crew and stay so.
 
 # ------------------------------------------------------------------------- paving
 
@@ -1624,6 +2201,10 @@ func _learn_tunnel_cell(plane: int, cell: Vector2i, team: int) -> void:
 	if before == after:
 		return
 	_tunnel_known[plane][cell] = after
+	# WHAT THIS CREW KNOWS HAS MOVED, so no composition of the earth cached under the old answer is
+	# safe to reuse -- see [member _knowledge_age]. Measured against dropping it: no difference, and
+	# a chunk only re-composes when something dirties it anyway.
+	_knowledge_age[plane] += 1
 	# The viewing crew just gained a cell it did not have -- a junction an enemy broke into, or a
 	# landing a shaft dropped onto ground that was already open. `dig_segment` dirties its own
 	# chunks, but neither of those goes through it, and a cell that is on your map and not in your
@@ -1699,12 +2280,6 @@ func shaft_known_bits(plane: int, cell: Vector2i) -> int:
 	return int(_shaft_known[plane].get(cell, 0))
 
 
-func rock_known_bits(plane: int, cell: Vector2i) -> int:
-	if plane < 0 or plane >= PLANE_COUNT:
-		return 0
-	return int(_known[plane].get(cell, 0))
-
-
 func is_tunnel_known(plane: int, cell: Vector2i, team: int) -> bool:
 	if plane <= 0 or plane >= PLANE_COUNT:
 		return false
@@ -1760,11 +2335,18 @@ func can_stand(plane: int, cell: Vector2i) -> bool:
 ## THE ONE PLACE EARTH OPENS. Returns false if the stroke was already there -- so callers can tell
 ## a fresh cut from a no-op without re-querying -- and also if it was refused outright.
 ##
-## ROCK IS CHECKED ALONG THE WHOLE STROKE, not at a single point, which is the one rule that had
-## to grow a dimension. A metre of tunnel at a free angle can clip the corner of a seam without
-## either of its ends being inside it, and a stroke that quietly cut through stone would make the
-## seam a suggestion. Refused whole for now; stopping short at the stone is stage 3's job, and is
-## the better answer.
+## `[REVISED]` A STROKE IS NO LONGER REFUSED FOR TOUCHING ROCK. IT STOPS AT IT. The old rule threw
+## the whole metre away if any cell it would have made walkable held stone -- an approximation
+## forced by rock being a set of squares, and the note here used to say that stopping short at the
+## stone was the better answer and somebody else's job. It is this one's now: the rock is a shape in
+## the field (see [RockBody]), so a stroke that runs up against one simply comes out shorter and
+## curved round it, which is what an Engineer digging past a boulder should get.
+##
+## SO THE ONLY THING LEFT TO REFUSE IS A STROKE THAT WOULD OPEN NOTHING AT ALL, and the whole of
+## that test is `opens_ground`. What survives is the VOICE: pointing at a rock and holding the
+## button has to say why nothing is happening, because ground that refuses to open in silence is
+## indistinguishable from a dig control that has stopped working -- the exact lesson the entrance
+## key taught this file once already. See [method _rock_in_the_way].
 func dig_segment(plane: int, origin: Vector2, angle: int, team: int = -1) -> bool:
 	if _puppet:
 		return false
@@ -1786,17 +2368,20 @@ func dig_segment(plane: int, origin: Vector2, angle: int, team: int = -1) -> boo
 	if maxf(absf(far.x), absf(far.y)) > limit:
 		return false
 
-	# ROCK IS ASKED OF THE CELLS THE STROKE WOULD MAKE WALKABLE, which is the meaningful question:
-	# you cannot turn stone into floor. Asked of anything looser it refused the corridor you are
-	# MEANT to be able to run alongside a seam, because a stroke's rounded end reaches into the
-	# neighbouring square without making any of it walkable.
+	# A BOULDER STILL SHUTS ITS WHOLE SQUARE, and that refusal survives the change of unit because
+	# a boulder is not the same kind of obstruction as a rock body. A rock body is a shape IN the
+	# earth, so a stroke that meets one stops at it and keeps whatever it opened on the way; a
+	# boulder is an object standing ON a cell of the lawn, and what it blocks is the square under
+	# it, whole. Letting a stroke take a bite out of that square would open ground beneath a rock
+	# that is visibly still sitting there -- and, unlike a rock body, nothing would draw the stone
+	# it stopped at, because the boulder's blocking is a fact about the index rather than a shape
+	# in the field.
 	#
-	# Said out loud, because ground that refuses to open with no explanation is indistinguishable
-	# from a dig control that has stopped working -- the exact lesson the entrance key taught this
-	# file once already.
-	var cells := _segment_cells(id)
-	for cell: Vector2i in cells:
-		if _rock[plane].has(cell):
+	# ASKED WITHOUT THE PLANE, deliberately. `_segment_cells(id, plane)` drops the cells whose
+	# standing room is stone -- which is exactly the set this wants to refuse, so passing the plane
+	# would make the loop find nothing and the rule quietly stop existing.
+	for cell: Vector2i in _segment_cells(id):
+		if _rock[plane].has(cell) and int(_rock_owner[plane].get(cell, -1)) < 0:
 			dig_refused.emit("solid rock -- go round it, or go under it")
 			return false
 
@@ -1804,12 +2389,16 @@ func dig_segment(plane: int, origin: Vector2, angle: int, team: int = -1) -> boo
 	# controller is what keeps `dig`'s old contract -- "false if it was already dug" -- true for
 	# bots and for every audit scenario that builds a network by naming cells twice.
 	#
-	# AFTER THE STONE, AND THAT ORDER IS LOAD-BEARING. `opens_ground` counts rock as nothing to be
-	# gained, quite correctly -- so asked first it swallows a dig aimed squarely at a seam and
-	# returns a silent false, and the player holds the button on rock and is told nothing. Which is
-	# the exact failure the seam's spoken refusal exists to prevent, reintroduced by a reordering.
+	# AND WHEN THE REASON IS STONE, IT SAYS SO. `opens_ground` counts rock as nothing to be gained,
+	# quite correctly, so a stroke aimed squarely at a rock lands here -- and used to return a
+	# silent false, leaving a player holding the button on stone with nothing said. The order is
+	# reversed from the version this replaces (which tested the stone first and then the ground);
+	# it has to be, now that touching rock is legal and only being STOPPED by it is worth a word.
 	if not opens_ground(plane, origin, angle):
+		if _rock_in_the_way(plane, id):
+			dig_refused.emit("solid rock -- go round it, or go under it")
 		return false
+	var cells := _segment_cells(id, plane)
 
 	_segments[plane][id] = true
 	# Whatever was part-cut here is now cut in full, and leaving the carve behind would keep a
@@ -1828,6 +2417,28 @@ func dig_segment(plane: int, origin: Vector2, angle: int, team: int = -1) -> boo
 			cell_opened.emit(plane, cell)
 	segment_opened.emit(plane, id)
 	return true
+
+
+## Is stone the reason this stroke would take nothing out?
+##
+## ASKED ONLY AFTER `opens_ground` HAS SAID NO, and only to choose what to say. There are three ways
+## a stroke can be worth nothing -- it lies inside tunnel that is already open, it lies inside
+## ground somebody else is part-way through cutting, or it is pointed at a rock -- and exactly one
+## of those is the player's fault and needs telling. Getting it wrong in the safe direction (saying
+## nothing when it was rock) leaves the old silent refusal; getting it wrong the other way announces
+## rock at somebody digging down their own corridor, which is worse, so this asks for stone at the
+## same samples `opens_ground` asked for earth.
+func _rock_in_the_way(plane: int, id: int) -> bool:
+	var origin := segment_origin(id)
+	var direction := angle_direction(segment_angle(id))
+	var across := Vector2(-direction.y, direction.x)
+	var steps := maxi(2, ceili(SEG_LENGTH / TunnelContour.TEXEL))
+	for i in range(steps + 1):
+		var spine := origin + direction * (SEG_LENGTH * float(i) / float(steps))
+		for offset: float in [0.0, -0.6, 0.6]:
+			if _is_stone(plane, spine + across * (SEG_HALF_WIDTH * offset)):
+				return true
+	return false
 
 
 ## Cut part of a stroke: the earth comes out as the digger works along it, rather than a metre at a
@@ -1889,7 +2500,7 @@ func carve(plane: int, id: int, along: float, team: int = -1) -> void:
 	# the same picture -- and unlike a commit, this is paid several times a second. The cull's reach
 	# is declined for the same reason (see [method _touch_span]): a scrap a metre away can wait for
 	# the commit, which always reaches out in full.
-	_touch_span(plane, _carve_end(id, before), _carve_end(id, stop), false)
+	_touch_span(plane, _carve_end(id, before), _carve_end(id, stop), false, true)
 	# COLLISION FOLLOWS THE TRENCH NOW, AT A QUARTER OF A METRE. It used to wait for the commit, on
 	# the argument that the only mouse who could walk into a carve was the one standing still cutting
 	# it -- which stopped being true the moment carving became digging rather than a preview of it.
@@ -1933,7 +2544,7 @@ func _drop_carve(plane: int, id: int) -> void:
 func _drop_carves_in(plane: int, cell: Vector2i) -> void:
 	for id: int in _carving[plane].keys():
 		var along := carved_along(plane, id)
-		if _probe_cell(cell, segment_origin(id), _carve_end(id, along))[1] > -STANDING_CLEARANCE:
+		if _probe_cell(plane, cell, segment_origin(id), _carve_end(id, along))[1] > -STANDING_CLEARANCE:
 			continue
 		_carving[plane].erase(id)
 		_touch_span(plane, segment_origin(id), _carve_end(id, along))
@@ -2176,6 +2787,12 @@ func set_puppet(on: bool) -> void:
 	_puppet = on
 
 
+## Is this a network somebody else decides? For the few things that have to ask rather than simply
+## being refused -- see underground_rock.gd, which is a node in a group a client's own swing walks.
+func is_puppet() -> bool:
+	return _puppet
+
+
 ## A stroke that exists somewhere else, with the knowledge bits it was sent with.
 ##
 ## `[REVISED]` A SEGMENT RATHER THAN A CELL, and this is the entry that forced the wire to change
@@ -2228,19 +2845,6 @@ func adopt_shaft(plane: int, cell: Vector2i, bits: int) -> bool:
 		_relight(plane + 1)
 		shaft_opened.emit(plane, cell)
 	return fresh
-
-
-## Which crews have found a seam. The rock ITSELF is not sent and never needs to be: it is laid
-## from `rock_seed` at startup, so both ends generate the identical stone without a byte crossing
-## the wire. Only who has run into it is knowledge, and only knowledge is per-crew.
-func adopt_rock(plane: int, cell: Vector2i, bits: int) -> bool:
-	if plane <= 0 or plane >= PLANE_COUNT or not _rock[plane].has(cell):
-		return false
-	if int(_known[plane].get(cell, 0)) == bits:
-		return false
-	_known[plane][cell] = bits
-	_announce_rock(plane, bits)
-	return true
 
 
 ## Timbers the server says are there. The client end of [method shore].
@@ -2523,7 +3127,9 @@ func set_focus_plane(plane: int) -> void:
 		_marks[index].visible = focused
 		_walls[index].visible = focused
 		_rock_faces[index].visible = focused
-		_rock_caps[index].visible = focused
+		_bedrock_faces[index].visible = focused
+		_rock_lumps[index].visible = focused
+		_bedrock_lumps[index].visible = focused
 		_lamp_roots[index].visible = focused
 		# Only the lid you are looking down through. The others would each hide the one below.
 		if _lids[index] != null:
@@ -2700,8 +3306,12 @@ func _rebuild_mask(plane: int) -> void:
 	if plane < 0 or plane >= _mask_images.size():
 		return
 	_mask_images[plane].fill(Color(0.0, 0.0, 0.0, 1.0))
+	# WHO IS LOOKING, OR WHAT THEY CAN SEE, HAS CHANGED -- which is exactly the thing a cached
+	# composition cannot notice for itself, because no earth moved. See [member _knowledge_age].
+	_knowledge_age[plane] += 1
 	for key: int in _chunk_cache[plane]:
 		_dirty_chunks[plane][key] = true
+		_committed_field[plane].erase(key)
 	_rebuild_walls(plane)
 
 
@@ -2910,35 +3520,15 @@ func _make_material(colour: Color, grain: bool = true) -> StandardMaterial3D:
 ## not going to open") was said in the one channel the lighting had already claimed. A little
 ## emission holds the hue against the lamp, which is also how actual stone reads next to soil: it
 ## doesn't take the colour of the light the way loose earth does.
-func _make_rock_material() -> StandardMaterial3D:
-	var material := _make_material(rock_color)
+## `colour` is the stone's own: pale for the rock a Brute can break, dark for bedrock. The faint
+## emission is what keeps either readable at the bottom of an unlit corridor, where the only light
+## is a lamp several metres back -- without it both grades go to the same near-black and the one
+## decision the colours exist to support cannot be made.
+func _make_rock_material(colour: Color) -> StandardMaterial3D:
+	var material := _make_material(colour)
 	material.emission_enabled = true
-	material.emission = rock_color
+	material.emission = colour
 	material.emission_energy_multiplier = 0.22
-	return material
-
-
-## The top of a seam your crew has found. Unshaded pale stone with this plane's tunnels cut out of
-## it; see rock_cap.gdshader for why each of those three words is doing work.
-##
-## `[REVISED]` A SHADER RATHER THAN A PLAIN MATERIAL, because the sheet is built out of whole cells
-## and the tunnel under it is not built out of anything of the kind. A stroke's rounded end may
-## reach into a rock cell without making any of it walkable -- perfectly legal, and what you do
-## every time you run a corridor alongside a seam -- and the cell's whole square then hangs over
-## open trench. Square overhangs on a smooth curved corridor, which is the sort of thing that reads
-## as the renderer being broken. Discarded against the dug field, the sheet ends where the wall does.
-func _make_rock_top_material(plane: int) -> ShaderMaterial:
-	var material := ShaderMaterial.new()
-	material.shader = load("res://art/shaders/rock_cap.gdshader") as Shader
-	material.set_shader_parameter("dug_here", _mask_textures[plane])
-	material.set_shader_parameter("field_half_metres", float(MASK_HALF_CELLS))
-	material.set_shader_parameter(
-		"field_texels_per_metre", float(TunnelContour.TEXELS_PER_METRE)
-	)
-	material.set_shader_parameter("dug_grow", rim_grow(plane))
-	material.set_shader_parameter("albedo_color", rock_top_color)
-	material.set_shader_parameter("dirt", DirtTexture.shared())
-	material.set_shader_parameter("dirt_tile", DirtTexture.WORLD_TILE)
 	return material
 
 
@@ -2950,8 +3540,8 @@ func _make_rock_top_material(plane: int) -> ShaderMaterial:
 ## one line, and the day this is per-client it is the caller that changes.
 ##
 ## ONE CHANNEL FOR EVERY PER-CREW THING THE WORLD DRAWS, which is why this is no longer called
-## `show_known_rock`. Rock caps came first and got a name that described that week's feature; lamps
-## are the second thing to need the same answer and fog will be the third. A second setter would
+## `show_known_rock`. Rock caps came first and got a name that described that week's feature -- and
+## are gone now, but the lesson outlived them: lamps needed the same answer and fog will be next. A second setter would
 ## have meant two ways to be told who is looking, and the interesting bug -- one of them being told
 ## and the other not -- would show up as the earth knowing something the light did not.
 func show_crew_knowledge(team: int) -> void:
@@ -2959,58 +3549,104 @@ func show_crew_knowledge(team: int) -> void:
 		return
 	_view_team = team
 	for plane in range(PLANE_COUNT):
-		_rebuild_rock_caps(plane)
 		# Everything anyone had been glimpsing belonged to the crew that was looking a moment ago.
 		_glimpsed[plane].clear()
 		_rebuild_mask(plane)
 	_rebuild_lamps(_focus)
-
-
-## One flat sheet per plane, over the cells this crew knows about.
+## The stone standing above a plane's dirt: every rock tall enough to break the ground, drawn as
+## real lumps of the same shape a barricade and a boulder are made of.
 ##
-## Quads rather than a GridMap or one mesh per cell: a vein is a few dozen cells, the sheet is
-## rebuilt a handful of times a match, and a single mesh means the whole thing is one draw call and
-## one material to hide when you leave the plane.
-func _rebuild_rock_caps(plane: int) -> void:
-	if plane < 0 or plane >= _rock_caps.size():
+## `[REVISED]` THIS REPLACES THE CAP SHEET, AND IT IS A CORRECTION RATHER THAN A NEW FEATURE. What
+## used to be here drew a flat plate over the CELLS a crew had learned held rock -- so the one thing
+## a player ever saw of a rock from above was its footprint on the dig grid, quantised to whole
+## metre squares, in a game where nothing else has been on the grid since digging went off it. A
+## lobed three-metre lump came out as fifteen tiles in a staircase. It was also drawn in a colour
+## nothing in the world is, hovering two centimetres over the dirt, which is the look of a debug
+## overlay and not of a place.
+##
+## SO THE ROCK IS AN OBJECT NOW AND VISIBILITY IS PHYSICAL. A layer of earth is [constant SPACING]
+## thick. A rock taller than that pokes out of the top of it and you can see it from across the
+## yard; a rock shorter than that is buried, and the first you know of it is your shovel ringing
+## off it. Nothing is painted on the ground and no crew is told anything -- the stone is either
+## standing in daylight or it is not, and both crews are looking at the same world.
+##
+## ONLY THE PART ABOVE THE DIRT IS DRAWN, which is what makes this cheap and what keeps it honest.
+## Everything below the surface is already drawn: it is the stone face the contour wrapped round the
+## rock the moment somebody dug up to it, cut from the same field, in the same two colours. Modelling
+## the buried half as well would put a second description of the rock in the scene that could
+## disagree with the first -- and it would be invisible under an opaque lid anyway.
+##
+## ONE LOBE, ONE LUMP. The rock's shape is a union of discs, so its silhouette above the ground is a
+## cluster of stones at those same centres and radii -- which is both a faithful reading of the
+## shape and, by luck, exactly what a broken outcrop looks like. A lobe only just reaching the
+## surface shows as a pebble; the core of a big rock shows as a boulder.
+##
+## TWO SURFACES, ONE PER GRADE, so the colour a player reads underground is the colour they read
+## from up here. A dark lump means bedrock and means do not fetch the Brute, and that is worth
+## knowing before you have spent a dig finding out.
+func _rebuild_rock_lumps(plane: int) -> void:
+	if plane <= 0 or plane >= _rock_lumps.size():
 		return
-	var cap := _rock_caps[plane]
-	if _view_team < 0 or plane <= 0:
-		cap.mesh = null
-		return
+	var pale := SurfaceTool.new()
+	var dark := SurfaceTool.new()
+	pale.begin(Mesh.PRIMITIVE_TRIANGLES)
+	dark.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var pale_count := 0
+	var dark_count := 0
 
-	var known := known_rock_cells(plane, _view_team)
-	if known.is_empty():
-		cap.mesh = null
-		return
+	for entry: Variant in _rock_bodies[plane]:
+		var rock := entry as RockBody
+		if rock == null:
+			continue
+		var rise := rock.rise_above(SPACING)
+		if rise <= 0.0:
+			continue
+		var surface := pale if rock.breakable else dark
 
-	# JUST ABOVE THE LID, not just below it, and the first version got this exactly backwards. Under
-	# the lid is where a seam's top surface really is -- and it is invisible there, permanently: the
-	# lid is opaque earth, and the one thing that ever cuts a hole in it is a cell being DUG. A rock
-	# cell is never dug. So the sheet was drawn correctly, hidden under solid ground, on every plane.
-	#
-	# Above it, the sheet is what it always claimed to be in the comments: a piece of knowledge laid
-	# over the world rather than a surface in it. You are looking at the ground your crew has learned
-	# there is rock beneath, which is the only reading of "the top of the seam" a camera up here can
-	# actually deliver.
-	#
-	# Measured off SPACING rather than `wall_height`, because the lid sits one plane spacing above
-	# the floor whatever the walls have been tuned to -- and a sheet that tracked the wall dial would
-	# sink back under the ground the first time somebody shortened it.
-	var top := SPACING + 0.02
-	var half := CELL * 0.5
-	var t := SurfaceTool.new()
-	t.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for cell: Vector2i in known:
-		var centre := Vector3(cell.x * CELL, top, cell.y * CELL)
-		_quad(t,
-			centre + Vector3(-half, 0.0, half), centre + Vector3(half, 0.0, half),
-			centre + Vector3(half, 0.0, -half), centre + Vector3(-half, 0.0, -half))
-	t.generate_normals()
-	var mesh := t.commit()
-	mesh.surface_set_material(0, _make_rock_top_material(plane))
-	cap.mesh = mesh
-	cap.visible = plane == _focus
+		for i in range(rock.lobes.size()):
+			var lobe: Vector3 = rock.lobes[i]
+			# SUNK BY ITS OWN SKIRT so there is no seam where the stone meets the dirt. The lump is
+			# built standing on its base, so dropping the base below the lid buries the join
+			# instead of leaving a ring of daylight under the rock the camera can see through.
+			var base := SPACING - LUMP_SKIRT
+			# Squatter than the lobe is wide, and deliberately: what is above the ground is the CAP
+			# of a stone whose bulk is still in the earth, so a lump as tall as it is broad reads as
+			# a rock sitting ON the dirt -- which is a boulder, and boulders mean something else.
+			var tall := rise + LUMP_SKIRT
+			# SEEDED BY THE LOBE'S PLACE, like every other rock in this game: the same stone always
+			# grows the same shape, two lobes of one rock are visibly different, and a screenshot is
+			# comparable to the last one.
+			var grain := rock_seed + plane * 7919 + rock.index * 131 + i
+			RockShell.append_lump(
+				surface,
+				Vector3(lobe.x, base, lobe.y),
+				lobe.z * LUMP_SPREAD,
+				tall,
+				grain
+			)
+			if rock.breakable:
+				pale_count += 1
+			else:
+				dark_count += 1
+
+	_rock_lumps[plane].mesh = _commit_lumps(pale, pale_count, _rock_materials[plane])
+	_bedrock_lumps[plane].mesh = _commit_lumps(dark, dark_count, _bedrock_materials[plane])
+	_rock_lumps[plane].visible = plane == _focus
+	_bedrock_lumps[plane].visible = plane == _focus
+
+
+## A batched lump surface, or null if nothing went into it.
+##
+## The count is passed rather than asked of the tool, because a SurfaceTool that has had nothing
+## added to it cannot be committed and has no way to say so.
+func _commit_lumps(surface: SurfaceTool, count: int, material: Material) -> ArrayMesh:
+	if count <= 0:
+		return null
+	surface.generate_normals()
+	var mesh := surface.commit()
+	if mesh != null and mesh.get_surface_count() > 0:
+		mesh.surface_set_material(0, material)
+	return mesh
 
 
 ## Rebuild everything derived from a plane's cell set: the wall mesh and the collision trimesh.
@@ -3047,61 +3683,98 @@ func _rebuild_rock_caps(plane: int) -> void:
 ## scene: one mesh instance per plane keeps the focus rules, the per-plane materials, the dimming
 ## and the single collision body exactly as the rest of the file already expects them -- and keeps
 ## a big network three draw calls rather than three hundred.
-## `collide` is whether to hand the result to the physics engine as well as to the renderer. A
-## concave shape has to build its whole tree from scratch every time it is faced -- there is no way
-## to edit one -- so it costs the same whether a metre of corridor arrived or a centimetre did, and
-## it is the second most expensive thing here after re-contouring.
+## `collide` is whether to hand the result to the physics engine as well as to the renderer. See
+## [method _recollide] -- collision is per chunk now, so this no longer costs the whole map.
 ##
-## `[REVISED]` SO A CARVE PAYS IT EVERY QUARTER METRE RATHER THAN NEVER. The old rule was that a
+## `[REVISED]` A CARVE PAYS IT EVERY QUARTER METRE RATHER THAN NEVER. The old rule was that a
 ## growing carve declined collision entirely and the earth you were cutting stayed solid to walk
 ## into until the stroke landed -- justified on the grounds that the only mouse in a position to
 ## walk into it was the one standing still cutting it. That stopped being true when carving became
 ## digging rather than a preview of it: you are meant to press dig and walk forward, and a trench
 ## you can see through and cannot enter is the same complaint as ground that will not open. See
-## [constant CARVE_COLLIDE_STEP]. Every commit still rebuilds in full.
+## [constant CARVE_COLLIDE_STEP].
 func _rebuild_walls(plane: int, collide: bool = true) -> void:
 	for key: int in _dirty_chunks[plane]:
 		_rebuild_chunk(plane, key)
+		# Owed to the physics engine whether or not this call is the one that pays -- see
+		# [member _stale_collision].
+		_stale_collision[plane][key] = true
 	_dirty_chunks[plane].clear()
 
 	var floors := PackedVector3Array()
 	var walls := PackedVector3Array()
 	var stone := PackedVector3Array()
-	var collision := PackedVector3Array()
+	var bedrock := PackedVector3Array()
 	var floor_normals := PackedVector3Array()
 	var wall_normals := PackedVector3Array()
 	var stone_normals := PackedVector3Array()
+	var bedrock_normals := PackedVector3Array()
 	for key: int in _chunk_cache[plane]:
 		var chunk: Dictionary = _chunk_cache[plane][key]
 		floors.append_array(chunk["floors"])
 		walls.append_array(chunk["walls"])
 		stone.append_array(chunk["stone"])
-		collision.append_array(chunk["collision"])
+		bedrock.append_array(chunk["bedrock"])
 		floor_normals.append_array(chunk["floor_normals"])
 		wall_normals.append_array(chunk["wall_normals"])
 		stone_normals.append_array(chunk["stone_normals"])
+		bedrock_normals.append_array(chunk["bedrock_normals"])
 
 	_floors[plane].mesh = _commit(floors, floor_normals, _floor_materials[plane])
 	_walls[plane].mesh = _commit(walls, wall_normals, _wall_materials[plane])
 	_rock_faces[plane].mesh = _commit(stone, stone_normals, _rock_materials[plane])
+	_bedrock_faces[plane].mesh = _commit(bedrock, bedrock_normals, _bedrock_materials[plane])
 
 	if collide:
-		# THE SAME SHAPE RESOURCE, RE-FACED, rather than a fresh one hung on the node. Assigning to
-		# `shape` takes the old shape off the physics body and puts a new one on, and a mouse
-		# standing on the floor during that swap is a mouse standing on nothing for a frame -- which
-		# with no floor below a plane means falling out of the world. Setting the faces on the shape
-		# that is already attached is the same rebuild without the gap.
-		var body_shape := _shapes[plane].shape as ConcavePolygonShape3D
-		if body_shape == null:
-			body_shape = ConcavePolygonShape3D.new()
-			# Double-sided, so a triangle emitted with the wrong winding still collides. Winding
-			# is easy to get backwards and produces a floor you silently fall through, which
-			# is a miserable thing to debug for zero benefit on static level geometry.
-			body_shape.backface_collision = true
-			_shapes[plane].shape = body_shape
-		body_shape.set_faces(collision)
+		_recollide(plane)
 
 	_relight(plane)
+
+
+## Bring the physics engine back in step with the chunks that have moved, and only those.
+##
+## THE WHOLE POINT IS WHAT IS NOT HERE. A `ConcavePolygonShape3D` cannot be edited: facing one
+## throws its tree away and builds another out of every triangle it is handed. Faced per plane, that
+## priced a dig at the size of the MAP rather than at the size of the hole -- fifteen milliseconds a
+## dig by two hundred strokes, sixteen times a second while anybody carves, and worse every minute
+## of the match. Per chunk it is the two to five squares the dig actually moved, and it stays that
+## whatever else has been dug.
+##
+## THE SAME SHAPE RESOURCE, RE-FACED, rather than a fresh one hung on the node -- which is the one
+## rule the plane-wide version had and this must keep. Assigning to `shape` takes the old shape off
+## the body and puts a new one on, and a mouse standing on the floor during that swap is a mouse
+## standing on nothing for a frame, which with no floor below a plane means falling out of the world.
+func _recollide(plane: int) -> void:
+	for key: int in _stale_collision[plane]:
+		var cached: Variant = _chunk_cache[plane].get(key)
+		var faces := PackedVector3Array()
+		if cached != null:
+			faces = (cached as Dictionary)["collision"]
+		var shape: CollisionShape3D = _chunk_shapes[plane].get(key)
+		if shape == null:
+			# A chunk of solid earth has no faces and gets no shape. Most of the map is that, all
+			# match, and a body carrying six hundred empty shapes is six hundred things the
+			# broadphase has to be told to ignore.
+			if faces.is_empty():
+				continue
+			shape = _new_chunk_shape(plane, key)
+		(shape.shape as ConcavePolygonShape3D).set_faces(faces)
+	_stale_collision[plane].clear()
+
+
+## The collider for one chunk, made on the first dig that puts a triangle in it.
+func _new_chunk_shape(plane: int, key: int) -> CollisionShape3D:
+	var body_shape := ConcavePolygonShape3D.new()
+	# Double-sided, so a triangle emitted with the wrong winding still collides. Winding is easy to
+	# get backwards and produces a floor you silently fall through, which is a miserable thing to
+	# debug for zero benefit on static level geometry.
+	body_shape.backface_collision = true
+	var shape := CollisionShape3D.new()
+	shape.name = "Chunk%d" % key
+	shape.shape = body_shape
+	_bodies[plane].add_child(shape)
+	_chunk_shapes[plane][key] = shape
+	return shape
 
 
 ## Triangles and their normals into a mesh with a material, or null if there are none. Null rather
@@ -3194,32 +3867,78 @@ func _rebuild_chunk(plane: int, key: int) -> void:
 	)
 	var extent := float(wide - 1) * TunnelContour.TEXEL
 
+	## Whether any stroke in this window is one the viewing crew must not be shown. Almost always
+	## false -- a client is only ever sent its own tunnels -- and when it is false `seen` comes out
+	## of the composition identical to `shape`, so the cull can be run once and shared.
+	var hidden := false
 	var shape := PackedFloat32Array()
-	shape.resize(wide * wide)
 	var seen := PackedFloat32Array()
-	seen.resize(wide * wide)
 
-	var found := {}
-	# The window's cells plus a ring, because a stroke whose centre is in the next chunk can still
-	# reach across the border. `_segment_cells` is conservative in the same direction, so anything
-	# whose capsule touches this square is registered in one of these cells.
-	var low := Vector2i(floori(origin.x) - 1, floori(origin.y) - 1)
-	var high := Vector2i(ceili(origin.x + extent) + 1, ceili(origin.y + extent) + 1)
-	for y in range(low.y, high.y + 1):
-		for x in range(low.x, high.x + 1):
-			for id: int in segments_in_cell(plane, Vector2i(x, y)):
-				found[id] = true
+	# THE COMMITTED HALF, COMPOSED ONCE AND KEPT. Everything already dug over this window is a
+	# picture that only changes when a stroke does, and re-deriving it is much the most expensive
+	# thing a chunk rebuild does -- thirty-odd strokes by a metre of graded distance each, at the
+	# density a mid-match corridor network reaches. A carve re-contours its chunks sixteen times a
+	# second and moves none of those strokes, so it copies the composition and unions its own
+	# growing tip on top. See [member _committed_field] for what drops the entry again.
+	var kept: Variant = _committed_field[plane].get(key)
+	var book: Dictionary = {} if kept == null else kept as Dictionary
+	if (
+		kept != null
+		and int(book["wide"]) == wide
+		and int(book["knowledge"]) == _knowledge_age[plane]
+	):
+		shape = (book["shape"] as PackedFloat32Array).duplicate()
+		seen = (book["seen"] as PackedFloat32Array).duplicate()
+		hidden = bool(book["hidden"])
+	else:
+		shape.resize(wide * wide)
+		seen.resize(wide * wide)
+
+		var found := {}
+		# The window's cells plus a ring, because a stroke whose centre is in the next chunk can
+		# still reach across the border. `_segment_cells` is conservative in the same direction, so
+		# anything whose capsule touches this square is registered in one of these cells.
+		var low := Vector2i(floori(origin.x) - 1, floori(origin.y) - 1)
+		var high := Vector2i(ceili(origin.x + extent) + 1, ceili(origin.y + extent) + 1)
+		for y in range(low.y, high.y + 1):
+			for x in range(low.x, high.x + 1):
+				for id: int in segments_in_cell(plane, Vector2i(x, y)):
+					found[id] = true
+
+		var done: Array[Vector2] = []
+		var done_to: Array[Vector2] = []
+		var done_shown := PackedByteArray()
+		for id: int in found:
+			done.append(segment_origin(id))
+			done_to.append(segment_end(id))
+			var wanted := _segment_wants(plane, id)
+			done_shown.append(1 if wanted else 0)
+			if not wanted:
+				hidden = true
+		var painted := _paint_strokes(
+			shape, seen, done, done_to, done_shown, wide, wide_x, wide_y, origin, pad
+		)
+		shape = painted[0]
+		seen = painted[1]
+		# STORED AS COPIES, so the carve pass below cannot write through into what was kept. Packed
+		# arrays are copy-on-write and would in fact fork on the first assignment, but a cache whose
+		# safety rests on that is a cache that breaks the day somebody reads it differently.
+		_committed_field[plane][key] = {
+			"shape": shape.duplicate(),
+			"seen": seen.duplicate() if hidden else shape.duplicate(),
+			"hidden": hidden,
+			# The window size, because `_cull_pad` is derived from exported dials that can move in
+			# the inspector between one rebuild and the next -- and a field of the wrong width read
+			# back as if it were the right one is garbage, silently, everywhere.
+			"wide": wide,
+			"knowledge": _knowledge_age[plane],
+		}
 
 	# Ends the strokes have been cut to, so a carve unions in exactly like a finished stroke and the
-	# corridor has no idea which of the two it grew from. Full length unless somebody is part-way
-	# through cutting it (see [method carve]).
+	# corridor has no idea which of the two it grew from.
 	var strokes: Array[Vector2] = []
 	var reaches: Array[Vector2] = []
 	var shown := PackedByteArray()
-	for id: int in found:
-		strokes.append(segment_origin(id))
-		reaches.append(segment_end(id))
-		shown.append(1 if _segment_wants(plane, id) else 0)
 	# CARVES ARE NOT IN THE CELL INDEX and are walked whole instead, rejected on their bounding box
 	# rather than gathered by square. Registering them would mean maintaining an index entry for a
 	# thing that grows every twelfth of a second, and un-registering it on the commit that turns it
@@ -3230,29 +3949,158 @@ func _rebuild_chunk(plane: int, key: int) -> void:
 	# short stroke. See [method carve].
 	# Grown by the furthest either sampling pass below reaches from a stroke's spine, so a carve
 	# rejected here could not have written a texel of this window even at the widest of them.
-	var window := Rect2(origin, Vector2(extent, extent))
+	var box := Rect2(origin, Vector2(extent, extent))
 	var carve_reach := SEG_HALF_WIDTH + maxf(TunnelContour.SDF_RANGE, _thin_reach())
 	for id: int in _carving[plane]:
 		var carve: Dictionary = _carving[plane][id]
 		var from := segment_origin(id)
 		var to := _carve_end(id, carve["along"] as float)
-		if not window.intersects(Rect2(from, Vector2.ZERO).expand(to).grow(carve_reach)):
+		if not box.intersects(Rect2(from, Vector2.ZERO).expand(to).grow(carve_reach)):
 			continue
 		strokes.append(from)
 		reaches.append(to)
-		shown.append(1 if _view_team < 0 or (carve["team"] as int) == _view_team else 0)
+		var wanted := _view_team < 0 or (carve["team"] as int) == _view_team
+		shown.append(1 if wanted else 0)
+		if not wanted:
+			hidden = true
 
-	## Whether any stroke in this window is one the viewing crew must not be shown. Almost always
-	## false -- a client is only ever sent its own tunnels -- and when it is false `seen` came out
-	## of the loop below identical to `shape`, so the cull can be run once and shared.
-	var hidden := false
+	if not strokes.is_empty():
+		var cut := _paint_strokes(
+			shape, seen, strokes, reaches, shown, wide, wide_x, wide_y, origin, pad
+		)
+		shape = cut[0]
+		seen = cut[1]
+	# THE STONE IS TAKEN OUT OF THE FIELD LAST, AFTER EVERY STROKE AND BEFORE EVERY RULE, and both
+	# halves of that placement are load-bearing.
+	#
+	# AFTER THE STROKES, because what the world is is "everywhere somebody dug, MINUS the rock". A
+	# distance field intersects by `max` of the two signed distances -- the tunnel's, and the
+	# complement of the stone's -- which encoded is a `min`, one per sample. That is the whole
+	# mechanism, and it is why nothing downstream has to be taught that rock exists: the contour
+	# wraps it because the field says the earth comes back there, the collision trimesh is those
+	# same triangles, the cutaway discards against the same numbers, and `walkable_between` refuses
+	# to route through it because it asks the field how much room there is.
+	#
+	# BEFORE THE RULES, because the thinning and the island cull are about what the earth looks like
+	# and both would happily shave a spur off a rock or swallow a small one whole. They are told to
+	# leave stone alone (see [method _thin_earth] and [method _cull_islands]), and they can only be
+	# told that if the stone is already in the field when they run.
+	#
+	# ON BOTH FIELDS, and forgetting the crew's one would be a quiet, nasty bug: the lid discards
+	# against `seen`, so rock missing from it is a hole cut in the ground above solid stone -- a
+	# window into a rock, on the host only, for one crew.
+	# ONE MASK, BUILT ONCE, SHARED BY BOTH FIELDS AND BOTH RULES. Where the stone is does not depend
+	# on which crew is being drawn for -- a rock is in the same place in everybody's earth -- so the
+	# crew's field re-subtracts the same shapes and re-uses the mask the world's pass filled in.
+	# KEPT AND CLEARED RATHER THAN ALLOCATED, like `_thin_offsets` a few functions down and for the
+	# same reason: every chunk of every carve step wants one of exactly the same size, and a fresh
+	# PackedByteArray each time is an allocation per chunk for a buffer nothing outlives.
+	var stone_mask := _stone_scratch(wide)
+	_subtract_rock(plane, shape, wide, origin, stone_mask)
+	if hidden:
+		# THE SAME MASK, WRITTEN TWICE AND IDENTICALLY. Where the stone is does not depend on which
+		# crew is looking, so the second pass re-marks exactly what the first did -- which is
+		# cheaper than carrying a flag to suppress it and impossible to get out of step.
+		_subtract_rock(plane, seen, wide, origin, stone_mask)
 
+	# THINNED BEFORE THE ISLANDS ARE WALKED, and the order is not arbitrary. Shaving the teeth off a
+	# lump changes how big it measures, and shaving a neck through can part one lump into two -- so
+	# the island rule has to be looking at the earth that will actually be drawn, not at the earth
+	# before this ran.
+	_thin_earth(shape, stone_mask, wide)
+	var islands := _cull_islands(plane, shape, stone_mask, wide, origin, pad, n)
+	# The cutaway gets its own pass rather than the shape's answer: the crew's field is built out of
+	# fewer strokes, so its earth is a different shape, thin in different places and pinched off in
+	# different places. Sharing the verdict would cut a hole in the lid over ground that, as far as
+	# this crew has been told, nobody has dug.
+	if hidden:
+		_thin_earth(seen, stone_mask, wide)
+		_cull_islands(plane, seen, stone_mask, wide, origin, pad, n)
+	else:
+		seen = shape
+
+	var contour := TunnelContour.new()
+	var chunk_origin := Vector2(
+		float(base_x) / float(TunnelContour.TEXELS_PER_METRE),
+		float(base_y) / float(TunnelContour.TEXELS_PER_METRE)
+	)
+	var inner := _inner(shape, wide, pad, span)
+	# ONE RING WIDER FOR THE WALL'S SAKE. The bevel and the gouging both move a vertex along "away
+	# from the tunnel", which is a central difference of the field -- and at the outermost samples
+	# of a chunk that difference has to be taken across the border, or the two chunks sharing that
+	# seam lean their walls back in slightly different directions and the seam opens. See
+	# [method TunnelContour.build]. Free: these samples are already in `shape`.
+	contour.build(
+		inner,
+		n,
+		chunk_origin,
+		_wall_top(plane),
+		_barrier_top(plane),
+		_inner(shape, wide, pad - 1, span + 2) if pad >= 1 else PackedFloat32Array()
+	)
+
+	var walls := PackedVector3Array()
+	var stone := PackedVector3Array()
+	var bedrock := PackedVector3Array()
+	_split_stone(plane, contour.walls, walls, stone, bedrock)
+
+	_chunk_cache[plane][key] = {
+		"floors": contour.floors,
+		"walls": walls,
+		"stone": stone,
+		"bedrock": bedrock,
+		"collision": contour.collision,
+		"islands": islands,
+		# THE NUMBERS THE TRIANGLES ABOVE CAME OUT OF, kept rather than thrown away, so that
+		# anything asking "is there room for a mouse here" can ask the same thing the wall was
+		# built from instead of a second model of it. See [method walkable_between], which is the
+		# whole reason this is here -- routing used to re-derive the shape of the earth from the
+		# strokes, which is the field before two of its rules have run, and got a different answer
+		# from the collision mesh in exactly the places those rules bite.
+		#
+		# A CHUNK'S WORTH IS 33x33 FLOATS -- 4.4KB, against the tens of KB of triangles it sits
+		# beside, and only for chunks somebody has dug in.
+		"field": inner,
+		# WORKED OUT HERE, WHERE THERE ARE A FEW HUNDRED TRIANGLES, rather than out in the plane
+		# assembly where there are tens of thousands and none of them have moved.
+		#
+		# A floor triangle is horizontal and wound to face up by construction (see
+		# TunnelContour._add_floor_triangle), so its normal is not worth a cross product -- and the
+		# floor is much the bigger half of a dug chunk.
+		"floor_normals": _flat_up(contour.floors.size()),
+		"wall_normals": _face_normals(walls),
+		"stone_normals": _face_normals(stone),
+		"bedrock_normals": _face_normals(bedrock),
+	}
+	_blit(plane, _inner(seen, wide, pad, span), span, base_x, base_y, n)
+
+
+## Union a set of strokes into the two fields, and hand them back.
+##
+## HANDED BACK RATHER THAN WRITTEN THROUGH, and that is a fact about the language rather than a
+## style choice: a `PackedFloat32Array` parameter is copy-on-write, so the moment this assigns to
+## one it is writing to a copy of its own and the caller's array is untouched. Returning them is the
+## only way the composition can be split into more than one call at all -- and splitting it is the
+## whole point, because the committed strokes are painted once and kept while the carve on top is
+## repainted sixteen times a second. See [member _committed_field].
+##
+## `[EXTRACTED, NOT REWRITTEN]` The loop below is exactly what `_rebuild_chunk` used to run inline.
+func _paint_strokes(
+	shape: PackedFloat32Array,
+	seen: PackedFloat32Array,
+	strokes: Array[Vector2],
+	reaches: Array[Vector2],
+	shown: PackedByteArray,
+	wide: int,
+	wide_x: int,
+	wide_y: int,
+	origin: Vector2,
+	pad: int
+) -> Array:
 	for index in range(strokes.size()):
 		var a := strokes[index]
 		var b := reaches[index]
 		var visible := shown[index] != 0
-		if not visible:
-			hidden = true
 		# TWICE, OVER TWO DIFFERENT SQUARES, and the difference is what the values are FOR.
 		#
 		# Pass 0 is the field proper: the full metre of graded distance the contour interpolates its
@@ -3295,75 +4143,7 @@ func _rebuild_chunk(plane: int, key: int) -> void:
 						shape[row + i] = value
 					if visible and value > seen[row + i]:
 						seen[row + i] = value
-
-	# THINNED BEFORE THE ISLANDS ARE WALKED, and the order is not arbitrary. Shaving the teeth off a
-	# lump changes how big it measures, and shaving a neck through can part one lump into two -- so
-	# the island rule has to be looking at the earth that will actually be drawn, not at the earth
-	# before this ran.
-	_thin_earth(plane, shape, wide, origin)
-	var islands := _cull_islands(plane, shape, wide, origin, pad, n)
-	# The cutaway gets its own pass rather than the shape's answer: the crew's field is built out of
-	# fewer strokes, so its earth is a different shape, thin in different places and pinched off in
-	# different places. Sharing the verdict would cut a hole in the lid over ground that, as far as
-	# this crew has been told, nobody has dug.
-	if hidden:
-		_thin_earth(plane, seen, wide, origin)
-		_cull_islands(plane, seen, wide, origin, pad, n)
-	else:
-		seen = shape
-
-	var contour := TunnelContour.new()
-	var chunk_origin := Vector2(
-		float(base_x) / float(TunnelContour.TEXELS_PER_METRE),
-		float(base_y) / float(TunnelContour.TEXELS_PER_METRE)
-	)
-	var inner := _inner(shape, wide, pad, span)
-	# ONE RING WIDER FOR THE WALL'S SAKE. The bevel and the gouging both move a vertex along "away
-	# from the tunnel", which is a central difference of the field -- and at the outermost samples
-	# of a chunk that difference has to be taken across the border, or the two chunks sharing that
-	# seam lean their walls back in slightly different directions and the seam opens. See
-	# [method TunnelContour.build]. Free: these samples are already in `shape`.
-	contour.build(
-		inner,
-		n,
-		chunk_origin,
-		_wall_top(plane),
-		_barrier_top(plane),
-		_inner(shape, wide, pad - 1, span + 2) if pad >= 1 else PackedFloat32Array()
-	)
-
-	var walls := PackedVector3Array()
-	var stone := PackedVector3Array()
-	_split_stone(plane, contour.walls, walls, stone)
-
-	_chunk_cache[plane][key] = {
-		"floors": contour.floors,
-		"walls": walls,
-		"stone": stone,
-		"collision": contour.collision,
-		"islands": islands,
-		# THE NUMBERS THE TRIANGLES ABOVE CAME OUT OF, kept rather than thrown away, so that
-		# anything asking "is there room for a mouse here" can ask the same thing the wall was
-		# built from instead of a second model of it. See [method walkable_between], which is the
-		# whole reason this is here -- routing used to re-derive the shape of the earth from the
-		# strokes, which is the field before two of its rules have run, and got a different answer
-		# from the collision mesh in exactly the places those rules bite.
-		#
-		# A CHUNK'S WORTH IS 33x33 FLOATS -- 4.4KB, against the tens of KB of triangles it sits
-		# beside, and only for chunks somebody has dug in.
-		"field": inner,
-		# WORKED OUT HERE, WHERE THERE ARE A FEW HUNDRED TRIANGLES, rather than out in the plane
-		# assembly where there are tens of thousands and none of them have moved.
-		#
-		# A floor triangle is horizontal and wound to face up by construction (see
-		# TunnelContour._add_floor_triangle), so its normal is not worth a cross product -- and the
-		# floor is much the bigger half of a dug chunk.
-		"floor_normals": _flat_up(contour.floors.size()),
-		"wall_normals": _face_normals(walls),
-		"stone_normals": _face_normals(stone),
-	}
-	_blit(plane, _inner(seen, wide, pad, span), span, base_x, base_y, n)
-
+	return [shape, seen]
 
 ## How far past its own square a chunk has to sample, in texels, for the two field rules to reach
 ## the same verdicts from either side of a border.
@@ -3438,6 +4218,189 @@ func _inner(values: PackedFloat32Array, wide: int, pad: int, span: int) -> Packe
 	return out
 
 
+## Mark the squares a boulder has shut into a window's stone mask.
+##
+## CELLS, BECAUSE A BOULDER IS CELLS. Everything else about the earth stopped being square when
+## digging went off the grid, but a boulder is a lump lying on the lawn that shuts the ground
+## directly under it -- the footprint is its own, authored in cells, and there is no shape in the
+## field to sample. Whole squares is what it means.
+func _mark_boulder_cells(
+	plane: int, stone: PackedByteArray, wide: int, origin: Vector2
+) -> void:
+	if plane <= 0 or plane >= PLANE_COUNT or _rock[plane].is_empty():
+		return
+	var extent := float(wide - 1) * TunnelContour.TEXEL
+	var low := world_to_cell(Vector3(origin.x, 0.0, origin.y))
+	var high := world_to_cell(Vector3(origin.x + extent, 0.0, origin.y + extent))
+	var half := CELL * 0.5
+	for y in range(low.y, high.y + 1):
+		for x in range(low.x, high.x + 1):
+			var cell := Vector2i(x, y)
+			# A rock body's derived cells are skipped: those are marked by the field pass at their
+			# real outline, and painting their whole square here would put stone in the open earth
+			# of every cell a rock merely clips.
+			if not _rock[plane].has(cell) or int(_rock_owner[plane].get(cell, -1)) >= 0:
+				continue
+			var i0 := maxi(0, ceili(
+				(float(x) * CELL - half - origin.x) * TunnelContour.TEXELS_PER_METRE
+			))
+			var i1 := mini(wide - 1, floori(
+				(float(x) * CELL + half - origin.x) * TunnelContour.TEXELS_PER_METRE
+			))
+			var j0 := maxi(0, ceili(
+				(float(y) * CELL - half - origin.y) * TunnelContour.TEXELS_PER_METRE
+			))
+			var j1 := mini(wide - 1, floori(
+				(float(y) * CELL + half - origin.y) * TunnelContour.TEXELS_PER_METRE
+			))
+			for j in range(j0, j1 + 1):
+				var row := j * wide
+				for i in range(i0, i1 + 1):
+					stone[row + i] = 1
+
+
+## Which rocks could possibly reach into this box, as indices into the plane's array.
+##
+## THROUGH THE PROXIMITY BUCKETS RATHER THAN OVER EVERY ROCK, and that stopped being an optimisation
+## and became a requirement when the rocks shrank. Coverage is aimed at an AREA, so a plane holds
+## the same fraction of stone however big the pieces are -- and cutting the radius by two thirds
+## multiplied the count by nearly ten. Five hundred `Rect2.intersects` calls per chunk, several
+## chunks per carve step, sixteen carve steps a second, is most of a frame spent asking rocks on the
+## far side of the map whether they are here.
+##
+## A chunk's window is a few dozen cells and each bucket holds a handful of indices, so this is
+## thirty dictionary lookups against five hundred box tests. The caller still tests the box: a rock
+## registered in a cell the window clips has not necessarily reached the window.
+func _rocks_near_box(plane: int, box: Rect2) -> PackedInt32Array:
+	var found := PackedInt32Array()
+	if plane <= 0 or plane >= PLANE_COUNT or _rock_near[plane].is_empty():
+		return found
+	var seen := {}
+	var low := world_to_cell(Vector3(box.position.x, 0.0, box.position.y))
+	var high := world_to_cell(Vector3(box.end.x, 0.0, box.end.y))
+	for y in range(low.y, high.y + 1):
+		for x in range(low.x, high.x + 1):
+			var near: Variant = _rock_near[plane].get(Vector2i(x, y))
+			if near == null:
+				continue
+			for i: int in (near as Array):
+				if seen.has(i):
+					continue
+				seen[i] = true
+				found.append(i)
+	return found
+
+
+## Put the stone back into a window of the field, wherever a rock stands in it.
+##
+## `value = min(value, encode(depth))` AND THAT IS THE WHOLE OPERATION. The field stores the signed
+## distance to the tunnel surface, negative inside; encoding negates and shifts it, so a `min` of
+## encoded values is a `max` of distances, which is the intersection of two regions. The two here
+## are "the tunnel" and "not this rock", so what comes out is the tunnel with the rock taken back
+## out of it. Exact on both sides: a sample deep in a corridor a handspan from a rock reads its
+## distance to the ROCK, because that is genuinely the nearest surface, which is what makes the
+## wall lean and bevel correctly where it wraps stone.
+##
+## WRITTEN PER LOBE OVER THE LOBE'S OWN SQUARE, exactly as a stroke is written over its own. Beyond
+## a metre from the surface the encoded depth saturates and the `min` cannot change anything, so
+## there is no point sampling further -- and a plane with two dozen rocks on it would otherwise pay
+## for all of them in every chunk.
+func _subtract_rock(
+	plane: int,
+	values: PackedFloat32Array,
+	wide: int,
+	origin: Vector2,
+	stone: PackedByteArray
+) -> void:
+	if plane <= 0 or plane >= PLANE_COUNT:
+		return
+	# BOULDER CELLS FIRST, and only into the mask. A boulder shuts whole squares of plane 1 without
+	# being a shape in the field at all -- it is a thing standing on the lawn, not a lump in the
+	# earth -- so it never had a distance to subtract. It still has to be stone to the rules that
+	# read the mask, and marking it here is what stops [method _thin_earth] shaving the ground out
+	# from under one.
+	_mark_boulder_cells(plane, stone, wide, origin)
+	if _rock_bodies[plane].is_empty():
+		return
+	var extent := float(wide - 1) * TunnelContour.TEXEL
+	var window := Rect2(origin, Vector2(extent, extent))
+	for index: int in _rocks_near_box(plane, window.grow(TunnelContour.SDF_RANGE)):
+		var rock := _rock_bodies[plane][index] as RockBody
+		if rock == null or not window.intersects(rock.bounds().grow(TunnelContour.SDF_RANGE)):
+			continue
+		for lobe: Vector3 in rock.lobes:
+			var box := RockBody.lobe_bounds(lobe, TunnelContour.SDF_RANGE)
+			if not window.intersects(box):
+				continue
+			var j0 := maxi(0, floori((box.position.y - origin.y) * TunnelContour.TEXELS_PER_METRE))
+			var j1 := mini(
+				wide - 1, ceili((box.end.y - origin.y) * TunnelContour.TEXELS_PER_METRE)
+			)
+			# THE DISC, NOT ITS BOX, AND WITHOUT A FUNCTION CALL PER TEXEL. Both are about the same
+			# thing: this is the innermost loop in the whole rebuild, and the rocks getting small
+			# put ten times as many lobes through it.
+			#
+			# `encode` clamps, so past `reach` from a lobe's centre the answer saturates and the
+			# `min` provably cannot change a texel -- which makes the square box a fifth of a job
+			# that is never worth doing. Solving each row's span against the circle instead skips it
+			# outright, rather than sampling it and discarding the answer.
+			#
+			# And `encode` is inlined here, alone in this file. It is three arithmetic operations
+			# behind a call, and at a few hundred thousand texels a second the call is most of the
+			# cost -- so the formula is written out with the one comment that matters: it must stay
+			# in step with [method TunnelContour.encode], which is the definition.
+			var reach: float = lobe.z + TunnelContour.SDF_RANGE
+			var reach_sq := reach * reach
+			for j in range(j0, j1 + 1):
+				var dy := origin.y + float(j) * TunnelContour.TEXEL - lobe.y
+				var across_sq := reach_sq - dy * dy
+				if across_sq <= 0.0:
+					continue
+				var across := sqrt(across_sq)
+				var i0 := maxi(
+					0,
+					ceili((lobe.x - across - origin.x) * TunnelContour.TEXELS_PER_METRE)
+				)
+				var i1 := mini(
+					wide - 1,
+					floori((lobe.x + across - origin.x) * TunnelContour.TEXELS_PER_METRE)
+				)
+				var row := j * wide
+				var dy_sq := dy * dy
+				var radius_sq := lobe.z * lobe.z
+				for i in range(i0, i1 + 1):
+					var at := row + i
+					var dx := origin.x + float(i) * TunnelContour.TEXEL - lobe.x
+					var gap_sq := dx * dx + dy_sq
+					if gap_sq <= radius_sq:
+						stone[at] = 1
+					# THE HALO IS SKIPPED WHERE IT PROVABLY CANNOT BITE, and that is most of it. A
+					# lobe writes over its own radius PLUS the field's full metre of grading, so a
+					# rock 30cm across paints a disc 2.3m wide -- thirty times its own area, nearly
+					# all of it in earth nobody has touched. `encode` floors at zero, the array
+					# starts at zero, and no stroke ever lowers a sample: a texel still reading zero
+					# cannot be lowered by a `min` with anything. One comparison replaces a square
+					# root and a clamp, on the innermost loop of the whole rebuild.
+					#
+					# EXACT, NOT AN APPROXIMATION. This is not a tolerance or a distance cutoff --
+					# it is the identity `min(0, x) = 0` for a quantity that cannot go below zero.
+					if values[at] <= 0.0:
+						continue
+					var depth := lobe.z - sqrt(gap_sq)
+					# TunnelContour.encode, written out.
+					var value := clampf(
+						TunnelContour.SURFACE - depth / (TunnelContour.SDF_RANGE * 2.0), 0.0, 1.0
+					)
+					if value < values[at]:
+						values[at] = value
+					# THE SAME SAMPLE ANSWERS BOTH QUESTIONS, which is the whole point of writing
+					# the mask here rather than asking again later. `_thin_earth` and the island
+					# cull both have to know whether a texel is stone, and both used to find out by
+					# calling back through the cell buckets and the lobe list -- per rim texel, per
+					# island, on every carve step. The distance is already in hand; its sign is the
+					# answer; and a byte array read costs nothing next to a dictionary walk.
+
+
 ## Open out every piece of earth in the window too thin to be left standing, wherever it is and
 ## whatever it is attached to.
 ##
@@ -3477,9 +4440,19 @@ func _inner(values: PackedFloat32Array, wide: int, pad: int, span: int) -> Packe
 ## in any other.
 ##
 ## ROCK IS NEVER THINNED, for the same reason it is never swallowed: to these samples the last
-## wafer of a seam is indistinguishable from a wafer of earth, and one of the two is meant to be
+## wafer of a rock is indistinguishable from a wafer of earth, and one of the two is meant to be
 ## permanent.
-func _thin_earth(plane: int, values: PackedFloat32Array, wide: int, origin: Vector2) -> void:
+##
+## `[REVISED]` ASKED OF THE POINT RATHER THAN OF ITS CELL, now that a rock is a shape. The cell test
+## was both too generous and too mean at once: it protected the earth in the open part of a cell a
+## rock merely clips -- which is ordinary earth and ought to be thinned -- and it protected nothing
+## at all in the part of a rock hanging over the line into the next square.
+##
+## `[REVISED AGAIN]` AND READ OFF A MASK RATHER THAN RE-ASKED. The point test was right and cost too
+## much: a dictionary lookup and a walk over a rock's lobes, per rim texel, on every carve step.
+## [method _subtract_rock] has the distance in hand when it writes the field and now writes the sign
+## of it alongside, so the question is a byte array read and the two can no longer disagree.
+func _thin_earth(values: PackedFloat32Array, stone: PackedByteArray, wide: int) -> void:
 	var search := _thin_search()
 	if search <= 0:
 		return
@@ -3501,8 +4474,7 @@ func _thin_earth(plane: int, values: PackedFloat32Array, wide: int, origin: Vect
 			var value := values[at]
 			if value > TunnelContour.SURFACE or value <= solid:
 				continue
-			var world := origin + Vector2(float(i), float(j)) * TunnelContour.TEXEL
-			if _rock[plane].has(world_to_cell(Vector3(world.x, 0.0, world.y))):
+			if stone[at] != 0:
 				continue
 
 			var depth := TunnelContour.decode(value)
@@ -3523,6 +4495,19 @@ func _thin_earth(plane: int, values: PackedFloat32Array, wide: int, origin: Vect
 				)
 				break
 			values[at] = TunnelContour.encode(radius - away)
+
+
+## The scratch stone mask for a window this wide, cleared and ready.
+##
+## One buffer, reused. The window is the same size every time for a given setting, so this resizes
+## once in a match and clears thereafter -- and a clear of a few thousand bytes is a memset, which
+## is the one thing this language is reliably fast at.
+func _stone_scratch(wide: int) -> PackedByteArray:
+	var want := wide * wide
+	if _stone_mask.size() != want:
+		_stone_mask.resize(want)
+	_stone_mask.fill(0)
+	return _stone_mask
 
 
 ## Offsets into a window of the given width covering a disc of `reach` texels, nearest first and
@@ -3581,7 +4566,13 @@ func _thin_disc(wide: int, reach: int) -> PackedInt32Array:
 ## cell is the last of a seam and is meant to be permanent, so any island whose box touches one is
 ## left exactly where it is.
 func _cull_islands(
-	plane: int, values: PackedFloat32Array, wide: int, origin: Vector2, pad: int, n: int
+	plane: int,
+	values: PackedFloat32Array,
+	stone: PackedByteArray,
+	wide: int,
+	origin: Vector2,
+	pad: int,
+	n: int
 ) -> PackedFloat32Array:
 	var culled := PackedFloat32Array()
 	if island_max_span <= 0.0:
@@ -3711,7 +4702,17 @@ func _cull_islands(
 			Vector2(float(max_x - min_x), float(max_y - min_y)) * TunnelContour.TEXEL
 				+ Vector2(half, half) * 2.0
 		)
-		if _box_hits_rock(plane, box):
+		# `[REVISED]` ASKED OF THE LUMP, NOT OF ITS BOX. The old test walked the cells a bounding box
+		# covered, and for each one every nearby rock's every lobe, per island, per carve step --
+		# and it was conservative in the wrong direction as well as slow: a box is bigger than the
+		# scrap inside it, so an island NEXT to a rock was spared along with the ones made of it.
+		# The mask answers exactly, for exactly the texels the island is made of.
+		var stony := false
+		for at: int in body:
+			if stone[at] != 0:
+				stony = true
+				break
+		if stony:
 			continue
 
 		for at: int in body:
@@ -3736,14 +4737,37 @@ func _cull_islands(
 	return culled
 
 
-## Does any cell this box touches hold rock?
+## Is there any stone in this box?
+##
+## TWO ANSWERS FROM TWO SOURCES, because there are two kinds of permanent earth and they are not
+## stored the same way. A boulder on the lawn shuts whole CELLS of plane 1, and any box overlapping
+## one of those squares is over stone; a rock body is a shape, and the honest test is whether the
+## box actually reaches it.
+##
+## Conservative in both directions on purpose. This decides whether the island cull may swallow a
+## lump of earth, and swallowing a scrap of ROCK would quietly delete part of an obstruction the
+## whole map is routed around -- so anything in doubt is left standing.
 func _box_hits_rock(plane: int, box: Rect2) -> bool:
 	var low := world_to_cell(Vector3(box.position.x, 0.0, box.position.y))
 	var high := world_to_cell(Vector3(box.end.x, 0.0, box.end.y))
 	for y in range(low.y, high.y + 1):
 		for x in range(low.x, high.x + 1):
-			if _rock[plane].has(Vector2i(x, y)):
+			var cell := Vector2i(x, y)
+			if _rock[plane].has(cell) and int(_rock_owner[plane].get(cell, -1)) < 0:
 				return true
+			# Through the proximity buckets rather than over every rock on the plane. An island is
+			# never bigger than `island_max_span`, so this is two or three squares' worth of
+			# lookups against a walk over a couple of dozen lumps.
+			var near: Variant = _rock_near[plane].get(cell)
+			if near == null:
+				continue
+			for i: int in (near as Array):
+				var rock := _rock_bodies[plane][i] as RockBody
+				if rock == null:
+					continue
+				for lobe: Vector3 in rock.lobes:
+					if box.intersects(RockBody.lobe_bounds(lobe, 0.0)):
+						return true
 	return false
 
 
@@ -3767,13 +4791,28 @@ func _in_culled_island(plane: int, point: Vector2) -> bool:
 	return false
 
 
-## Sort wall triangles into earth and stone by what is standing behind them.
+## Sort wall triangles into earth, breakable stone and bedrock by what is standing behind them.
 ##
-## THE ENTIRE USER INTERFACE FOR ROCK: you dig into a seam, the corridor ends in grey, and nothing
-## has to explain itself. Same geometry, same collision, split only so the two can carry different
+## THE ENTIRE USER INTERFACE FOR ROCK: you dig up to a rock, the corridor ends in grey, and nothing
+## has to explain itself. Same geometry, same collision, split only so the three can carry different
 ## materials -- exactly as the cell version did, asked per wall face instead of per cell side.
+##
+## THREE WAYS NOW, BECAUSE THERE ARE TWO KINDS OF STONE. Pale is a rock a Brute can break; dark is
+## bedrock, which nothing shifts. That distinction has to be readable from across a corridor with
+## no legend, because the whole decision it exists to create -- fetch a Brute, or spend the time
+## going round -- is made by looking at the wall you have just run into.
+##
+## THE STEP BEHIND THE FACE IS SHORT, AND IT IS SHORT BECAUSE THE ROCK IS REAL NOW. The cell version
+## stepped 0.6m outward to be sure of landing in the NEXT SQUARE, because the question was about
+## squares. The wall now stands on the rock's own outline -- the field put it there -- so a couple
+## of texels past it is inside the stone, and a long step would sail out the far side of a small
+## lobe and report earth.
 func _split_stone(
-	plane: int, source: PackedVector3Array, earth: PackedVector3Array, stone: PackedVector3Array
+	plane: int,
+	source: PackedVector3Array,
+	earth: PackedVector3Array,
+	stone: PackedVector3Array,
+	bedrock: PackedVector3Array
 ) -> void:
 	# A WHOLE FACE AT A TIME, ASKED AT ITS FOOT. A face is a strip of rows now rather than one quad
 	# (see TunnelContour._add_wall), and the rows above the first stand back from the outline by
@@ -3787,8 +4826,20 @@ func _split_stone(
 		# A step from the middle of the face AWAY from the corridor, far enough to land in the
 		# neighbouring cell rather than back in this one.
 		var outward := -(b - a).cross(Vector3.UP).normalized()
-		var behind := (a + b) * 0.5 + outward * (CELL * 0.6)
-		var into := stone if _rock[plane].has(world_to_cell(behind)) else earth
+		var flat := (a + b) * 0.5
+		var into := earth
+		# The boulder case first, and asked at the old distance: a boulder really does shut the
+		# whole of the next square, and the face standing against one is on the cell boundary
+		# rather than on any shape.
+		var far := flat + outward * (CELL * 0.6)
+		var far_cell := world_to_cell(far)
+		if _rock[plane].has(far_cell) and int(_rock_owner[plane].get(far_cell, -1)) < 0:
+			into = stone
+		else:
+			var near := flat + outward * (TunnelContour.TEXEL * 2.0)
+			var rock := rock_holding(plane, Vector2(near.x, near.z))
+			if rock != null:
+				into = stone if rock.breakable else bedrock
 		for k in range(stride):
 			into.append(source[t + k])
 

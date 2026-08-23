@@ -30,24 +30,31 @@ const WOBBLE: float = 0.30
 ## The lattice of radii is jittered and then smoothed against its neighbours, which is the whole
 ## trick. Jitter alone gives a sea urchin, because every vertex is independent of the ones beside
 ## it; one averaging pass turns the spikes into the lobes a boulder actually has.
+## The same lump, added to a surface somebody else is building, standing on `at`.
+##
+## BATCHED RATHER THAN BUILT, because the buried rock draws hundreds of these at once -- one per
+## lobe of every stone that breaks the surface of a plane -- and a mesh instance each would be
+## hundreds of draw calls for a handful of pebbles poking out of the dirt. One surface per plane per
+## grade keeps it at six for the whole map, which is the same bargain the wall meshes already make.
+##
+## Shares [method build]'s lattice exactly, so a boulder on the lawn and a rock breaking the ground
+## on plane 2 are visibly the same material -- which is the whole reason this file is shared.
+static func append_lump(
+	surface: SurfaceTool, at: Vector3, span: float, tall: float, seed_value: int
+) -> void:
+	var smooth := _lattice(seed_value)
+	for ring in range(RINGS):
+		for segment in range(SEGMENTS):
+			var a := _point(smooth, ring, segment, span, tall)
+			var b := _point(smooth, ring, segment + 1, span, tall)
+			var c := _point(smooth, ring + 1, segment + 1, span, tall)
+			var d := _point(smooth, ring + 1, segment, span, tall)
+			for vertex: Vector3 in [a, b, c, a, c, d]:
+				surface.add_vertex(at + vertex)
+
+
 static func build(span: float, tall: float, seed_value: int) -> ArrayMesh:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = seed_value
-
-	var radii: Array[float] = []
-	for ring in range(RINGS + 1):
-		for segment in range(SEGMENTS):
-			radii.append(1.0 + rng.randf_range(-WOBBLE, WOBBLE))
-	var smooth: Array[float] = []
-	for ring in range(RINGS + 1):
-		for segment in range(SEGMENTS):
-			var here := _radius(radii, ring, segment)
-			var around := (
-				_radius(radii, ring, segment - 1) + _radius(radii, ring, segment + 1)
-				+ _radius(radii, ring - 1, segment) + _radius(radii, ring + 1, segment)
-			)
-			smooth.append((here * 2.0 + around) * 0.1667)
-
+	var smooth := _lattice(seed_value)
 	var t := SurfaceTool.new()
 	t.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for ring in range(RINGS):
@@ -72,6 +79,31 @@ static func material_for(colour: Color) -> StandardMaterial3D:
 	# than as a prop dropped into it.
 	DirtTexture.apply_to(material)
 	return material
+
+
+## The jittered-then-smoothed lattice of radii one lump is drawn from.
+##
+## The smoothing is the whole trick and predates the split: jitter alone gives a sea urchin, because
+## every vertex is independent of the ones beside it, and one averaging pass turns the spikes into
+## the lobes a boulder actually has.
+static func _lattice(seed_value: int) -> Array[float]:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_value
+
+	var radii: Array[float] = []
+	for ring in range(RINGS + 1):
+		for segment in range(SEGMENTS):
+			radii.append(1.0 + rng.randf_range(-WOBBLE, WOBBLE))
+	var smooth: Array[float] = []
+	for ring in range(RINGS + 1):
+		for segment in range(SEGMENTS):
+			var here := _radius(radii, ring, segment)
+			var around := (
+				_radius(radii, ring, segment - 1) + _radius(radii, ring, segment + 1)
+				+ _radius(radii, ring - 1, segment) + _radius(radii, ring + 1, segment)
+			)
+			smooth.append((here * 2.0 + around) * 0.1667)
+	return smooth
 
 
 static func _radius(radii: Array[float], ring: int, segment: int) -> float:

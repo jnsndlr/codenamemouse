@@ -1123,11 +1123,14 @@ func _resolve_swing_on_breakables(forward: Vector3, limit: float) -> void:
 		var thing := node as Breakable
 		if thing == null or thing.plane != _plane:
 			continue
-		var to_it := thing.global_position - global_position
+		# ASKED OF THE THING, NOT ASSUMED. A barricade and a boulder section answer with their own
+		# position and half a metre of slack, which is what this line said as a constant; a rock
+		# buried in the earth answers with the point of its face nearest these paws, because it can
+		# be three metres across and its centre is nowhere near what a Brute is hitting. See
+		# `Breakable.swing_target`.
+		var to_it := thing.swing_target(global_position) - global_position
 		to_it.y = 0.0
-		# A shade more generous than against a mouse: the rock fills its cell, so its centre is
-		# further away than its face, and a swing that visibly connects should count.
-		if to_it.length() > attack_reach + 0.5:
+		if to_it.length() > attack_reach + thing.swing_allowance():
 			continue
 		if to_it.length_squared() > 0.0001 and forward.angle_to(to_it.normalized()) > limit:
 			continue

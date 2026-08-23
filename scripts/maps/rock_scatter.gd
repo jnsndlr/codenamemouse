@@ -98,13 +98,7 @@ func _ready() -> void:
 		add_child(rock)
 
 		if maxf(size.x, size.z) >= collide_above:
-			var body := StaticBody3D.new()
-			var shape := CollisionShape3D.new()
-			var box := BoxShape3D.new()
-			box.size = Vector3.ONE
-			shape.shape = box
-			body.add_child(shape)
-			rock.add_child(body)
+			_add_body(spot, size, rock.rotation.y)
 			_solid += 1
 			_minimap_rocks.append({
 				"position": spot,
@@ -114,6 +108,53 @@ func _ready() -> void:
 		placed += 1
 
 	print("rock scatter: %d rocks, %d with collision" % [placed, _solid])
+
+
+## The solid part of a big rock: a box standing ON the ground, never reaching under it.
+##
+## A ROCK'S COLLIDER MUST NOT REACH BELOW `y = 0`, AND THAT IS A RULE OF THIS WORLD RATHER THAN A
+## DETAIL OF THIS FILE. Everything lying on the lawn collides on `WORLD_BIT`, which is the layer
+## every mouse masks whatever plane it is standing on -- so a centimetre of surface rock hanging
+## below the grass is a centimetre of surface rock standing in a tunnel.
+##
+## THE BUG IT FIXES WAS A BRUTE WELDED TO THE FLOOR OF PLANE 1. The body used to be a unit box
+## parented to the MESH, so it inherited the mesh's scale, its 22% sinking and its lean -- and a
+## big rock is up to 1.5m tall, which put the bottom of the box 33cm under the lawn and a leaning
+## corner nearly 60cm under it. Plane 1's floor is at -0.65 and a mouse is 0.40 tall, so the earth
+## between -0.25 and -0.65 is occupied ground: the box was IN it. The Brute met it first and met it
+## worst -- widest body, so it reaches furthest from the corridor's spine -- and what a player saw
+## was a class that jams solid in open tunnel, in the same handful of places every match, against
+## nothing that is drawn anywhere.
+##
+## SO THE BODY IS ITS OWN NODE, not a child of the mesh, and that is the whole of the fix. Parented
+## to the rock it could only ever inherit the sinking and the lean it has to be free of; out here
+## the box is stated in world terms -- floor to visible top -- and cannot be dragged underground by
+## an edit to how the rock LOOKS.
+##
+## THE LEAN IS DROPPED AND THE SPIN IS KEPT. Tilt is what sells a rock as dropped rather than
+## placed, and it is worth exactly nothing to the physics: a couple of degrees on a lump you run
+## into edge-on. Spinning about Y costs nothing and keeps the box lined up with the rock a player
+## can see.
+func _add_body(spot: Vector2, size: Vector3, turn: float) -> void:
+	# The drawn rock spans its own height about a centre already lifted by 0.28 of it, so its top
+	# is at 0.78 of the height and the rest is under the grass. The collider is that top part.
+	var tall := size.y * 0.78
+	var box := BoxShape3D.new()
+	box.size = Vector3(size.x, tall, size.z)
+
+	var shape := CollisionShape3D.new()
+	shape.shape = box
+	shape.position = Vector3(0.0, tall * 0.5, 0.0)
+
+	var body := StaticBody3D.new()
+	# Said out loud rather than left to the node default, because the default is right by accident
+	# and this is the one property of a rock that a tunnel three quarters of a metre down depends on.
+	body.collision_layer = TunnelNetwork.WORLD_BIT
+	body.collision_mask = 0
+	body.position = Vector3(spot.x, 0.0, spot.y)
+	body.rotation.y = turn
+	body.add_child(shape)
+	add_child(body)
 
 
 ## Built on first ask and kept, like grass_patch.gd already does. The rocks are scattered once in

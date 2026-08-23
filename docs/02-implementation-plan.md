@@ -2356,6 +2356,78 @@ anybody worth finding. All four are playtests, and none of them blocks anything.
 
 ---
 
+### The off-grid detour — rock stops being tiles (part of dynamic tunnelling)
+
+**Question:** the earth is a distance field now and rock was still a dictionary of squares. What
+breaks, and what does fixing it cost?
+
+**What was actually wrong.** Two descriptions of the same ground. `dig_segment` refused a stroke if
+any cell it *claimed* held rock — but the cells a stroke claims are the ones it makes *standable*,
+and a stroke's body is half a metre wider than that. So a corridor run alongside a seam had its
+capsule cut straight through the neighbouring rock square: the wall was drawn inside the stone, the
+mouse walked into ground the rules called permanent, and **nothing errored**. The complaint that
+found it was the plain-language version — *"the mouse can dig inside the stone"*.
+
+It was wrong in the other direction as well, and that half was visible in play: because rock was
+squares, a stroke that merely clipped one was thrown away whole, so digging *past* an obstruction
+meant guessing angles until one was accepted.
+
+**What replaced it.** `rock_body.gd` — a rock is a **union of discs** with a real distance function,
+subtracted from the same field the strokes are unioned into, one `min` per texel in
+`_rebuild_chunk`. That single line is the whole integration: the wall wraps the stone because the
+contour follows the field, the collision trimesh is those triangles, the cutaway discards against
+those numbers, and `walkable_between` — which *is* the routing graph — refuses to route through it
+because it asks the field how much room there is. Five systems agreeing, none of them told rock
+exists.
+
+- **Union of discs rather than a wobbled radius**, because `min` of two exact distances is still an
+  exact distance. The thinning pass, the island cull and the wall bevel all read the field *as a
+  distance*; a shape that only looks right would break them in ways nobody would attribute to rock.
+- **The cell index survives as a derived thing** (`_rock`, `_rock_owner`), because plenty of
+  questions really are about squares — may a shaft land here, what does the minimap draw, which
+  cells does a crew know. What changed is that nothing deciding whether *ground can open* asks it.
+- **A boulder on the lawn still shuts its whole square**, and that refusal is kept deliberately.
+  It is not the same kind of obstruction: there is an object standing on that cell, and a stroke
+  taking a bite out of it would open earth under a rock that is visibly still sitting there.
+
+**Two grades, and a Brute that breaks rock *up*.** Roughly half of each plane is breakable stone in
+the familiar pale grey; the rest is darker bedrock. A breakable lump comes apart a **lobe at a
+time** — and a bite turns stone into ordinary *earth*, not into corridor, so the passage advances
+only as far as some stroke had already reached. Brute alone runs out of face; digger alone runs out
+of ground. `match_audit.gd`'s `buried_rock` check drives the real loop and needs **five rounds of
+alternating** to clear a six-lobe rock, which is the design working rather than a number anybody
+tuned.
+
+**Two swing hooks on `Breakable`.** `swing_target` and `swing_allowance`, because the melee cone
+measured reach to a target's *position* — fine for a barricade a cell across, and fatal for a rock
+three metres across, whose middle is permanently out of a Brute's reach. A rock answers with the
+point of its face nearest the paws, which also makes the chewing directional.
+
+**And the bug that started it, which turned out to be somewhere else entirely.** The report was a
+Brute wedged solid in plane 1 under some of the big surface rocks. `rock_scatter.gd` parented its
+collider to the *mesh*, so a unit box inherited the mesh's scale, its 22% sinking and its random
+lean — putting the bottom of the box up to **57cm** below the lawn. Plane 1's floor is at −0.65 and
+a mouse is 0.40 tall, so anything below −0.25 is inside occupied ground; the Brute met it first and
+worst, being the widest body and so the one that reaches furthest from a corridor's spine. Fixed by
+giving the body its own node stated in world terms, and covered permanently by `tunnel_audit.gd`'s
+new **clutter** check, which measures every collider on the world layer in the *unstripped* arena.
+That check is the interesting part: fifteen scenarios in that file strip the rock scatter precisely
+*because its colliders get in the way*, which is this bug seen from the other side and why it
+survived a suite that builds fifteen arenas.
+
+**Open thread.** A broken lobe is **not replicated**. It is exactly the gap a broken boulder section
+already has — both are server-side edits to the earth that a client, which grows the identical
+layout from the seed, never hears about. Parity rather than a new class of problem, and the right
+place to close both is M9's pass over the wire. A client's own swing is refused at the network
+(`is_puppet`) so the two ends cannot silently drift in the meantime.
+
+**Done when:** all four suites green against it. **Met** — `tunnel_audit` (now including clutter),
+`match_audit` (now including `buried_rock`), `replication_audit`, `contour_probe`. The rock check
+was rewritten rather than kept: every one of its old assertions would have failed against a system
+working exactly as intended, which is the most dangerous shape a test can have.
+
+---
+
 ### The recalibration — this is a multiplayer game, so plan like one
 
 Written at the close of 8a's build-out, on one working assumption stated out loud: **everything

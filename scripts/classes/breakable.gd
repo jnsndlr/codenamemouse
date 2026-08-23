@@ -71,6 +71,25 @@ func hit_by(who: Mouse) -> bool:
 	return true
 
 
+## Where on this thing a swing lands, and how much slack the reach gets past it.
+##
+## TWO HOOKS RATHER THAN ONE NUMBER IN `mouse.gd`, and they exist because a rock in the earth broke
+## the assumption the swing was written on. A barricade and a boulder section are each about a cell
+## across, so "reach to the centre, plus half a metre for the body of the thing" was a fair
+## approximation of reaching its face. A buried rock is up to three metres across, and measured to
+## its centre the biggest and most obstructive lumps on the map are permanently out of reach of the
+## only class built to shift them -- which is not a tuning problem, it is the feature not working.
+##
+## So a breakable thing says where its face is. The default is the old behaviour exactly: the node's
+## own position, and the same half metre of slack.
+func swing_target(_from: Vector3) -> Vector3:
+	return global_position
+
+
+func swing_allowance() -> float:
+	return 0.5
+
+
 ## ONLY THE ONE CLASS (GDD section 4). It gives the Brute a job that is not fighting, and it makes
 ## an obstruction something the other crew answers with a class choice rather than with patience --
 ## which is exactly the counterplay web section 5 asks for.

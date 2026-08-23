@@ -941,7 +941,7 @@ func _try_audit_barricades() -> void:
 	_tunnels.dig(1, AUDIT_BARRICADE_RED, Team.RED)
 	# The hidden control sits away from both crews' normal routes. Clear a generated vein only in
 	# this audit world so the coordinate remains deterministic across seeds.
-	_tunnels.remove_rock(1, AUDIT_BARRICADE_BLUE)
+	_tunnels.clear_rock_at(1, AUDIT_BARRICADE_BLUE)
 	_tunnels.dig(1, AUDIT_BARRICADE_BLUE, Team.BLUE)
 	if not _tunnels.is_dug(1, AUDIT_BARRICADE_RED):
 		return
@@ -1025,7 +1025,7 @@ func _tick_audit_sonar(delta: float) -> void:
 		remote.set_class(MouseClass.SNEAK)
 		remote.set_plane(0)
 		remote.global_position = _tunnels.cell_to_world(0, AUDIT_SONAR_SCAN) + Vector3.UP * 0.2
-		_tunnels.remove_rock(1, AUDIT_SONAR_SCAN)
+		_tunnels.clear_rock_at(1, AUDIT_SONAR_SCAN)
 		_tunnels.dig(1, AUDIT_SONAR_SCAN, Team.BLUE)
 		var sonar := remote.get_node_or_null(^"Sonar") as Sonar
 		var heard := sonar.scan() if sonar != null else 0
@@ -1208,7 +1208,10 @@ func _apply_earth(bytes: PackedByteArray) -> void:
 			TunnelView.Kind.SHAFT:
 				_tunnels.adopt_shaft(plane, at, bits)
 			TunnelView.Kind.ROCK:
-				_tunnels.adopt_rock(plane, at, bits)
+				# `[RETIRED]` Rock is no longer sent -- see [enum TunnelView.Kind]. The arm stays so
+				# a stale client's entry is swallowed rather than falling through to a kind it is
+				# not, which would adopt a shaft at a rock's coordinates.
+				pass
 			TunnelView.Kind.FORGET:
 				_tunnels.forget_segment(plane, TunnelNetwork.fixed_origin(at), extra)
 			TunnelView.Kind.FORGET_SHAFT:

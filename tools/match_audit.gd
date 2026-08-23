@@ -138,6 +138,7 @@ func _initialize() -> void:
 		["tunnel_sight", _check_tunnel_sight],
 		["engineer_bot", _check_engineer_bot],
 		["boulder", _check_boulder],
+		["buried_rock", _check_buried_rock],
 		["controls", _check_controls],
 	]
 
@@ -2147,6 +2148,294 @@ func _check_engineer_bot() -> void:
 	_expect(leaked < owned, "and not on both crews' maps (%d of %d shared)" % [leaked, owned])
 
 
+## Rock in the earth: the obstruction you cannot see until you dig into it, and the one a Brute
+## breaks UP rather than breaks. (GDD section 3)
+##
+## THE PAIR TO `_check_boulder`, and worth having next to it precisely because the two obstructions
+## are so nearly the same object and behave so differently. A boulder shuts a whole cell, is known
+## to both crews from the first second, and comes off a quarter at a time in five swings a quarter.
+## A buried rock is a shape with no cell boundaries at all, is hidden until somebody pays to find
+## it, and comes apart a LOBE at a time -- which is the collaboration this exists to prove: an
+## Engineer can start digging round the moment the first bite lands, rather than waiting for the
+## rock to be gone.
+##
+## WHAT WOULD SILENTLY NOT WORK. Three things, and none of them errors:
+##
+##   The Brute cannot reach it. A swing is measured to a target's position, and a rock three metres
+##   across has its middle well past a paw's length from the face you are standing at -- so the
+##   biggest and most obstructive rocks on the map would simply absorb nothing, forever. See
+##   `Breakable.swing_target`.
+##
+##   The Brute reaches it THROUGH the earth. A rock is buried, so being within reach of its surface
+##   does not mean there is anything but soil in between -- and chipping at stone through a metre
+##   of undug ground both makes no sense and clears an obstruction nobody has found.
+##
+##   The earth does not reopen. Breaking a lobe changes the field, and if nothing re-derives the
+##   cells the stone was standing in, a bot will refuse to walk down a passage that is visibly
+##   open. See `TunnelNetwork._reclaim`.
+func _check_buried_rock() -> void:
+	await _arena(1, true)
+	var network := _scene.get_node("Tunnels") as TunnelNetwork
+	var workable := _workable_rock(network, 1, 3.0)
+	if workable.is_empty():
+		_expect(false, "the layout grew a breakable rock on plane 1 with a clear run at it")
+		return
+	var rock := workable[0] as RockBody
+	var lobes := rock.lobes.size()
+	_expect(lobes >= 3, "a breakable rock is built out of several lobes (it has %d)" % lobes)
+
+	# Dig up to the face from three metres clear, so there is corridor to stand in and the stone is
+	# genuinely exposed rather than merely nearby. The spot and the direction come from
+	# `_workable_rock`, which is what guarantees the run is not through some other rock.
+	var approach := workable[1] as Vector2
+	var heading := TunnelNetwork.direction_angle(rock.centre - approach)
+	var at := approach
+	for i in range(16):
+		if not network.dig_segment(1, at, heading):
+			break
+		at = TunnelNetwork.segment_end(TunnelNetwork.segment_id(at, heading))
+	# MEASURED AT THE LAST OPEN POINT, not at the last stroke's nominal end. A stroke is allowed if
+	# it opens ANY earth, so the one that runs up against the rock is cut and its far end sits
+	# inside the stone -- which says nothing about where the ground actually opened. The corridor is
+	# where the field says it is.
+	var open_at := approach
+	for i in range(1, 121):
+		var step := approach.lerp(at, float(i) / 120.0)
+		if network.is_open_at(1, step):
+			open_at = step
+	var gap := -rock.depth(open_at)
+	_expect(gap >= 0.0, "no open corridor is inside the stone (deepest %.2fm)" % -gap)
+	_expect(gap < 0.6, "and the corridor gets right up against the face (%.2fm off it)" % gap)
+
+	# A Brute standing in the corridor at the face. Half a step back off the tip, because the very
+	# end of a corridor is its rounded cap rather than somewhere with room to stand.
+	var paws := open_at - TunnelNetwork.angle_direction(heading) * 0.25
+	var brute := _puppet(Team.BLUE, Vector3(paws.x, network.plane_y(1) + 0.05, paws.y))
+	brute.set_class(MouseClass.BRUTE)
+	brute.set_plane(1)
+	await _advance(0.1)
+
+	var target: UndergroundRock = null
+	for node in _scene.get_tree().get_nodes_in_group(UndergroundRock.ROCK_GROUP):
+		var breaker := node as UndergroundRock
+		if breaker != null and breaker.plane_index == 1 and breaker.rock_index == rock.index:
+			target = breaker
+	if target == null:
+		_expect(false, "a breakable rock has something for a Brute to swing at")
+		return
+
+	# THE REACH, which is the failure that would look like the feature not existing. Asked through
+	# the real melee cone rather than by calling `hit_by`, because the plumbing between a swing and
+	# a thing that is not a mouse is exactly what would be broken.
+	var full := target.hits_left()
+	_expect(brute.swing(), "the Brute's swing starts")
+	await _advance(0.6)
+	_expect(
+		target.hits_left() == full - 1,
+		"and lands on a rock three metres across from the face of it (%d of %d left)"
+			% [target.hits_left(), full]
+	)
+
+	# THE WRONG CLASS ACHIEVES NOTHING, counted rather than looked at: "the rock is still there" is
+	# true whether the swing was ignored, missed, or landed with three hits to go.
+	var held := target.hits_left()
+	brute.set_class(MouseClass.ENGINEER)
+	await _advance(0.5)
+	brute.swing()
+	await _advance(0.6)
+	_expect(target.hits_left() == held, "an Engineer swinging at a rock achieves nothing")
+	brute.set_class(MouseClass.BRUTE)
+
+	# THROUGH THE EARTH, NEVER. A Brute standing in solid ground beside the rock -- put there
+	# directly, as a cave-in or a shove could -- is within reach of the stone and must still be
+	# unable to work it.
+	# Just outside the face on the far side from the corridor, so the stone is well within a paw's
+	# length and the only thing between the two is undug ground.
+	var buried := rock.centre - Vector2(0.0, rock.edge_along(-PI * 0.5) + 0.25)
+	var digger := _puppet(Team.BLUE, Vector3(buried.x, network.plane_y(1) + 0.05, buried.y))
+	digger.set_class(MouseClass.BRUTE)
+	digger.set_plane(1)
+	await _advance(0.1)
+	_expect(
+		not target.hit_by(digger),
+		"a Brute in undug earth cannot chip at a rock through it"
+	)
+
+	# A BITE, AND THE EARTH BEHIND IT. The lobe nearest the paws is the one that goes, so the
+	# passage opens on the side being worked rather than on the far side of the rock.
+	var before := rock.lobes.size()
+	# WHICH LOBE IS ABOUT TO GO, AND WHERE IT IS THE ONLY THING HOLDING THE GROUND. Noted before the
+	# swing, because after it there is nothing left to ask.
+	#
+	# `[REVISED]` THE OLD PROBE WAS A GUESS AND THE SHRINK CAUGHT IT. It sampled halfway out along
+	# the rock's reach on the Brute's side and asserted that ground was earth now -- which held only
+	# while rocks were metres across and their lobes barely touched. At the size a rock is now the
+	# lobes overlap heavily, so the point halfway out is inside three of them and taking one off
+	# leaves it every bit as solid. The check was asserting a property of the old dimensions.
+	#
+	# What is actually true, and is what the design promises, is narrower: the ground THIS LOBE ALONE
+	# was holding up becomes earth. So the probe is a point inside the doomed lobe and outside every
+	# other -- found by sampling rather than solved, because the union of a handful of discs has no
+	# convenient inside-but-only-just point.
+	var doomed := rock.nearest_lobe(paws)
+	var only_here := Vector2.INF
+	if doomed >= 0:
+		var lobe: Vector3 = rock.lobes[doomed]
+		var middle := Vector2(lobe.x, lobe.y)
+		for ring in range(6):
+			var out: float = lobe.z * (0.9 - 0.12 * float(ring))
+			for step in range(24):
+				var angle := TAU * float(step) / 24.0
+				var spot := middle + Vector2(cos(angle), sin(angle)) * out
+				var alone := true
+				for i in range(rock.lobes.size()):
+					if i == doomed:
+						continue
+					var other: Vector3 = rock.lobes[i]
+					if spot.distance_to(Vector2(other.x, other.y)) < other.z:
+						alone = false
+						break
+				if alone:
+					only_here = spot
+					break
+			if only_here != Vector2.INF:
+				break
+	for i in range(full):
+		target.hit_by(brute)
+	_expect(rock.lobes.size() == before - 1, "a Brute's last swing takes one lobe off the rock")
+	_expect(
+		is_instance_valid(target) and not target.is_queued_for_deletion(),
+		"and the rest of the rock is still standing, still hittable"
+	)
+	_expect(
+		network.rock_body(1, rock.index) != null,
+		"the rock itself survives losing a lobe"
+	)
+
+	# The bite is real ground now: not stone to the field.
+	#
+	# A LOBE WITH NO GROUND OF ITS OWN IS NOT A FAILURE, and saying so is the difference between a
+	# check and a tripwire. Lobes overlap on purpose -- that is what stops a rock reading as a
+	# constellation of pebbles -- so a small one can sit entirely inside its neighbours and opening
+	# it opens nothing. That is the design working. What must never happen is the ground it held
+	# ALONE staying solid, and where there is no such ground there is nothing to assert.
+	if only_here != Vector2.INF:
+		_expect(
+			not network.is_stone_at(1, only_here),
+			"the ground the lobe alone was holding up is not stone any more"
+		)
+	else:
+		print("      (the lobe that went sat wholly inside its neighbours -- nothing to open)")
+
+	# ALL THE WAY THROUGH, AND IT TAKES BOTH OF THEM. This is the loop the whole obstruction exists
+	# to create, so it is worth spelling out what it proves.
+	#
+	# Breaking a lobe does not hand you a corridor. It turns stone into ordinary earth, and the
+	# ground opens only as far as some stroke had ALREADY reached into the rock -- which is exactly
+	# as far as the digger had pushed before being stopped. So a Brute alone runs out of face to
+	# work after a bite or two, and a digger alone runs out of ground: the passage advances only
+	# when the two alternate. A check that swung two hundred times from one spot would report the
+	# rock unbreakable, and it would be reporting the design rather than a bug.
+	#
+	# THE BRUTE WALKS UP, which is the other half. The face recedes as the rock is eaten, and
+	# `_exposed_to` refuses a swing with earth in the way -- so standing still stops working, on
+	# purpose.
+	# THE STONE IN THE WAY, RECORDED BEFORE ANYBODY TOUCHES IT. These are the points the passage has
+	# to end up running through, and they are noted now because in a few dozen swings there will be
+	# no rock left to ask.
+	var line := TunnelNetwork.angle_direction(heading)
+	var in_the_way: Array[Vector2] = []
+	for i in range(1, 41):
+		var spot := open_at + line * (0.1 * float(i))
+		if network.is_stone_at(1, spot):
+			in_the_way.append(spot)
+
+	var rounds := 0
+	var barren := 0
+	while network.rock_body(1, rock.index) != null and rounds < 60:
+		rounds += 1
+		for i in range(6):
+			if not network.dig_segment(1, at, heading):
+				break
+			at = TunnelNetwork.segment_end(TunnelNetwork.segment_id(at, heading))
+		# WHERE A BRUTE WORKING THE ROCK WOULD ACTUALLY STAND: the open ground nearest the stone,
+		# not the far end of the corridor.
+		#
+		# `[REVISED]` THE OLD VERSION WALKED PAST THE ROCK AND KEPT GOING. It put the Brute at the
+		# corridor TIP, which is right up until the moment the pair break through -- and then the
+		# tip is on the far side and racing away, because the digger carries on cutting. Instrumented,
+		# the Brute was 3.8 metres from the face one round after breakthrough and 10.2 the round
+		# after that, so every swing missed, and the check reported a rock that could not be broken
+		# while the real cause was a Brute standing in a corridor two rooms away.
+		var stand := approach
+		var closest := INF
+		for i in range(1, 201):
+			var step := approach.lerp(at, float(i) / 200.0)
+			if not network.is_open_at(1, step):
+				continue
+			var away_from := step.distance_to(rock.surface_point(step))
+			if away_from < closest:
+				closest = away_from
+				stand = step
+		brute.global_position = Vector3(
+			stand.x, network.plane_y(1) + 0.05, stand.y
+		)
+		var landed := false
+		for i in range(target.hits_to_clear):
+			if not is_instance_valid(target) or target.is_queued_for_deletion():
+				break
+			landed = target.hit_by(brute) or landed
+		# A BARREN ROUND IS NOT A STALL, and telling the two apart is the whole of this guard.
+		#
+		# `[REVISED]` It used to give up on the first round that landed nothing, which was safe only
+		# while a stroke could always chew a little further into a rock. A rock wide enough to REFUSE
+		# a stroke outright -- which is now a thing rocks can be, and the interesting thing they can
+		# be -- makes the alternation lumpier: the digger opens the ground a bite left behind, the
+		# face recedes past the Brute's reach, and the round the Brute spends walking up to it lands
+		# nothing at all. That is the collaboration working, and the check was reading it as the rock
+		# being unbreakable.
+		#
+		# Three in a row is a stall, because by then the digger has had three chances to open ground
+		# and has opened none.
+		if landed:
+			barren = 0
+		else:
+			barren += 1
+			if barren >= 3 and rounds > 2:
+				break
+	await _advance(0.2)
+
+	# WHAT THE PAIR ARE SUPPOSED TO ACHIEVE IS A PASSAGE, NOT AN ERASED ROCK.
+	#
+	# `[REVISED]` This used to assert the rock was GONE, and that was the wrong claim in two ways.
+	# It contradicts the design -- section 3 is explicit that "the first bite is often already a way
+	# through, so nobody is committed to a twenty-swing countdown", and going round stays on the
+	# table the whole time. And it is not drivable from here: once the two break through, the digger
+	# carries on and the corridor's far end runs away from the stone, so a Brute following it ends up
+	# past the rock with the remaining lobes BEHIND them -- and a puppet cannot be turned without
+	# reviving it onto the lawn, so every further swing misses for a reason that is about this file.
+	#
+	# The passage is the thing worth asserting, and it is a strictly harder claim than "some lobes
+	# came off": ground that was inside the stone at the start of this check has to be walkable now,
+	# and it can only have got that way by the Brute freeing it and the digger opening it.
+	var through := 0
+	for spot: Vector2 in in_the_way:
+		if network.is_open_at(1, spot):
+			through += 1
+	var left := 0 if network.rock_body(1, rock.index) == null else rock.lobes.size()
+	_expect(
+		not in_the_way.is_empty(),
+		"the corridor really was stopped by stone (%d points of it)" % in_the_way.size()
+	)
+	_expect(
+		through > 0,
+		"a Brute and a digger working together open a passage into the stone"
+			+ " (%d of %d points that were rock are corridor, %d rounds, %d lobes of %d left)"
+			% [through, in_the_way.size(), rounds, left, before]
+	)
+	_expect(left < before, "and the rock is smaller than it was")
+
+
 ## Boulders: the obstruction you can see, and the one a Brute can take apart. (M4, GDD section 3)
 ##
 ## THE POINT OF A BOULDER IS THAT IT IS TWO THINGS AT ONCE -- a lump on the lawn and a shut cell of
@@ -2169,13 +2458,6 @@ func _check_boulder() -> void:
 	var cells := Boulder.cells_for(boulder.origin_cell, boulder.size)
 	for cell: Vector2i in cells:
 		_expect(network.is_rock(1, cell), "the earth under a boulder is rock at %v" % cell)
-		# KNOWN TO EVERYBODY, unlike a seam. The rock is standing in the open, so making a crew dig
-		# into it to "discover" what it can already see would be a puzzle about the camera.
-		_expect(
-			network.is_rock_known(1, cell, Team.BLUE)
-			and network.is_rock_known(1, cell, Team.RED),
-			"both crews can see what a boulder is sitting on, at %v" % cell
-		)
 		# PLANE 1 ONLY. Going under it is the answer the whole design wants you to reach for, and a
 		# boulder that blocked every layer would be a wall you can see from the lawn.
 		_expect(not network.is_rock(2, cell), "the plane below a boulder is ordinary earth at %v" % cell)
@@ -3080,6 +3362,76 @@ func _check_controls() -> void:
 
 
 # ------------------------------------------------------------------------------ the harness
+
+
+## The largest rock on a plane that a Brute can shift. Largest, because reaching the face of a big
+## one is the thing most likely to be quietly broken.
+func _biggest_breakable(network: TunnelNetwork, plane: int) -> RockBody:
+	var best: RockBody = null
+	for entry: Variant in network.rock_bodies(plane):
+		var rock := entry as RockBody
+		if rock == null or not rock.breakable:
+			continue
+		if best == null or rock.reach() > best.reach():
+			best = rock
+	return best
+
+
+## The biggest breakable rock a digger can actually get to, and the direction to come at it from.
+##
+## `[ADDED]` BECAUSE "THE BIGGEST ONE" STOPPED BEING ENOUGH. While a plane held a few dozen rocks
+## metres across, any lump could be approached down a straight corridor from five metres out and
+## the check dug one without thinking about it. A plane now holds several hundred small ones, so a
+## straight run at the biggest rock very often rams a DIFFERENT rock first -- and every assertion
+## downstream then fails describing a rock the Brute never reached.
+##
+## So the approach is part of what is chosen, not an assumption about it. Candidates are tried
+## biggest first and the first with a clear straight run wins; the run is checked against the field
+## itself, which is the same thing the digger will hit.
+##
+## Returns `[]` when the layout offers nothing, which the caller reports as scaffolding rather than
+## as the feature being broken.
+func _workable_rock(network: TunnelNetwork, plane: int, clearance: float) -> Array:
+	var candidates: Array[RockBody] = []
+	for entry: Variant in network.rock_bodies(plane):
+		var rock := entry as RockBody
+		if rock != null and rock.breakable and rock.lobes.size() >= 3:
+			candidates.append(rock)
+	candidates.sort_custom(
+		func(a: RockBody, b: RockBody) -> bool: return a.reach() > b.reach()
+	)
+
+	# FROM +Z AND ONLY FROM +Z, which is a constraint of the harness rather than of the rule. A
+	# puppet faces straight down -Z and there is no public way to turn one without reviving it onto
+	# the lawn, so a Brute approaching from any other side would be swinging away from the stone and
+	# would fail the reach assertion for a reason that is about this file.
+	var angle := PI * 0.5
+	var away := Vector2(cos(angle), sin(angle))
+	for rock: RockBody in candidates:
+		if true:
+			var from := rock.centre + away * (rock.edge_along(angle) + clearance)
+			# The whole run, plus the corridor's own half width either side, has to be free of any
+			# OTHER stone -- and free of this rock until the very end of it.
+			# STOPPED A HALF WIDTH SHORT OF THE FACE, which is where the corridor tip actually ends
+			# up. Run the test all the way to the stone and it can never pass for a rock wider than
+			# the corridor: the corridor's EDGES are over stone well before its centre line reaches
+			# it, so every big lump reads as unreachable and the check reports the layout having no
+			# workable rock while standing in front of one.
+			var half := TunnelNetwork.SEG_HALF_WIDTH
+			var stop := rock.centre + away * (rock.edge_along(angle) + half)
+			var clear := true
+			for i in range(0, 41):
+				var at := from.lerp(stop, float(i) / 40.0)
+				for across: float in [-half, 0.0, half]:
+					var side := Vector2(-away.y, away.x) * across
+					if network.is_stone_at(plane, at + side):
+						clear = false
+						break
+				if not clear:
+					break
+			if clear:
+				return [rock, from]
+	return []
 
 
 ## A fresh arena per check, so nothing leaks from one to the next.

@@ -92,11 +92,18 @@ const OUTLINE_MIN_PX: float = 2.6
 @export var cheese_color: Color = Color(0.95, 0.79, 0.30, 0.92)
 @export var surface_rock_color: Color = Color(0.39, 0.38, 0.36, 0.82)
 @export var surface_object_color: Color = Color(0.56, 0.46, 0.31, 0.92)
-## Rock your crew has found. Cool and pale against the warm dirt of the panel, the same argument
-## the seam faces make in the world -- and deliberately NOT the colour a tunnel is, because the two
-## are drawn on top of each other and the question they answer together is where a corridor had to
-## stop.
+## Screen pixels the smallest drawn lobe of a rock gets. A rock's outline is a cluster of discs and
+## the little ones are chips off the side; below about this they stop reading as part of a lump and
+## start reading as dirt on the lens.
+@export var rock_min: float = 1.4
+## Rock standing above the dirt of the layer you are on. Cool and pale against the warm dirt of the
+## panel, the same argument the stone faces make in the world -- and deliberately NOT the colour a
+## tunnel is, because the two are drawn on top of each other and the question they answer together
+## is where a corridor had to stop.
 @export var rock_color: Color = Color(0.44, 0.48, 0.55, 0.85)
+## Rock that nothing shifts. Darker and flatter than the breakable grade, the same relationship the
+## two stone materials have underground -- one material in two grades, not two materials.
+@export var bedrock_color: Color = Color(0.26, 0.28, 0.33, 0.88)
 ## A shaft mouth, seen from the lawn -- the only part of the network drawn while you are on the
 ## surface. Bright, because it is a handful of tiles on an otherwise empty panel and it is answering
 ## "where do I get in", not "what does the network look like".
@@ -225,7 +232,7 @@ func _draw() -> void:
 	_dynamic_surface_features(self)
 	# Under the tunnels, because a corridor is a route and a seam is the ground it was cut through
 	# -- and where the two meet, what you want to see is that the corridor stops.
-	_known_rock()
+	_surface_rock()
 	_tunnel_cells()
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
@@ -448,17 +455,25 @@ func _tunnel_cells() -> void:
 		draw_rect(Rect2(at - Vector2(side, side) * 0.5, Vector2(side, side)), faded, true)
 
 
-## The seams your crew has found, on the layer you are standing on (GDD section 3).
+## The rock you can SEE on the layer you are standing on (GDD section 3).
 ##
 ## ONE PLANE, like the tunnels drawn under it. Four layouts stacked on a 200-pixel square is a grey
 ## smear that says "there is rock somewhere", which is the one thing you already knew -- the value
 ## of per-plane obstructions is precisely that they DIFFER. What you want to read here is "what is
 ## in my way, here, now", and the answer changes as you climb.
 ##
-## YOUR CREW'S KNOWLEDGE, not the map's. The rock that has not been found is not drawn faintly or
-## drawn differently -- it is not drawn, because this panel is the one place a leak would be
-## invisible, and the same rule governs enemy contacts a few lines further down.
-func _known_rock() -> void:
+## `[REVISED]` WHAT IS DRAWN, AND WHY IT IS NO LONGER PER CREW. This used to draw the cells a crew
+## had learned held rock, as filled metre squares. Both halves of that were wrong. The squares were
+## the dig grid showing through in a game where nothing has been on the grid since digging went off
+## it -- a lobed lump came out as a staircase of fifteen tiles. And the knowledge was bookkeeping
+## for a question the world now answers by itself: a rock either stands out of the dirt, where
+## anybody looking can see it, or it is buried and nobody can. So this draws the stone that breaks
+## the surface, to both crews, and the buried stone to neither.
+##
+## LOBES, AS CIRCLES. A rock IS a union of discs, so drawing those discs is not an approximation of
+## its outline -- it is the outline, at whatever scale the panel happens to be at, and it costs one
+## `draw_circle` per lobe against a rect per cell it used to claim.
+func _surface_rock() -> void:
 	if _network == null:
 		return
 	var player := _director.get_player()
@@ -468,15 +483,23 @@ func _known_rock() -> void:
 	if plane <= 0:
 		return
 
-	var side := player.team
-	# Refreshed every frame rather than cached against a count like the tunnels are: a reveal
-	# changes dozens of cells at once and the count would have to be per team as well, which is
-	# more bookkeeping than walking a dictionary of a few dozen keys once a frame.
-	var side_length := maxf(TunnelNetwork.CELL, _pixel(tunnel_min * _ui)) * 1.15
-	var box := Vector2(side_length, side_length)
-	for cell: Vector2i in _network.known_rock_cells(plane, side):
-		var centre := Vector2(cell.x, cell.y) * TunnelNetwork.CELL
-		draw_rect(Rect2(centre - box * 0.5, box), rock_color, true)
+	# Refreshed every frame rather than cached: a plane holds a few dozen rocks, only the ones
+	# breaking the surface are drawn, and the layout only changes when a Brute takes a bite.
+	var floor_thickness := TunnelNetwork.SPACING
+	for entry: Variant in _network.rock_bodies(plane):
+		var rock := entry as RockBody
+		if not rock.breaks_surface(floor_thickness):
+			continue
+		# TWO GRADES, matching the two the stone is drawn in underground and above it. Whether a
+		# lump can be broken is the one thing a route decision turns on -- go round it, or fetch the
+		# Brute -- and that decision is made on this panel as often as in front of the stone.
+		var colour := rock_color if rock.breakable else bedrock_color
+		for lobe: Vector3 in rock.lobes:
+			draw_circle(
+				Vector2(lobe.x, lobe.y),
+				maxf(lobe.z, _pixel(rock_min * _ui)),
+				colour
+			)
 
 
 ## A nest is a PLATE, not a circle. At this scale its real radius comes out about the size of a

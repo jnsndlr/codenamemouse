@@ -91,11 +91,11 @@ var _total_failures: int = 0
 ## Checks that have started and not yet reported. A TRIPWIRE, and it exists because of a specific
 ## two-milestone silence.
 ##
-## `_check_dig_flow` and `_check_reveal` drove the dig controller by calling `_update_dig(delta)`.
+## `_check_dig_flow` drove the dig controller by calling `_update_dig(delta)`.
 ## M7 step 2 gave that function a second parameter -- the intent has to be a value that can travel
 ## -- and nothing told the two callers. A GDScript runtime error ABORTS THE FUNCTION IT HAPPENS IN
 ## and lets the caller carry on, so both checks stopped part way through, printed nothing, and this
-## file went on announcing *"ALL INVARIANTS HOLD ... plus dig flow ... and reveal"* for two
+## file went on announcing *"ALL INVARIANTS HOLD ... plus dig flow ... and rock"* for two
 ## milestones over two checks that had not run a single assertion.
 ##
 ## Which is the fifth time this project has caught a test that could not fail, and a new cause each
@@ -137,7 +137,7 @@ func _initialize() -> void:
 		_audit(label)
 
 	for label: String in [
-		"dig_flow", "routing", "collapse", "shoring", "rock", "reveal", "paving"
+		"dig_flow", "routing", "collapse", "shoring", "rock", "surfacing", "paving", "clutter"
 	]:
 		_running[label] = true
 	await _check_dig_flow()
@@ -145,8 +145,9 @@ func _initialize() -> void:
 	await _check_collapse()
 	await _check_shoring()
 	await _check_rock()
-	await _check_reveal()
+	await _check_surfacing()
 	await _check_seal()
+	await _check_clutter()
 
 	# Anything still armed never reached its own report line. See `_running`.
 	for label: String in _running.keys():
@@ -156,10 +157,10 @@ func _initialize() -> void:
 	print("=".repeat(78))
 	if _total_failures == 0:
 		print("ALL INVARIANTS HOLD across %d scenarios, plus dig flow, routing, collapse,"
-			% scenarios.size() + " shoring, rock, reveal and paving.")
+			% scenarios.size() + " shoring, rock, surfacing, paving and clutter.")
 	else:
 		print("%d failures across %d scenarios plus dig flow, routing, collapse, shoring, rock,"
-			% [_total_failures, scenarios.size()] + " reveal and paving.")
+			% [_total_failures, scenarios.size()] + " surfacing, paving and clutter.")
 	print("=".repeat(78))
 	quit(1 if _total_failures > 0 else 0)
 
@@ -196,7 +197,7 @@ func _fresh_network() -> bool:
 ## a node that has already readied has done whatever it does. The director spawns its bots as
 ## its own SIBLINGS, so freeing it afterwards leaves two mice wandering through every
 ## containment probe -- which is exactly the kind of non-determinism this file exists to avoid.
-func _arena(strip: Array[String], rock: bool = false) -> Node:
+func _arena(strip: Array[String], rock: bool = false, obstructions: bool = false) -> Node:
 	var scene: Node = (load("res://scenes/maps/arena.tscn") as PackedScene).instantiate()
 	for path: String in strip:
 		var node: Node = scene.get_node_or_null(path)
@@ -214,8 +215,14 @@ func _arena(strip: Array[String], rock: bool = false) -> Node:
 	# run, and the cause would be a level decision rather than anything about geometry. Stripped by
 	# TYPE rather than by path, so a map that gains a second patio or moves its boulders cannot
 	# quietly re-break fifteen scenarios. The checks that care place their own.
-	for node in _obstructions(scene):
-		node.free()
+	#
+	# `obstructions` KEEPS THEM, and exactly one check wants that: `_check_headroom`, whose whole
+	# subject is the clutter everybody else removes. See its own header -- a suite that strips the
+	# rock scatter fifteen times because its colliders get in the way is a suite that will never
+	# notice those colliders are in the way of a tunnel.
+	if not obstructions:
+		for node in _obstructions(scene):
+			node.free()
 	root.add_child(scene)
 	return scene
 
@@ -988,30 +995,94 @@ func _check_rock() -> void:
 						_fail("ROCK", "rock at plane %d %v is inside %s's clearance"
 							% [plane, Vector2i(x, y), nest.name])
 
-	# A seam refuses the dig, SAYS SO, and stays refused. A tile that silently does nothing is
-	# indistinguishable from a broken control -- the lesson the entrance key taught once already.
+	# THE ROCK ITSELF NEVER OPENS, AND THAT IS THE INVARIANT NOW.
+	#
+	# `[REVISED]` WHAT THIS USED TO ASSERT AND WHY IT CHANGED. Rock was a set of cells and a stroke
+	# was refused outright if it touched one, so the check was "aim at a rock cell, be refused, and
+	# find the cell still undug". A rock is a shape in the field now (see [RockBody]) and a stroke
+	# that meets one stops AT it, keeping whatever it opened on the way -- so a dig aimed at a rock
+	# square legitimately returns true, and the square legitimately ends up part corridor and part
+	# stone. Every one of the old assertions would fail against a system working exactly as
+	# intended, which is the most dangerous shape a test can have: right for the wrong reason, then
+	# wrong for the right one.
+	#
+	# So the question is asked of the STONE rather than of the square. Nothing anywhere inside a
+	# rock may end up open ground, no waypoint may land in one, and a stroke that can only reach
+	# stone must be refused and must say so.
 	var spoken: Array[String] = []
 	_network.dig_refused.connect(func(reason: String) -> void: spoken.append(reason))
+
+	var blocking := _blocking_rock(1, 3.0)
+	if blocking.is_empty():
+		_fail("ROCK", "no rock on plane 1 both clear to reach and wide enough to stop a stroke")
+	else:
+		# Straight at the middle of it, from five metres clear, one stroke chained onto the last.
+		# The spot and the heading come from `_blocking_rock`, which is what guarantees the run is
+		# not through some other lump and that the face really has nothing behind it.
+		var lump := blocking[0] as RockBody
+		var approach := blocking[1] as Vector2
+		var heading := TunnelNetwork.direction_angle(lump.centre - approach)
+		var reached := _drive_angled(1, approach, heading, 16)
+		if approach.distance_to(reached) < 1.5:
+			_fail("ROCK", "the corridor toward the rock never got going (%.1fm)"
+				% approach.distance_to(reached))
+		if lump.depth(reached) > 0.0:
+			_fail("ROCK", "the corridor drove into the stone and kept going")
+
+		# Refused, and out loud. The corridor is now standing against the face, so the next stroke
+		# on the same heading has nothing but rock in front of it -- which is exactly the moment a
+		# player holds the button and needs to be told why nothing is happening.
+		spoken.clear()
+		if _network.dig_segment(1, reached, heading):
+			_fail("ROCK", "a stroke pointed straight into the rock face opened ground")
+		if spoken.is_empty():
+			_fail("ROCK", "digging into rock refused silently")
+
+		# THE HEADLINE. Every sample of the plane's field over the rock's own square, against the
+		# rock's own shape: if the two ever disagree by anything that matters, a mouse is standing
+		# inside a boulder.
+		#
+		# MEASURED IN DEPTH AND TOLERANCED IN TEXELS, not asserted at zero. The field is stored at
+		# 12.5cm and the contour interpolates its crossing between samples, so the drawn surface
+		# lands a millimetre or two either side of where the analytic rock says it is -- on some
+		# seeds, at a handful of points, and never by more than a few thousandths of a metre.
+		# Asserting equality would make this check fail on the arithmetic rather than on the rule.
+		# A quarter of a texel is two orders of magnitude past the disagreement the field can
+		# actually produce and two orders short of a mouse, which is the gap a real leak lands in.
+		var slack := TunnelContour.TEXEL * 0.25
+		var inside := 0
+		var deepest := 0.0
+		var span := lump.reach()
+		for j in range(41):
+			for i in range(41):
+				var at := lump.centre + Vector2(
+					-span + 2.0 * span * float(i) / 40.0, -span + 2.0 * span * float(j) / 40.0
+				)
+				var into := lump.depth(at)
+				if into > slack and _network.is_open_at(1, at):
+					inside += 1
+					deepest = maxf(deepest, into)
+		if inside > 0:
+			_fail("ROCK", "%d samples of open corridor are inside the stone, deepest %.3fm"
+				% [inside, deepest])
+
+		# And no bot is sent through it. The graph's waypoint for a cell the rock clips has to be
+		# the standing room in the rest of that square, not the middle of the stone.
+		for cell: Vector2i in _network.dug_cells(1):
+			if not _network.graph().has(1, cell):
+				continue
+			var stand := _network.standing_point(1, cell)
+			if lump.depth(Vector2(stand.x, stand.z)) > 0.0:
+				_fail("ROCK", "the routing graph puts a waypoint inside the rock at %v" % cell)
+				break
+
+	# An entrance cannot be sunk into rock, from either end. That matters: a shaft that lands in
+	# solid ground is the SHAFT_ENDS invariant failing from a direction no scenario builds by hand.
 	var seam := _first_rock(1)
 	if seam == Vector2i.MAX:
 		_fail("ROCK", "no rock on plane 1 with soft ground beside it -- nothing to test")
-	else:
-		var beside := _soft_neighbour(1, seam)
-		_network.dig(1, beside)
-		if _network.dig(1, seam):
-			_fail("ROCK", "a rock cell opened")
-		if _network.is_dug(1, seam):
-			_fail("ROCK", "the rock cell is dug afterwards")
-		if spoken.is_empty():
-			_fail("ROCK", "digging into rock refused silently")
-		if _network.graph().has(1, seam):
-			_fail("ROCK", "the routing graph will send a bot through the seam")
-
-		# An entrance cannot be sunk into rock either, from either end. Both matter: a shaft that
-		# lands in solid ground is the SHAFT_ENDS invariant failing from a direction no scenario
-		# builds by hand.
-		if _network.dig_shaft_down(0, seam):
-			_fail("ROCK", "an entrance was sunk from the lawn into rock")
+	elif _network.dig_shaft_down(0, seam):
+		_fail("ROCK", "an entrance was sunk from the lawn into rock")
 
 	var deep := _first_rock(2)
 	if deep != Vector2i.MAX:
@@ -1030,170 +1101,134 @@ func _check_rock() -> void:
 		for finding: String in _findings:
 			print("   FAIL %s" % finding)
 		_total_failures += _findings.size()
-
-
-## What a crew knows about the rock, and what it does not. (M4, GDD section 3)
+## Which rock you can SEE, and which you cannot. (M4, GDD section 3)
 ##
-## HIDDEN INFORMATION FAILS SILENTLY AND IN ONE DIRECTION -- towards knowing too much -- which is
-## the same reason the match audit checks spotting so carefully. A reveal that leaks to both crews
-## looks exactly like a reveal that works, from the only seat anybody plays from. So every
-## assertion here has a mirror: what BLUE learned, and what RED still must not know.
+## `[REVISED]` THIS USED TO CHECK A REVEAL, and there is no reveal any more. Rock was hidden
+## information: running into a lump taught your crew where it went, and the check that mattered was
+## the mirror -- what BLUE learned, and what RED still must not know. Visibility is a property of
+## the STONE now. A rock taller than the layer of earth it sits in breaks the dirt above and stands
+## where anybody can see it; a shorter one is buried and nobody can. Both crews look at the same
+## world, so there is no leak to check for and the whole per-crew half of this is gone.
 ##
-## THE WHOLE VEIN, not the cell you hit, and the flood fill is four-way like everything else in this
-## system. Two seams that touch at a corner are one blob to an eight-way fill and two separate
-## problems to a mouse, who cannot dig through a corner -- so the fill has to agree with the walls.
-func _check_reveal() -> void:
+## WHAT IS LEFT IS THAT THE TWO CASES BOTH HAPPEN AND ARE TOLD APART, which is the failure this
+## replaces the old one with. A height rule that put every rock above the dirt would make the
+## surface a complete map of the underground and nothing would ever ambush you; one that put every
+## rock below it would draw no stone at all and look exactly like the feature being switched off.
+## Both read as "fine" from a single screenshot, so both are asserted against the other.
+##
+## AND THAT THE DRAWN STONE FOLLOWS THE SHAPE. The lumps are batched per plane per grade, so the
+## check is that a plane with surfacing breakable rock has a pale mesh and one without has none --
+## the same assertion in both directions, for the same reason.
+func _check_surfacing() -> void:
 	_findings.clear()
 	if _scene != null:
 		_scene.free()
-	# Rock ON, and the player and its controller KEPT: half of this check is the rule and half is
-	# the wiring from a mouse pressing a button to the crew knowing something.
-	_scene = _arena(["CameraRig", "DepthFocus", "FallGuard", "HUD", "Surface/Rocks",
-		"MatchDirector", "Navigation", "Nests"], true)
+	# ROCK ON. Every other scenario in this file turns it off so a seeded lump cannot land on a
+	# hand-picked coordinate; this one is about the lumps.
+	_scene = _arena(STRIP, true)
+	if _scene == null:
+		_broken("surfacing", "the arena would not build")
+		return
 	await process_frame
 	await physics_frame
-	_network = _scene.get_node("Tunnels") as TunnelNetwork
-
-	var seam := _first_rock(1)
-	if seam == Vector2i.MAX:
-		_broken("reveal", "no rock on plane 1 with soft ground beside it -- nothing to run into")
+	_network = _scene.get_node_or_null("Tunnels") as TunnelNetwork
+	if _network == null:
+		_broken("surfacing", "the arena built without a network")
 		return
 
-	# Nobody knows anything yet. Asserted first, because every "BLUE learned it" line below would
-	# pass just as well against a network that hands out the whole layout from the first frame.
-	if not _network.known_rock_cells(1, Team.BLUE).is_empty():
-		_fail("REVEAL", "a crew knows where rock is before anybody has touched any")
-	if _network.is_rock_known(1, seam, Team.BLUE):
-		_fail("REVEAL", "the seam is known to BLUE before it has been dug into")
+	var thickness := TunnelNetwork.SPACING
+	var above := 0
+	var below := 0
+	var pale_up := 0
+	var dark_up := 0
+	for plane in range(1, TunnelNetwork.PLANE_COUNT):
+		for entry: Variant in _network.rock_bodies(plane):
+			var rock := entry as RockBody
+			if rock.breaks_surface(thickness):
+				above += 1
+				if rock.breakable:
+					pale_up += 1
+				else:
+					dark_up += 1
+			else:
+				below += 1
 
-	var learned := _network.reveal_vein(1, seam, Team.BLUE)
-	if learned <= 0:
-		_fail("REVEAL", "running into a seam taught the crew nothing")
+	if above + below == 0:
+		_broken("surfacing", "no rock anywhere in the map -- nothing to be visible or hidden")
+		return
+	# BOTH OUTCOMES, and the numbers are deliberately loose. The exact split is a tuning decision
+	# that should be free to move; what must not happen is one of the two disappearing, which is
+	# what turns the surface into either a full map or a blank one.
+	if above == 0:
+		_fail("SURFACING", "not one rock in the map stands above the dirt -- nothing is visible")
+	if below == 0:
+		_fail("SURFACING", "every rock in the map stands above the dirt -- nothing can ambush you")
 
-	# The vein, worked out here independently of the network's own fill -- a check that asked the
-	# thing under test to define the right answer would pass whatever the fill did.
-	var vein := {seam: true}
-	var edge: Array[Vector2i] = [seam]
-	while not edge.is_empty():
-		var at: Vector2i = edge.pop_back()
-		for side: Vector2i in TunnelNetwork.SIDES:
-			var beside: Vector2i = at + side
-			if vein.has(beside) or not _network.is_rock(1, beside):
+	# THE HEIGHT RULE ITSELF, asked of the geometry rather than of the count. A rock that reports
+	# breaking the surface must actually be taller than the earth it sits in, and one that reports
+	# otherwise must not -- the two halves of one subtraction, which is the sort of thing that
+	# survives a refactor only if somebody wrote it down.
+	for plane in range(1, TunnelNetwork.PLANE_COUNT):
+		for entry: Variant in _network.rock_bodies(plane):
+			var rock := entry as RockBody
+			var says := rock.breaks_surface(thickness)
+			var truly := rock.height > thickness
+			if says != truly:
+				_fail("SURFACING", "a rock disagrees with its own height about breaking the dirt")
+				break
+			if says and rock.rise_above(thickness) <= 0.0:
+				_fail("SURFACING", "a rock breaks the surface but stands no distance above it")
+				break
+			if not says and rock.rise_above(thickness) != 0.0:
+				_fail("SURFACING", "a buried rock reports standing above the dirt")
+				break
+
+	# THE DRAWN STONE, in both directions. A plane whose surfacing rock is all one grade must have
+	# a mesh for that grade and none for the other, which catches the two surfaces being crossed --
+	# a failure that draws bedrock in the breakable colour and is invisible in a headless run.
+	for plane in range(1, TunnelNetwork.PLANE_COUNT):
+		var pale := 0
+		var dark := 0
+		for entry: Variant in _network.rock_bodies(plane):
+			var rock := entry as RockBody
+			if not rock.breaks_surface(thickness):
 				continue
-			vein[beside] = true
-			edge.append(beside)
+			if rock.breakable:
+				pale += 1
+			else:
+				dark += 1
+		var pale_mesh: Mesh = (_network._rock_lumps[plane] as MeshInstance3D).mesh
+		var dark_mesh: Mesh = (_network._bedrock_lumps[plane] as MeshInstance3D).mesh
+		if (pale > 0) != (pale_mesh != null):
+			_fail("SURFACING", "plane %d draws breakable stone it has none of, or none it has"
+				% plane)
+		if (dark > 0) != (dark_mesh != null):
+			_fail("SURFACING", "plane %d draws bedrock it has none of, or none it has" % plane)
 
-	if learned != vein.size():
-		_fail("REVEAL", "the whole vein is revealed (%d cells learned, the vein is %d)"
-			% [learned, vein.size()])
-	for cell: Vector2i in vein:
-		if not _network.is_rock_known(1, cell, Team.BLUE):
-			_fail("REVEAL", "cell %v of the vein was left unknown" % cell)
-			break
-	var mapped := _network.known_rock_cells(1, Team.BLUE).size()
-	if mapped != vein.size():
-		_fail("REVEAL", "the crew knows %d rock cells and the vein is %d -- the fill %s"
-			% [mapped, vein.size(),
-			"ran into unconnected rock" if mapped > vein.size() else "stopped short"])
-
-	# AND THE OTHER CREW STILL HAS NO IDEA. The one assertion this whole feature exists for.
-	if _network.is_rock_known(1, seam, Team.RED):
-		_fail("REVEAL", "the other crew learned where the rock is for free")
-	if not _network.known_rock_cells(1, Team.RED).is_empty():
-		_fail("REVEAL", "the other crew's map filled in by itself")
-	# Nor does the same crew learn about the plane below by digging into this one.
-	if not _network.known_rock_cells(2, Team.BLUE).is_empty():
-		_fail("REVEAL", "digging into plane 1 revealed rock on plane 2")
-
-	if _network.reveal_vein(1, seam, Team.BLUE) != 0:
-		_fail("REVEAL", "running into the same seam twice reported learning it twice")
-
-	# THE PICTURE FOLLOWS THE KNOWLEDGE, and it is drawn for exactly one crew. Without this the
-	# whole reveal can be correct and invisible, which from the only seat anybody plays from is
-	# indistinguishable from it not working.
-	_network.show_crew_knowledge(Team.BLUE)
-	if (_network._rock_caps[1] as MeshInstance3D).mesh == null:
-		_fail("REVEAL", "the vein was learned but nothing is drawn over it")
-	else:
-		var cap_material := (_network._rock_caps[1] as MeshInstance3D).mesh.surface_get_material(0)
-		if (
-			cap_material is StandardMaterial3D
-			and (cap_material as StandardMaterial3D).cull_mode != BaseMaterial3D.CULL_DISABLED
-		):
-			_fail("REVEAL", "the rock top exists but is back-face culled from above")
-	_network.show_crew_knowledge(Team.RED)
-	if (_network._rock_caps[1] as MeshInstance3D).mesh != null:
-		_fail("REVEAL", "the other crew is shown a vein it has never touched")
-
-	# AND THE CONTROLS DO IT. Everything above tests the rule; this tests that a mouse pressing the
-	# dig button on a seam is what triggers it -- the half a player actually touches, and the half
-	# that is one forgotten line away from never running.
-	if not await _fresh_reveal_scene():
-		_broken("reveal", "the arena would not build a second time")
-		return
-	var seam2 := _first_rock(1)
-	var beside := _soft_neighbour(1, seam2)
-	if seam2 == Vector2i.MAX or beside == Vector2i.MAX:
-		_broken("reveal", "no seam with soft ground beside it in the second arena")
-		return
-	_network.dig(1, beside)
-	var player: Mouse = _scene.get_node("Player")
-	var controller: Node = player.get_node("DigController")
-	player.set_physics_process(false)
-	controller.set_physics_process(false)
-	player.global_position = _network.cell_to_world(1, beside) + Vector3.UP * 0.05
-	controller._plane = 1
-	player.set_team(Team.RED)
-	# NO FRAME BETWEEN THE PRESS AND THE READ, AND NO `Input` AT ALL (M7). This used to press a real
-	# action and wait a frame for the buffer to flush, with a note about how that had cost the check
-	# a wrong red. Intent is a value now: `_hold_dig` builds a frame whose press bit is simply true,
-	# so the rock branch -- which needs the press to be NEW -- sees exactly what it is given, on the
-	# tick it is given it.
-	_hold_dig(player, controller, _network.cell_to_world(1, seam2), 1)
-	if not _network.is_rock_known(1, seam2, Team.RED):
-		_fail("REVEAL", "digging into a seam with the actual controls revealed nothing")
-	if _network.is_rock_known(1, seam2, Team.BLUE):
-		_fail("REVEAL", "and it told the other crew as well")
-
-	# AND THE PATH THAT ACTUALLY HAPPENS: not swinging at the rock, but opening the cell beside it
-	# and exposing its face. This is the one a player hits without meaning to, and it is the one the
-	# feature originally missed -- the cursor greys out over rock specifically to say "don't hold
-	# the button here", so almost nobody was ever going to trigger the head-on version.
-	if not await _fresh_reveal_scene():
-		_broken("reveal", "the arena would not build a third time")
-		return
-	var seam3 := _first_rock(1)
-	var face := _soft_neighbour(1, seam3)
-	if seam3 == Vector2i.MAX or face == Vector2i.MAX:
-		_broken("reveal", "no seam with soft ground beside it in the third arena")
-		return
-	# Stand one cell further back, so the tile being opened is the one that touches the rock and the
-	# player is not already standing against it.
-	var back := face + (face - seam3)
-	if _network.is_rock(1, back):
-		_broken("reveal", "the cell behind the face is rock too -- nowhere to dig from")
-		return
-	_network.dig(1, back)
-	var digger: Mouse = _scene.get_node("Player")
-	var arm: Node = digger.get_node("DigController")
-	digger.set_physics_process(false)
-	arm.set_physics_process(false)
-	digger.global_position = _network.cell_to_world(1, back) + Vector3.UP * 0.05
-	arm._plane = 1
-	digger.set_team(Team.BLUE)
-	digger.set_class(MouseClass.ENGINEER)
-	_hold_dig(digger, arm, _network.cell_to_world(1, face), 40)
-	if not _network.is_dug(1, face):
-		_broken("reveal", "the tile beside the seam never opened -- nothing was exposed")
-		return
-	if not _network.is_rock_known(1, seam3, Team.BLUE):
-		_fail("REVEAL", "opening the cell beside a seam exposed its face and taught nobody anything")
-	if _network.is_rock_known(1, seam3, Team.RED):
-		_fail("REVEAL", "and exposing a face told the other crew too")
+	# NOTHING IS DRAWN FOR THE BURIED ROCK, which is the whole economy of the change: the buried
+	# half is already the stone face the contour wrapped round it, and modelling it twice would put
+	# two descriptions of one rock in the scene. Asserted by triangle count against the lumps that
+	# should be there rather than by eye.
+	var surfacing_lobes := 0
+	for entry: Variant in _network.rock_bodies(1):
+		var rock := entry as RockBody
+		if rock.breaks_surface(thickness):
+			surfacing_lobes += rock.lobes.size()
+	var drawn := 0
+	for node: MeshInstance3D in [_network._rock_lumps[1], _network._bedrock_lumps[1]]:
+		if node.mesh != null:
+			drawn += node.mesh.surface_get_array_len(0)
+	var per_lump := RockShell.RINGS * RockShell.SEGMENTS * 6
+	if drawn != surfacing_lobes * per_lump:
+		_fail("SURFACING", "plane 1 draws %d vertices of stone for %d surfacing lobes (expected %d)"
+			% [drawn, surfacing_lobes, surfacing_lobes * per_lump])
 
 	print("")
-	_running.erase("reveal")
-	print("-- reveal")
+	_running.erase("surfacing")
+	print("-- surfacing")
+	print("   %d rocks above the dirt (%d pale, %d dark), %d buried" % [
+		above, pale_up, dark_up, below
+	])
 	if _findings.is_empty():
 		print("   ok")
 	else:
@@ -1201,20 +1236,6 @@ func _check_reveal() -> void:
 			print("   FAIL %s" % finding)
 		_total_failures += _findings.size()
 
-
-## A second arena with rock on and the controls attached, for the half of the reveal check that
-## drives the dig button rather than the rule.
-func _fresh_reveal_scene() -> bool:
-	if _scene != null:
-		_scene.free()
-	_scene = _arena(["CameraRig", "DepthFocus", "FallGuard", "HUD", "Surface/Rocks",
-		"MatchDirector", "Navigation", "Nests"], true)
-	if _scene == null:
-		return false
-	await process_frame
-	await physics_frame
-	_network = _scene.get_node_or_null("Tunnels") as TunnelNetwork
-	return _network != null
 
 
 ## No-surface zones: paving you can tunnel under but not come up through. (M4, GDD section 3)
@@ -1312,6 +1333,207 @@ func _check_seal() -> void:
 		for finding: String in _findings:
 			print("   FAIL %s" % finding)
 		_total_failures += _findings.size()
+
+
+## Nothing lying on the lawn may reach down into a tunnel.
+##
+## THE ONE INVARIANT THAT COVERS A WHOLE CLASS OF INVISIBLE BUG. Surface clutter collides on
+## `WORLD_BIT`, which every mouse masks on every plane -- that is what makes the ground and the
+## perimeter wall solid to somebody who is underground and should never see them. The price of that
+## convenience is that a surface object which hangs even a little below the grass is a surface
+## object standing in plane 1's corridor: solid, unlit, undrawn from down there, and impossible to
+## work out from anything on screen.
+##
+## WHICH IS EXACTLY WHAT HAPPENED. `rock_scatter.gd` parented its collider to the MESH, so a big
+## rock's unit box inherited the mesh's scale, its 22% sinking and its random lean -- putting the
+## bottom of the box up to 57cm under the lawn. Plane 1's floor is at -0.65 and a mouse is 0.40
+## tall, so anything below -0.25 is in occupied ground. The Brute met it first and hardest, being
+## the widest body and so the one that reaches furthest from a corridor's spine, and the report was
+## "the Brute gets stuck under some of the big rocks" -- with nothing on screen to blame.
+##
+## MEASURED OFF THE COLLIDERS, NOT BY SWEEPING THE YARD. A probe walked over the arena proves the
+## invariant only where it happened to step, and the offending rocks are a couple of dozen objects
+## in six thousand square metres of lawn; this reads every shape in the scene, so a new prop with a
+## sunk collider fails on the run it is added rather than on the playtest that finds it.
+##
+## THE SCENE IS THE REAL ONE, obstructions and all. Every other check in this file strips the rock
+## scatter and the boulders precisely because their colliders get in the way -- which is this bug
+## seen from the other side, and why it survived a suite that builds fifteen arenas.
+func _check_clutter() -> void:
+	_findings.clear()
+	if _scene != null:
+		_scene.free()
+		_scene = null
+	# UNSTRIPPED, which is the whole point: the things every other scenario removes are the
+	# subject here. Only the match is taken out, for the determinism reason STRIP_MATCH gives.
+	_scene = _arena(STRIP_MATCH, true, true)
+	if _scene == null:
+		_broken("clutter", "the arena would not build -- no collider was measured")
+		return
+	await process_frame
+	await physics_frame
+
+	# The top of a mouse standing on the shallowest tunnel floor. Anything on the world layer that
+	# reaches below this is inside ground a mouse is entitled to walk through.
+	var ceiling := -TunnelNetwork.SPACING + Mouse.BODY_HEIGHT
+	var measured := 0
+	var lowest := INF
+	var worst := ""
+	for shape: CollisionShape3D in _world_shapes(_scene):
+		if shape.shape == null:
+			continue
+		measured += 1
+		var box := shape.shape.get_debug_mesh().get_aabb()
+		var floor_y := INF
+		for corner in range(8):
+			floor_y = minf(floor_y, (shape.global_transform * box.get_endpoint(corner)).y)
+		if floor_y < lowest:
+			lowest = floor_y
+			worst = shape.get_parent().name if shape.get_parent() != null else shape.name
+		if floor_y < ceiling:
+			_fail("CLUTTER", "%s reaches to y=%.3f, inside plane 1's mouse band (below %.3f)"
+				% [_owner_path(shape), floor_y, ceiling])
+
+	# Vacuity, same trap `_check_rock` documents: a scene whose clutter never loaded would pass
+	# this without a single shape being looked at.
+	if measured < 8:
+		_fail("CLUTTER", "only %d world colliders in the arena -- the clutter did not load"
+			% measured)
+
+	print("")
+	_running.erase("clutter")
+	print("-- clutter")
+	print("   %d world colliders, lowest %.3f (%s), floor of the band %.3f"
+		% [measured, lowest, worst, ceiling])
+	if _findings.is_empty():
+		print("   ok")
+	else:
+		for finding: String in _findings:
+			print("   FAIL %s" % finding)
+		_total_failures += _findings.size()
+
+
+## Every collision shape in the scene belonging to a body on the world layer.
+##
+## BY LAYER RATHER THAN BY TYPE, because what makes an object a hazard to a tunnel is not what
+## class it is -- it is that a mouse three quarters of a metre down still masks it. The tunnel
+## planes' own bodies are on their own layers and correctly excluded; CSG collision is generated
+## into a child body, which this finds like any other.
+func _world_shapes(node: Node) -> Array[CollisionShape3D]:
+	var found: Array[CollisionShape3D] = []
+	var body := node as CollisionObject3D
+	if body != null and body.collision_layer & TunnelNetwork.WORLD_BIT != 0:
+		for child in body.get_children():
+			var shape := child as CollisionShape3D
+			if shape != null:
+				found.append(shape)
+	for child in node.get_children():
+		found.append_array(_world_shapes(child))
+	return found
+
+
+## Enough of the path to find the thing again, which "Collision" on its own never is.
+func _owner_path(shape: Node) -> String:
+	var body: Node = shape.get_parent()
+	var host: Node = body.get_parent() if body != null else null
+	var parts: Array[String] = []
+	if host != null:
+		parts.append(host.name)
+	if body != null:
+		parts.append(body.name)
+	parts.append(shape.name)
+	return "/".join(parts)
+
+
+## The largest rock on a plane, so the geometry checks have room to be wrong in. Null if the layout
+## somehow has none -- which the caller reports rather than passing over.
+func _biggest_rock(plane: int) -> RockBody:
+	var best: RockBody = null
+	for entry: Variant in _network.rock_bodies(plane):
+		var rock := entry as RockBody
+		if rock != null and (best == null or rock.reach() > best.reach()):
+			best = rock
+	return best
+
+
+## A rock that can actually stop a stroke dead, and a clear place to drive at it from.
+##
+## `[ADDED]` BECAUSE "THE BIGGEST ROCK" CARRIED TWO ASSUMPTIONS THAT USED TO BE FREE. Both broke
+## when rock stopped being metres across, and both broke QUIETLY -- as a rule failing rather than as
+## scaffolding failing, which is the expensive kind.
+##
+## THE FIRST IS THAT THE RUN AT IT IS CLEAR. A plane held a few dozen lumps; it now holds a few
+## hundred, and a straight five-metre approach very often rams a DIFFERENT rock. Every assertion
+## afterwards then describes a corridor that never reached the subject.
+##
+## THE SECOND IS THAT A STROKE INTO ITS FACE OPENS NOTHING, which is what "digging into rock is
+## refused" is asserted against. That is not a property of rock, it is a property of rock WIDER THAN
+## A STROKE: the refusal fires only when a stroke would open no ground at all, and a corridor driven
+## at a lump narrower than itself comes out curved around it -- which is the documented rule working,
+## not the refusal being broken. So the subject has to be a rock whose stone covers the whole
+## footprint of the stroke that will be aimed at it, and that is checked against the field rather
+## than guessed from the radius.
+##
+## Returns `[]` when the layout has no such rock, which the caller reports as scaffolding.
+func _blocking_rock(plane: int, clearance: float) -> Array:
+	var candidates: Array[RockBody] = []
+	for entry: Variant in _network.rock_bodies(plane):
+		var rock := entry as RockBody
+		if rock != null:
+			candidates.append(rock)
+	candidates.sort_custom(
+		func(a: RockBody, b: RockBody) -> bool: return a.reach() > b.reach()
+	)
+
+	var half := TunnelNetwork.SEG_HALF_WIDTH
+	for rock: RockBody in candidates:
+		for step in range(12):
+			var angle := TAU * float(step) / 12.0
+			var away := Vector2(cos(angle), sin(angle))
+			var side := Vector2(-away.y, away.x)
+			var face := rock.edge_along(angle)
+			var from := rock.centre + away * (face + clearance)
+
+			# The approach: nothing but earth the whole way in, across the corridor's width -- and
+			# STOPPED A HALF WIDTH SHORT OF THE FACE, which is not a fudge, it is where the corridor
+			# tip actually ends up. Run all the way to the face instead and the test is impossible
+			# to satisfy for exactly the rocks it is looking for: a lump wider than the corridor has
+			# stone under the corridor's EDGES well before its centre line reaches the stone, so
+			# every wide rock was rejected as unreachable and the check reported the map having no
+			# blocking rock when the map was full of them.
+			var stop := rock.centre + away * (face + half)
+			var clear := true
+			for i in range(0, 41):
+				var at := from.lerp(stop, float(i) / 40.0)
+				for across: float in [-half, 0.0, half]:
+					if _network.is_stone_at(plane, at + across * side):
+						clear = false
+						break
+				if not clear:
+					break
+			if not clear:
+				continue
+
+			# And the stone behind the face: a band as wide as the corridor and as deep as one
+			# stroke, measured INWARD from the edge. That is the region the next stroke would have
+			# to open, and the refusal fires exactly when all of it is rock -- so this is the
+			# condition under test, stated in the field's own terms rather than guessed from a
+			# radius.
+			var blocks := true
+			for i in range(1, 9):
+				var along := face - TunnelNetwork.SEG_LENGTH * float(i) / 8.0
+				if along <= 0.0:
+					break
+				for across: float in [-half, -half * 0.5, 0.0, half * 0.5, half]:
+					var at := rock.centre + away * along + side * across
+					if not _network.is_stone_at(plane, at):
+						blocks = false
+						break
+				if not blocks:
+					break
+			if blocks:
+				return [rock, from, angle]
+	return []
 
 
 ## A rock cell on `plane` with at least one diggable neighbour, so there is somewhere to stand
