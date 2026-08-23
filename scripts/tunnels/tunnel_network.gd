@@ -607,6 +607,26 @@ var _thin_spans: PackedFloat32Array = PackedFloat32Array()
 var _thin_offsets_for: Vector2i = Vector2i(-1, -1)
 ## plane -> {chunk key: true}: chunks whose cache is stale. Flushed by [method _rebuild_walls].
 var _dirty_chunks: Array[Dictionary] = []
+## plane -> {cell: Vector3}: where in a cell a mouse actually stands, remembered.
+##
+## WHY THIS IS WORTH A CACHE AND `_field_at` IS NOT. [method standing_point] is a pure function of
+## the strokes registered in one cell and the stone around them, and it is asked the SAME QUESTION
+## about the SAME CELL by every bot several times a second: [method TunnelGraph.route] calls it once
+## per step of every path it returns, and `RoutePlanner.plan` asks the graph for up to nine paths
+## per plan. Measured in a live match at 78 strokes, one `plan` was **6.8ms**, of which about
+## nineteen twentieths was this function, and nine bots planning three times a second spent
+## **204ms of every second** in it -- a fifth of the wall clock, on a layer whose earth had not
+## moved between one bot asking and the next.
+##
+## It is not cheap per call either: twenty-five samples of graded distance per stroke in the cell,
+## each rejecting itself against the rock field.
+##
+## DROPPED PER CELL BY [method _occupy] AND [method _vacate], which are the only two places the set
+## of strokes near a cell can change, and they already walk exactly the cells affected. Rock is
+## coarser -- a whole plane at a time, at [method _register_rock] and [method _unregister_rock] --
+## because a rock moving is a rare, large event and a cell-accurate drop there would be a second
+## description of which cells a lump reaches.
+var _standing_at: Array[Dictionary] = []
 ## The contoured floor of each plane. This is what the GridMap used to draw, one tile at a time.
 var _floors: Array[MeshInstance3D] = []
 ## Shaft and entrance marks, one small mesh instance each, parented per plane.
@@ -654,7 +674,7 @@ var _bodies: Array[StaticBody3D] = []
 ## layer it is standing on.
 var _chunk_shapes: Array[Dictionary] = []
 ## The union of every COMMITTED stroke over one chunk's window, kept so a carve does not have to
-## re-derive it: `_committed_field[plane][key]` is `{shape, seen, hidden, wide, knowledge}`.
+## re-derive it: `_committed_field[plane][key]` is `{shape, seen, hidden, wide, knowledge, ids}`.
 ##
 ## WHAT THIS IS FOR. Composing a chunk means walking every stroke that reaches into its window and
 ## painting a metre of graded distance from each -- and at the density a mid-match corridor network
@@ -670,6 +690,22 @@ var _chunk_shapes: Array[Dictionary] = []
 ## stroke contributes goes through [method _touch_span], [method _touch_box] or
 ## [method _rebuild_mask], and all three drop the entry -- the growing-carve step is the single
 ## exception, and it is the only caller that knows the committed strokes have not moved.
+##
+## `[REVISED]` **AND A STROKE ARRIVING IS NOT A REASON TO DROP IT.** Dirtying was doing two jobs at
+## once, and only one of them was true. A commit reaches nine chunks (the cull's reach, see
+## [method _touch_span]) and threw away all nine compositions, each of which then repaid a full
+## walk of every stroke in its window -- measured at 10 strokes a window early in a match and 43 by
+## two hundred, which is exactly the curve the complaint described. But the field is a `max` union
+## of strokes: a stroke ARRIVING is one more `max`, and re-deriving the other forty to add it is
+## the whole cost for none of the information. Only a stroke LEAVING -- a collapse, a vacate --
+## needs the window composed again from nothing.
+##
+## SO THE ENTRY CARRIES THE IDS IT WAS BUILT FROM (`ids`), and a rebuild compares that set against
+## the strokes the cell index reports now. Everything in the cache and still present is kept;
+## whatever is new is painted on top; anything MISSING forces the full recompose. That is a rule
+## about the ids themselves rather than a list of callers who must remember to invalidate -- the
+## same reason [member _knowledge_age] is a stamp rather than a convention -- so a path that
+## removes a stroke without telling anybody is still correct, just slow.
 ##
 ## AND BY A KNOWLEDGE STAMP ON TOP, because what a chunk paints also depends on which strokes THIS
 ## crew has been told about (see [method _segment_wants]) -- a thing that changes without any earth
@@ -728,6 +764,7 @@ func _init() -> void:
 		_carving.append({})
 		_chunk_cache.append({})
 		_dirty_chunks.append({})
+		_standing_at.append({})
 		_chunk_shapes.append({})
 		_stale_collision.append({})
 		_committed_field.append({})
@@ -1222,6 +1259,12 @@ func _probe_cell(plane: int, cell: Vector2i, a: Vector2, b: Vector2) -> Array:
 ## this rather than [method cell_to_world]; anything merely NAMING the cell -- a minimap square, a
 ## sonar ping, a fog entry -- is right to keep using the centre.
 func standing_point(plane: int, cell: Vector2i) -> Vector3:
+	# REMEMBERED, because the routing asks this of the same cells over and over between one stroke
+	# and the next. See [member _standing_at] for what it cost before and what drops it again.
+	if plane >= 0 and plane < _standing_at.size():
+		var known: Variant = _standing_at[plane].get(cell)
+		if known != null:
+			return known as Vector3
 	var best := 1000.0
 	var at := Vector2(float(cell.x) * CELL, float(cell.y) * CELL)
 	for id: int in segments_in_cell(plane, cell):
@@ -1229,7 +1272,10 @@ func standing_point(plane: int, cell: Vector2i) -> Vector3:
 		if (probe[1] as float) < best:
 			best = probe[1]
 			at = probe[0]
-	return Vector3(at.x, plane_y(plane), at.y)
+	var here := Vector3(at.x, plane_y(plane), at.y)
+	if plane >= 0 and plane < _standing_at.size():
+		_standing_at[plane][cell] = here
+	return here
 
 
 ## Could a mouse walk from here to there in a straight line, without leaving the tunnel?
@@ -1377,6 +1423,8 @@ func _occupy(plane: int, id: int) -> Array[Vector2i]:
 			here = {}
 			_cell_segments[plane][cell] = here
 		(here as Dictionary)[id] = true
+		# The strokes near this cell have changed, so where a mouse stands in it may have too.
+		_standing_at[plane].erase(cell)
 	var fresh: Array[Vector2i] = []
 	for cell: Vector2i in _segment_cells(id, plane):
 		if not _cells[plane].has(cell):
@@ -1390,6 +1438,7 @@ func _occupy(plane: int, id: int) -> Array[Vector2i]:
 func _vacate(plane: int, id: int) -> Array[Vector2i]:
 	# THE INDEX FIRST, so that the standing test below cannot see the stroke being removed.
 	for cell: Vector2i in _near_cells(id):
+		_standing_at[plane].erase(cell)
 		var here: Variant = _cell_segments[plane].get(cell)
 		if here == null:
 			continue
@@ -1465,14 +1514,14 @@ func _touch(plane: int, id: int) -> void:
 ## `cull` is whether to reach out far enough for the field rules to be re-decided at a distance;
 ## see the reach below for what that costs and [method carve] for why a growing carve declines it.
 ##
-## `carving` says the COMMITTED strokes have not moved -- only the tip of a stroke somebody is
-## part-way through cutting. It is the one caller allowed to keep the cached composition of the
-## earth around it; see [member _committed_field]. Stated separately from `cull` on purpose: the two
-## happen to be asked by the same caller today, and folding them into one flag would make the next
-## caller that wants a cheap reach silently keep a field it had every right to change.
-func _touch_span(
-	plane: int, a: Vector2, b: Vector2, cull: bool = true, carving: bool = false
-) -> void:
+## `[REVISED]` **IT NO LONGER DROPS THE CACHED COMPOSITION, and there is no `carving` flag saying
+## when not to.** That flag was one caller declaring "the committed strokes have not moved", which
+## made every OTHER caller declare the opposite -- so a commit, whose strokes had not moved either
+## but for one arrival, threw away nine windows and repaid a full walk of every stroke in each.
+## Whether a composition can be kept is now derived from the ids it was built from rather than
+## announced by whoever dirtied it (see [member _committed_field]), which is both cheaper and the
+## kind of rule that cannot be got wrong by a caller who has not read this comment.
+func _touch_span(plane: int, a: Vector2, b: Vector2, cull: bool = true) -> void:
 	# Grown by the half-width plus a texel, so the chunk holding the far side of a rounded end is
 	# included. Missing one leaves a notch of un-rebuilt wall that only appears at some angles.
 	#
@@ -1499,10 +1548,7 @@ func _touch_span(
 		for cx in range(low.x, high.x + 1):
 			if cx < 0 or cy < 0 or cx >= FIELD_CHUNKS or cy >= FIELD_CHUNKS:
 				continue
-			var key := cy * FIELD_CHUNKS + cx
-			_dirty_chunks[plane][key] = true
-			if not carving:
-				_committed_field[plane].erase(key)
+			_dirty_chunks[plane][cy * FIELD_CHUNKS + cx] = true
 
 
 ## Which chunk a world point falls in.
@@ -1679,6 +1725,10 @@ func _rock_fits(rock: RockBody) -> bool:
 ## dozen cells against a class of bug where a broken rock keeps blocking a shaft.
 func _register_rock(rock: RockBody) -> void:
 	var plane := rock.plane
+	# A sample inside stone is not somewhere to stand (see [method _probe_cell]), so a rock arriving
+	# moves the answer for every cell it reaches. Dropped a plane at a time -- see [member
+	# _standing_at] for why this one is not cell-accurate.
+	_standing_at[plane].clear()
 	for cell: Vector2i in rock.cells(CELL, half_extent_cells):
 		_rock[plane][cell] = true
 		_rock_owner[plane][cell] = rock.index
@@ -1698,6 +1748,9 @@ func _register_rock(rock: RockBody) -> void:
 ## And take it out again, before it is put back changed or dropped entirely.
 func _unregister_rock(rock: RockBody) -> void:
 	var plane := rock.plane
+	# The other half of the pair in [method _register_rock]: stone leaving frees ground to stand on
+	# just as surely as stone arriving takes it away.
+	_standing_at[plane].clear()
 	for cell: Vector2i in _rock_owner[plane].keys():
 		if int(_rock_owner[plane][cell]) == rock.index:
 			_rock_owner[plane].erase(cell)
@@ -2500,7 +2553,7 @@ func carve(plane: int, id: int, along: float, team: int = -1) -> void:
 	# the same picture -- and unlike a commit, this is paid several times a second. The cull's reach
 	# is declined for the same reason (see [method _touch_span]): a scrap a metre away can wait for
 	# the commit, which always reaches out in full.
-	_touch_span(plane, _carve_end(id, before), _carve_end(id, stop), false, true)
+	_touch_span(plane, _carve_end(id, before), _carve_end(id, stop), false)
 	# COLLISION FOLLOWS THE TRENCH NOW, AT A QUARTER OF A METRE. It used to wait for the commit, on
 	# the argument that the only mouse who could walk into a carve was the one standing still cutting
 	# it -- which stopped being true the moment carving became digging rather than a preview of it.
@@ -3294,14 +3347,21 @@ func is_cut_away(plane: int, cell: Vector2i) -> bool:
 	return _mask_images[plane].get_pixel(x, y).r > TunnelContour.SURFACE
 
 
-## Redraw a whole plane's cutaway from scratch, for when who is looking -- or what they can see --
-## changes rather than what has been dug.
+## Redraw a whole plane's cutaway from scratch, for when WHO IS LOOKING changes.
 ##
 ## `[REVISED]` DONE BY DIRTYING EVERY OCCUPIED CHUNK rather than by walking cells, because the
 ## cutaway is no longer a set of texels that can be flipped one at a time -- it is a distance
 ## field, and the value at a texel depends on every stroke near it. Marking the chunks and letting
 ## the ordinary rebuild run is the same code path a dig takes, which is the point: there is one
 ## description of how the field is computed, so a fog change and a dig cannot disagree about it.
+##
+## `[REVISED]` **AND IT IS NO LONGER WHAT THE FOG CALLS.** A new crew to draw for genuinely changes
+## every chunk on the layer, and that is what this is still for. A cell coming into or out of
+## SIGHT does not: it changes the verdict on the strokes whose middles are in that one square. The
+## fog was calling this from `_publish`, which runs on every physics frame and fires whenever the
+## seen set moves by a single cell -- so one mouse walking down a corridor re-contoured all
+## forty-odd chunks of plane 1, measured at just over **100ms**, several times a second. See
+## [method _remask_cells], which is what the fog calls now.
 func _rebuild_mask(plane: int) -> void:
 	if plane < 0 or plane >= _mask_images.size():
 		return
@@ -3312,6 +3372,44 @@ func _rebuild_mask(plane: int) -> void:
 	for key: int in _chunk_cache[plane]:
 		_dirty_chunks[plane][key] = true
 		_committed_field[plane].erase(key)
+	_rebuild_walls(plane)
+
+
+## The same repaint, for the cells whose visibility actually moved.
+##
+## REACHING A WHOLE STROKE PAST EACH CELL, because what a cell's sight changes is the verdict on
+## every stroke whose MIDDLE lies in it (see [method _segment_wants]) -- and such a stroke reaches
+## half its length either side of that middle, plus its own width, plus the distance the field
+## rules read from. Short by any of those and a corridor keeps a sliver of lid over it that only
+## goes when something else happens to dirty that chunk.
+##
+## NO `fill`, AND THAT IS THE HALF THAT WOULD BITE. [method _rebuild_mask] blanks the whole cutaway
+## texture because it is about to repaint every chunk of it; blanking it here -- where only some
+## chunks are rebuilt -- would erase the lid over every corridor that did not change and leave it
+## erased until somebody dug there. The texels of a chunk nobody rebuilt are still correct, because
+## nothing about that chunk moved.
+##
+## THE COMMITTED FIELDS ARE LEFT ALONE, unlike the wholesale path. Bumping [member _knowledge_age]
+## is enough: a chunk whose strokes are all still shown the same way verifies its entry and keeps
+## it, and one whose verdicts moved throws it away by itself. That is the difference between
+## re-composing the handful of chunks a crew's sight actually reached and re-composing the layer.
+func _remask_cells(plane: int, cells: Array) -> void:
+	if plane < 0 or plane >= _mask_images.size() or cells.is_empty():
+		return
+	_knowledge_age[plane] += 1
+	var reach := (
+		SEG_LENGTH * 0.5 + SEG_HALF_WIDTH + TunnelContour.TEXEL * 2.0
+		+ float(_cull_pad()) * TunnelContour.TEXEL
+	)
+	for cell: Vector2i in cells:
+		var at := Vector2(float(cell.x) * CELL, float(cell.y) * CELL)
+		var low := _chunk_at(at - Vector2(CELL * 0.5 + reach, CELL * 0.5 + reach))
+		var high := _chunk_at(at + Vector2(CELL * 0.5 + reach, CELL * 0.5 + reach))
+		for cy in range(low.y, high.y + 1):
+			for cx in range(low.x, high.x + 1):
+				if cx < 0 or cy < 0 or cx >= FIELD_CHUNKS or cy >= FIELD_CHUNKS:
+					continue
+				_dirty_chunks[plane][cy * FIELD_CHUNKS + cx] = true
 	_rebuild_walls(plane)
 
 
@@ -3332,13 +3430,24 @@ func show_glimpsed(team: int, plane: int, cells: Array) -> void:
 				break
 		if same:
 			return
+	# WHICH CELLS MOVED, not merely that the set did. Both directions count: a cell newly seen
+	# opens the earth over it, and one forgotten closes it again.
+	var moved: Array[Vector2i] = []
+	var arriving := {}
+	for cell: Vector2i in cells:
+		arriving[cell] = true
+		if not _glimpsed[plane].has(cell):
+			moved.append(cell)
+	for cell: Vector2i in _glimpsed[plane]:
+		if not arriving.has(cell):
+			moved.append(cell)
 	_glimpsed[plane].clear()
 	for cell: Vector2i in cells:
 		_glimpsed[plane][cell] = true
 	# The earth opens up; the LAMPS do not follow. A cell you can see is still a cell nobody on
 	# your crew hung a light in, and lighting what you glimpse would give the corridor back the
 	# inhabited look the darkness was introduced to take away.
-	_rebuild_mask(plane)
+	_remask_cells(plane, moved)
 
 
 ## Warm pools along the corridors of the focused layer.
@@ -3882,37 +3991,77 @@ func _rebuild_chunk(plane: int, key: int) -> void:
 	# growing tip on top. See [member _committed_field] for what drops the entry again.
 	var kept: Variant = _committed_field[plane].get(key)
 	var book: Dictionary = {} if kept == null else kept as Dictionary
-	if (
-		kept != null
-		and int(book["wide"]) == wide
-		and int(book["knowledge"]) == _knowledge_age[plane]
-	):
+	# The window size, because `_cull_pad` is derived from exported dials that can move in the
+	# inspector between one rebuild and the next -- and a field of the wrong width read back as if
+	# it were the right one is garbage, silently, everywhere.
+	var usable := kept != null and int(book["wide"]) == wide
+	# What that entry was composed from: `{id: 1 if this crew is shown it else 0}`.
+	var carried: Dictionary = {} if not usable else book["ids"] as Dictionary
+
+	# WHAT IS IN THIS WINDOW NOW, gathered before the cache is judged rather than only once it has
+	# missed -- it is a handful of dictionary lookups, and it is what turns "the entry is stale"
+	# into "the entry is short by these two strokes". The window's cells plus a ring, because a
+	# stroke whose centre is in the next chunk can still reach across the border. `_segment_cells`
+	# is conservative in the same direction, so anything whose capsule touches this square is
+	# registered in one of these cells.
+	var found := {}
+	var low := Vector2i(floori(origin.x) - 1, floori(origin.y) - 1)
+	var high := Vector2i(ceili(origin.x + extent) + 1, ceili(origin.y + extent) + 1)
+	for y in range(low.y, high.y + 1):
+		for x in range(low.x, high.x + 1):
+			for id: int in segments_in_cell(plane, Vector2i(x, y)):
+				found[id] = true
+
+	# A STROKE LEAVING IS THE ONLY THING THAT FORCES A RECOMPOSE. The field is a `max` union, so a
+	# stroke arriving is one more `max` over what is already there; a stroke GONE would have to be
+	# unpainted, and a max union cannot be undone. Read off the ids rather than announced by
+	# whoever moved the earth, so a path that drops a stroke without invalidating anything is still
+	# correct here. See [member _committed_field].
+	if usable:
+		for id: int in carried:
+			if not found.has(id):
+				usable = false
+				break
+
+	# AND THE KNOWLEDGE STAMP IS CHECKED BY ASKING, NOT BY COMPARING COUNTERS. [member
+	# _knowledge_age] is one number per PLANE, bumped by every cell any crew learns -- so a single
+	# dig invalidated the composition of every chunk on the layer, including the thirty that were
+	# nowhere near it. It is kept as the fast path, because when it matches nothing can have
+	# changed and there is nothing to ask; when it does NOT match, the entry is worth two dictionary
+	# lookups per stroke before it is thrown away, against repainting forty strokes to learn that
+	# all forty were unchanged. `_view_team < 0` shows every stroke, so this cannot fire at all on
+	# a server.
+	if usable and int(book["knowledge"]) != _knowledge_age[plane]:
+		for id: int in carried:
+			if _segment_wants(plane, id) != (int(carried[id]) != 0):
+				usable = false
+				break
+
+	var arrived: Array[int] = []
+	if usable:
 		shape = (book["shape"] as PackedFloat32Array).duplicate()
 		seen = (book["seen"] as PackedFloat32Array).duplicate()
 		hidden = bool(book["hidden"])
+		for id: int in found:
+			if not carried.has(id):
+				arrived.append(id)
+			else:
+				found[id] = carried[id]
 	else:
 		shape.resize(wide * wide)
 		seen.resize(wide * wide)
+		arrived.assign(found.keys())
 
-		var found := {}
-		# The window's cells plus a ring, because a stroke whose centre is in the next chunk can
-		# still reach across the border. `_segment_cells` is conservative in the same direction, so
-		# anything whose capsule touches this square is registered in one of these cells.
-		var low := Vector2i(floori(origin.x) - 1, floori(origin.y) - 1)
-		var high := Vector2i(ceili(origin.x + extent) + 1, ceili(origin.y + extent) + 1)
-		for y in range(low.y, high.y + 1):
-			for x in range(low.x, high.x + 1):
-				for id: int in segments_in_cell(plane, Vector2i(x, y)):
-					found[id] = true
-
+	if not usable or not arrived.is_empty():
 		var done: Array[Vector2] = []
 		var done_to: Array[Vector2] = []
 		var done_shown := PackedByteArray()
-		for id: int in found:
+		for id: int in arrived:
 			done.append(segment_origin(id))
 			done_to.append(segment_end(id))
 			var wanted := _segment_wants(plane, id)
 			done_shown.append(1 if wanted else 0)
+			found[id] = 1 if wanted else 0
 			if not wanted:
 				hidden = true
 		var painted := _paint_strokes(
@@ -3927,12 +4076,16 @@ func _rebuild_chunk(plane: int, key: int) -> void:
 			"shape": shape.duplicate(),
 			"seen": seen.duplicate() if hidden else shape.duplicate(),
 			"hidden": hidden,
-			# The window size, because `_cull_pad` is derived from exported dials that can move in
-			# the inspector between one rebuild and the next -- and a field of the wrong width read
-			# back as if it were the right one is garbage, silently, everywhere.
 			"wide": wide,
 			"knowledge": _knowledge_age[plane],
+			# What the composition above actually contains, and what each stroke was shown as --
+			# which is what lets the next rebuild add to it rather than start again.
+			"ids": found,
 		}
+	elif int(book["knowledge"]) != _knowledge_age[plane]:
+		# Verified above and unchanged, so re-stamp it -- otherwise every rebuild from here re-asks
+		# the same question of the same strokes and gets the same answer.
+		book["knowledge"] = _knowledge_age[plane]
 
 	# Ends the strokes have been cut to, so a carve unions in exactly like a finished stroke and the
 	# corridor has no idea which of the two it grew from.

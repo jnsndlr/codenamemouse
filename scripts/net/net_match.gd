@@ -179,6 +179,9 @@ var _audit_blue_mark: SonarMark
 var _audit_blue_deep_mark: SonarMark
 var _audit_scan_mark: SonarMark
 var _audit_beside_mark: SonarMark
+## Which plane the Sneak's control mark is currently sitting on, so the scenario can notice the
+## mouse walking off it. See `_tick_audit_sonar`.
+var _audit_beside_plane: int = -1
 var _audit_beside_gen_mark: SonarMark
 
 
@@ -1045,7 +1048,30 @@ func _tick_audit_sonar(delta: float) -> void:
 	# `_check_the_cant_world`.
 	elif _audit_sonar_stage == 1 and _audit_sonar_age >= 23.0:
 		_audit_beside_mark = _place_beside(remote, AUDIT_CANT_BESIDE_OFFSET, "Sneak")
+		_audit_beside_plane = remote.get_plane()
 		_audit_sonar_stage = 2
+	# THE CONTROL FOLLOWS THE MOUSE WHILE IT IS A SNEAK, and this is the third correction to this
+	# scenario. The check needs a client report -- one every five seconds -- taken while the mouse
+	# is both still a Sneak AND still on the plane the control was placed on. Stage 0 opens ground
+	# under the mouse, and `--autopilot` drops into that hole on a clock that has nothing to do with
+	# this one: the check had been passing only when the bot happened to have wandered clear of the
+	# shaft at the moment the mark went down. It was a coin toss all along, and a host that got
+	# FASTER started losing it -- cutting the cost of a dig let the sim keep up with its own tick,
+	# so the bot reached the hole sooner and a green check went red about one run in three.
+	#
+	# RE-PLACING RATHER THAN PINNING THE MOUSE, because the mouse standing where it chooses is half
+	# of what the check is FOR: the whole point is a mark the depth rule would have allowed, so the
+	# only thing left to explain absence is class. Holding the bot still to make the mark reachable
+	# would be arranging the subject so the rule cannot bite -- which is the failure this file's own
+	# comment above describes talking itself into twice already. The mark goes where the mouse
+	# actually is instead, and `_last_capture` in `replication_audit` reads the newest one, which is
+	# the one on the plane the mouse is standing on when the reports come in.
+	elif _audit_sonar_stage == 2 and _audit_sonar_age < 31.0:
+		if remote.get_plane() != _audit_beside_plane:
+			if is_instance_valid(_audit_beside_mark) and not _audit_beside_mark.is_queued_for_deletion():
+				_audit_beside_mark.discard()
+			_audit_beside_mark = _place_beside(remote, AUDIT_CANT_BESIDE_OFFSET, "Sneak")
+			_audit_beside_plane = remote.get_plane()
 	elif _audit_sonar_stage == 2 and _audit_sonar_age >= 31.0:
 		# Placed BEFORE the swap and reported after it, so no five-second report can ever observe
 		# this mark while the mouse is still a Sneak: every reading of it is a Generalist's.
