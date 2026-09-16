@@ -237,7 +237,10 @@ func build(
 
 	for j in range(n):
 		var row := j * stride
+		var floor_until := 0
 		for i in range(n):
+			if i < floor_until:
+				continue
 			# The four corners of this cell, in the order the polygon walk expects: bottom-left,
 			# bottom-right, top-right, top-left, going anticlockwise in (x, z).
 			var v00 := samples[row + i]
@@ -267,8 +270,16 @@ func build(
 			# because it is much the most common case in any tunnel wider than the texel grid, and
 			# it skips the whole polygon walk.
 			if inside == 15:
-				_add_floor_triangle(p00, p11, p10)
-				_add_floor_triangle(p00, p01, p11)
+				# Adjacent fully open texels are one flat floor. Emit a strip instead of two
+				# triangles per texel; walls and partial cells retain the exact contour.
+				var end := i + 1
+				while end < n and samples[row + end + 1] > SURFACE and samples[row + stride + end + 1] > SURFACE:
+					end += 1
+				floor_until = end
+				var far := origin + Vector2(float(end), float(j)) * TEXEL
+				var far_top := far + Vector2(0.0, TEXEL)
+				_add_floor_triangle(p00, far_top, far)
+				_add_floor_triangle(p00, p01, far_top)
 				continue
 
 			_walk_cell(

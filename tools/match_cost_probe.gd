@@ -13,15 +13,29 @@ extends SceneTree
 ## physics, bot decisions, the dig -- and stripping the renderer removes the one term that is
 ## bounded by the refresh interval and would otherwise flatten every row into it.
 ##
-## PHYSICS TIME IS THE COLUMN THAT MATTERS. `underground_frame_probe` measured plane 1 with the
-## bots disabled and physics fell from 11.6ms to 1.1ms, so the sim -- not the drawing -- is what
-## is close to the tick budget down there. What this adds is whether it climbs.
+## `peak_avg` averages Godot's reported one-second maxima; it is NOT average tick time.
+## `peak_max` is the largest engine-reported physics peak seen in the window. The separate
+## script-tick meter brackets node physics callbacks and reports true mean/p95/p99/max for
+## those callbacks, excluding the engine's native physics/navigation step. Keep both: one
+## measures the whole engine's spikes, the other measures the scripts' distribution.
+## Godot 4.7.1 main/main.cpp publishes physics_process_max once per reporting second.
 
 const DEFAULT_SECONDS: float = 150.0
 const SAMPLE: float = 10.0
 ## When to turn the scenario's system off. Late enough that the match has dug a network of the
 ## size the complaint is about, so the row after it is the cost of everything ELSE at that size.
 const CUT_AT: float = 90.0
+
+class TickStart extends Node:
+	var began: int = 0
+	func _physics_process(_delta: float) -> void:
+		began = Time.get_ticks_usec()
+
+class TickEnd extends Node:
+	var start: TickStart
+	var samples: Array[float] = []
+	func _physics_process(_delta: float) -> void:
+		samples.append(float(Time.get_ticks_usec() - start.began) / 1000.0)
 
 
 func _initialize() -> void:
@@ -38,8 +52,15 @@ func _initialize() -> void:
 	await process_frame
 	await process_frame
 	var network := scene.get_node("Tunnels") as TunnelNetwork
+	var start := TickStart.new()
+	start.process_physics_priority = -1000000
+	root.add_child(start)
+	var meter := TickEnd.new()
+	meter.start = start
+	meter.process_physics_priority = 1000000
+	root.add_child(meter)
 
-	print("scenario\tat\tphys_avg\tphys_max\tframes\tseg_p1")
+	print("scenario\tat\tpeak_avg\tpeak_max\tframes\tseg_p1")
 	var elapsed := 0.0
 	var since := 0.0
 	var cut := false
@@ -51,15 +72,12 @@ func _initialize() -> void:
 		var delta := root.get_process_delta_time()
 		elapsed += delta
 		since += delta
-		# AVERAGED OVER THE WINDOW, not read once at the end of it. The monitor reports the LAST
-		# frame, and a single frame either did or did not contain a dig commit -- sampled once every
-		# ten seconds that is a coin toss printed to two decimal places, which is what the first
-		# version of this probe did and why its rows bounced between 29 and 92.
+		# Godot publishes the maximum over its last reporting second, not the last tick.
 		var phys := Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
 		phys_total += phys
 		phys_max = maxf(phys_max, phys)
 		frames += 1
-		if since < SAMPLE:
+		if since < SAMPLE and elapsed < seconds:
 			continue
 		since = 0.0
 		var seg_all := 0
@@ -69,6 +87,17 @@ func _initialize() -> void:
 			scenario, elapsed, phys_total / float(maxi(frames, 1)), phys_max, frames,
 			network.segment_count(1),
 		])
+		if not meter.samples.is_empty():
+			meter.samples.sort()
+			var sum := 0.0
+			for value: float in meter.samples:
+				sum += value
+			print("script ticks=%d avg=%.2f p95=%.2f p99=%.2f max=%.2f ms" % [
+				meter.samples.size(), sum / meter.samples.size(),
+				meter.samples[int((meter.samples.size() - 1) * 0.95)],
+				meter.samples[int((meter.samples.size() - 1) * 0.99)], meter.samples[-1],
+			])
+			meter.samples.clear()
 		if not cut and elapsed >= CUT_AT:
 			cut = true
 			_apply(scenario, scene)

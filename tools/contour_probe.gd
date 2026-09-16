@@ -29,12 +29,29 @@ func _initialize() -> void:
 	_check_angled_wall_is_straight()
 	_check_wall_is_welded()
 	_check_rim_stands_back()
+	_check_full_floor()
 
 	if _failures == 0:
 		print("CONTOUR OK -- area, winding, closure, seams, straightness, weld and rim all hold.")
 	else:
 		print("CONTOUR: %d failure(s)." % _failures)
 	quit(1 if _failures > 0 else 0)
+
+
+func _check_full_floor() -> void:
+	var n := TunnelContour.CHUNK_TEXELS
+	var samples := PackedFloat32Array()
+	samples.resize((n + 1) * (n + 1))
+	samples.fill(1.0)
+	var contour := TunnelContour.new()
+	contour.build(samples, n, Vector2.ZERO, WALL_TOP, BARRIER_TOP)
+	var expected := pow(float(n) * TunnelContour.TEXEL, 2)
+	if absf(_area_of(contour.floors) - expected) > 0.0001:
+		_fail("FULL_FLOOR", "floor strips changed walkable area")
+	if not contour.walls.is_empty() or contour.collision != contour.floors:
+		_fail("FULL_FLOOR", "an open field gained a wall or lost matching collision")
+	if contour.floors.size() > n * 6:
+		_fail("FULL_FLOOR", "flat interior still emits triangles per texel")
 
 
 func _fail(label: String, detail: String) -> void:

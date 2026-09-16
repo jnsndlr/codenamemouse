@@ -239,6 +239,7 @@ var _input: InputFrame = InputFrame.new()
 ## `Bot` it happened to be replacing, and a mouse's authority can change mid-match when somebody
 ## disconnects and a bot takes their chair.
 var _puppet: bool = false
+var _replica_speed: float = 0.0
 ## Where the server last said this mouse was, and where it said so before that. Two, because one
 ## is a position to snap to and two are something to move between.
 var _pose_from: Vector3 = Vector3.ZERO
@@ -621,6 +622,8 @@ func get_facing_direction() -> Vector3:
 
 
 func get_horizontal_speed() -> float:
+	if _puppet:
+		return _replica_speed
 	return Vector3(velocity.x, 0.0, velocity.z).length()
 
 
@@ -1210,7 +1213,8 @@ func is_puppet() -> bool:
 ## The previous target becomes the starting point rather than the mouse's CURRENT position, so a
 ## packet that arrives late does not restart the blend from wherever the interpolation had got to
 ## -- that turns every hiccup into a visible stutter backwards.
-func apply_pose(at: Vector3, facing: float, flags: int, health: int) -> void:
+func apply_pose(at: Vector3, facing: float, flags: int, health: int,
+		stamina: int = 255, speed: float = 0.0, boosting: bool = false) -> void:
 	# CLASS FIRST, AND THE ORDER IS THE WHOLE REASON IT IS ON THIS LINE. `set_class` is what sets
 	# `max_health`, and the health below is a fraction of it -- so applying them the other way
 	# round scales a Sneak's ratio by a Brute's maximum for one tick every time somebody swaps.
@@ -1224,6 +1228,9 @@ func apply_pose(at: Vector3, facing: float, flags: int, health: int) -> void:
 	# packet cannot say "62 points" and be understood -- but every end knows what this mouse's
 	# maximum is, and a fraction of it means the same thing everywhere.
 	_health = (health / 255.0) * max_health
+	_stamina = (stamina / 255.0) * sprint_seconds
+	_replica_speed = speed
+	_boost_left = FADE_POSE_HOLD if boosting else 0.0
 	_pose_from = _pose_to if _pose_blend < 1.0 else global_position
 	_facing_from = _facing_to if _pose_blend < 1.0 else _facing
 	_pose_to = at

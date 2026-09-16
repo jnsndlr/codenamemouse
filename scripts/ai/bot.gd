@@ -225,6 +225,12 @@ func get_intent() -> String:
 	return digging if _driven and not digging.is_empty() else _intent
 
 
+## Spread roster decisions across the thinking interval instead of making every bot route,
+## reclass and start digging on the same physics tick. Each seat keeps the same decision rate.
+func phase_thinking(fraction: float) -> void:
+	_since_think = clampf(fraction, 0.0, 1.0) * think_seconds
+
+
 func _control(delta: float) -> void:
 	if _director == null:
 		_director = get_tree().get_first_node_in_group(MatchDirector.DIRECTOR_GROUP) as MatchDirector

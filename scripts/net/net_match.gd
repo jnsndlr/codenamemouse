@@ -71,6 +71,8 @@ var _tick: int = 0
 var _cheese_tick: int = 0
 var _barricade_tick: int = 0
 var _cant_tick: int = 0
+var _dust_tick: int = 0
+var _dust_replicas: Dictionary = {}
 var _tunnels: TunnelNetwork
 var _sight: TunnelSight
 ## The per-crew filter, on the server. See `tunnel_view.gd` -- it is the one place that decides
@@ -323,6 +325,7 @@ func _physics_process(delta: float) -> void:
 		if _since_snapshot >= 1.0 / SNAPSHOT_HZ:
 			_since_snapshot = 0.0
 			_broadcast_snapshot()
+			_send_dust()
 			_received += 1
 		_since_state += delta
 		if _since_state >= 1.0 / MATCH_HZ:
@@ -693,11 +696,20 @@ func _broadcast_snapshot() -> void:
 				mouse.global_position,
 				mouse.get_facing_angle(),
 				flags,
-				int(mouse.get_health_ratio() * 255.0)
+				int(mouse.get_health_ratio() * 255.0),
+				int(mouse.get_stamina_ratio() * 255.0),
+				mouse.get_horizontal_speed(),
+				mouse.is_boosting()
 			)
 
 	# Unreliable, and see `net_message.gd` for why that is a decision rather than a default.
-	_transport.broadcast(shot.to_bytes(), false)
+	# The world poses are common; only the receiving player gets their stamina.
+	for peer: int in roster.peers():
+		if peer == _net.local_peer():
+			continue
+		var seat := roster.seat_of(peer)
+		if not seat.is_empty():
+			_transport.send(peer, shot.to_bytes(Snapshot.key_for(seat[0], seat[1], roster.crew_size())), false)
 
 
 ## The scoreboard: everything on the HUD that is not a mouse.
@@ -813,6 +825,80 @@ func _send_barricades() -> void:
 				rock.hits_left(), rock.hits_to_clear
 			)
 		_transport.send(peer, state.to_bytes(), false)
+
+
+## Clouds in unknown underground cells stay private, just like barricades.
+func _send_dust() -> void:
+	if _tunnels == null:
+		return
+	var roster := _net.seats()
+	_dust_tick += 1
+	for peer: int in roster.peers():
+		if peer == _net.local_peer():
+			continue
+		var seat := roster.seat_of(peer)
+		if seat.is_empty():
+			continue
+		var state := _dust_for(seat[0], roster.crew_size())
+		state.revision = _dust_tick
+		_transport.send(peer, state.to_bytes(), false)
+
+
+func _dust_for(team: int, crew_size: int) -> DustState:
+	var state := DustState.new()
+	for node: Node in get_tree().get_nodes_in_group(DustScreen.SCREEN_GROUP):
+		var screen := node as DustScreen
+		if screen == null or screen.is_queued_for_deletion() or screen.age() >= screen.seconds:
+			continue
+		if screen.plane > 0 and (_sight == null or not _sight.knows(team, screen.plane, _tunnels.world_to_cell(screen.global_position))):
+			continue
+		var cloud := DustState.Cloud.new()
+		cloud.id = screen.get_instance_id()
+		cloud.owner = _key_of(screen.owner_mouse, crew_size) if is_instance_valid(screen.owner_mouse) else 255
+		cloud.at = screen.global_position
+		cloud.plane = screen.plane
+		cloud.radius = screen.radius
+		cloud.age = screen.age()
+		cloud.seconds = screen.seconds
+		state.clouds.append(cloud)
+		if state.clouds.size() >= DustState.MAX_CLOUDS:
+			break
+	return state
+
+
+func _apply_dust(bytes: PackedByteArray) -> void:
+	var state := DustState.from_bytes(bytes)
+	if state == null or state.revision <= _dust_tick or _tunnels == null:
+		return
+	_dust_tick = state.revision
+	var seen := {}
+	for cloud: DustState.Cloud in state.clouds:
+		seen[cloud.id] = true
+		var screen: DustScreen = _dust_replicas.get(cloud.id)
+		if not is_instance_valid(screen) or screen.is_queued_for_deletion():
+			screen = null
+			# Reuse the caster's immediate local prediction instead of drawing two clouds.
+			var owner := _puppet_for(cloud.owner)
+			if owner != null:
+				for node: Node in get_tree().get_nodes_in_group(DustScreen.SCREEN_GROUP):
+					var predicted := node as DustScreen
+					if predicted != null and not predicted.replica and not predicted.is_queued_for_deletion() and predicted.owner_mouse == owner and predicted.plane == cloud.plane:
+						screen = predicted
+						break
+			if screen == null:
+				var seed_value := int(cloud.at.x * 100.0) * 73856093 ^ int(cloud.at.z * 100.0)
+				screen = DustScreen.raise(_tunnels, cloud.at, seed_value, cloud.plane, cloud.radius)
+			screen.replica = true
+			_dust_replicas[cloud.id] = screen
+		screen.global_position = cloud.at
+		screen.seconds = cloud.seconds
+		screen.adopt_age(cloud.age)
+	for id: int in _dust_replicas.keys():
+		if not seen.has(id):
+			var stale: DustScreen = _dust_replicas[id]
+			if is_instance_valid(stale):
+				stale.queue_free()
+			_dust_replicas.erase(id)
 
 
 ## Every mark this PLAYER can read, not every mark their crew can read. Own cant is crew
@@ -1345,7 +1431,7 @@ func _apply_snapshot(bytes: PackedByteArray) -> void:
 	for pose: Snapshot.Pose in shot.poses:
 		var mouse := _puppet_for(pose.key)
 		if mouse != null:
-			mouse.apply_pose(pose.position, pose.facing, pose.flags, pose.health)
+			mouse.apply_pose(pose.position, pose.facing, pose.flags, pose.health, pose.stamina, pose.speed, pose.boosting)
 			_applied += 1
 			if (pose.flags & Snapshot.Flag.SWINGING) != 0:
 				_swings += 1
@@ -1659,6 +1745,9 @@ func _on_packet(from: int, bytes: PackedByteArray) -> void:
 		NetMessage.Kind.SONAR_MARKS:
 			if not _net.is_server() and from == NetTransport.SERVER_ID and _tunnels != null:
 				_apply_cant(bytes)
+		NetMessage.Kind.DUST:
+			if not _net.is_server() and from == NetTransport.SERVER_ID:
+				_apply_dust(bytes)
 		NetMessage.Kind.SONAR_ECHO:
 			if not _net.is_server() and from == NetTransport.SERVER_ID:
 				_apply_sonar_echo(bytes)

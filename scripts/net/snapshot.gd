@@ -18,9 +18,8 @@ extends RefCounted
 ## goes out four times a second instead of thirty.
 ##
 ## WHAT IS NOT IN HERE, deliberately: the tunnel network. That is step 5's filtered payload and
-## putting it in a broadcast would be the exact leak M5 spent a milestone preventing. **This packet
-## goes to everyone unfiltered, so nothing secret may ever be added to it.** That sentence is the
-## whole safety argument for the file.
+## sending it to every peer would leak hidden tunnels. Poses carry public motion and health;
+## to_bytes(viewer_key) includes stamina only for that viewer and masks every other seat.
 
 ## Position, facing, health, and the handful of bits that change how a mouse is drawn.
 class Pose:
@@ -33,6 +32,9 @@ class Pose:
 	## client told "62 health" would have to know whether that is most of a Brute or nearly a dead
 	## Sneak.
 	var health: int = 255
+	var stamina: int = 255
+	var speed: float = 0.0
+	var boosting: bool = false
 
 	func _init(seat_key: int = 0, at: Vector3 = Vector3.ZERO, angle: float = 0.0,
 			bits: int = 0, hp: int = 255) -> void:
@@ -109,8 +111,8 @@ const PLANE_MASK: int = 0b1100
 const CLASS_SHIFT: int = 4
 const CLASS_MASK: int = 0b110000
 
-## Bytes per pose: key, three floats, facing, flags, health.
-const POSE_SIZE: int = 1 + 4 * 4 + 1 + 1
+## Bytes per pose: key, position, facing, flags, health, private stamina, speed, boost.
+const POSE_SIZE: int = 1 + 4 * 4 + 1 + 1 + 1 + 4 + 1
 const HEADER_SIZE: int = 1 + 4 + 1
 
 var tick: int = 0
@@ -121,11 +123,17 @@ static func key_for(side: int, seat: int, crew_size: int) -> int:
 	return side * crew_size + seat
 
 
-func add(key: int, at: Vector3, facing: float, flags: int, health: int) -> void:
-	poses.append(Pose.new(key, at, facing, flags, health))
+func add(key: int, at: Vector3, facing: float, flags: int, health: int,
+		stamina: int = 255, speed: float = 0.0, boosting: bool = false) -> void:
+	var pose := Pose.new(key, at, facing, flags, health)
+	pose.stamina = stamina
+	pose.speed = speed
+	pose.boosting = boosting
+	poses.append(pose)
 
 
-func to_bytes() -> PackedByteArray:
+## Stamina is private to the receiving seat. Other poses carry a neutral full tank.
+func to_bytes(viewer_key: int = -1) -> PackedByteArray:
 	var out := NetMessage.head(NetMessage.Kind.SNAPSHOT)
 	out.put_u32(tick)
 	out.put_u8(poses.size())
@@ -137,6 +145,9 @@ func to_bytes() -> PackedByteArray:
 		out.put_float(pose.facing)
 		out.put_u8(pose.flags)
 		out.put_u8(pose.health)
+		out.put_u8(pose.stamina if pose.key == viewer_key else 255)
+		out.put_float(pose.speed)
+		out.put_u8(1 if pose.boosting else 0)
 	return out.data_array
 
 
@@ -161,5 +172,11 @@ static func from_bytes(bytes: PackedByteArray) -> Snapshot:
 		var at := Vector3(into.get_float(), into.get_float(), into.get_float())
 		var facing := into.get_float()
 		var flags := into.get_u8()
-		shot.add(key, at, facing, flags, into.get_u8())
+		var health := into.get_u8()
+		var stamina := into.get_u8()
+		var speed := into.get_float()
+		var boosting := into.get_u8()
+		if not at.is_finite() or not is_finite(facing) or not is_finite(speed) or speed < 0.0 or boosting > 1:
+			return null
+		shot.add(key, at, facing, flags, health, stamina, speed, boosting == 1)
 	return shot

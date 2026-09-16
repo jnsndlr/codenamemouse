@@ -21,7 +21,9 @@ var _failures: int = 0
 
 func _initialize() -> void:
 	_check_round_trip()
+	_check_untrusted_values()
 	await _check_driving()
+	await _check_remote_driving()
 
 	print("")
 	if _failures > 0:
@@ -136,6 +138,56 @@ func _check_driving() -> void:
 
 	player.queue_free()
 	await physics_frame
+
+
+func _check_untrusted_values() -> void:
+	print("-- untrusted floats cannot escape the movement envelope")
+	for field: String in ["move", "aim_point", "look"]:
+		for value: float in [NAN, INF, -INF]:
+			var bad := InputFrame.new()
+			bad.set(field, Vector2(value, 0) if field == "move" else Vector3(0, value, 0))
+			_check("reject nonfinite %s" % field, InputFrame.from_bytes(bad.to_bytes()) == null)
+	for move: Vector2 in [Vector2(0, 100), Vector2(100, 100), Vector2(3e38, -3e38)]:
+		var sent := InputFrame.new()
+		sent.move = move
+		var got := InputFrame.from_bytes(sent.to_bytes())
+		_check("oversized movement is finite and unit bounded", got != null and got.move.is_finite() and got.move.length() <= 1.00001)
+	var far := InputFrame.new()
+	far.aim_point.x = 3e38
+	_check("reject aim beyond safe grid coordinates", InputFrame.from_bytes(far.to_bytes()) == null)
+
+
+func _check_remote_driving() -> void:
+	print("-- remote input survives packet bursts and expires after consumption")
+	var player := Player.new()
+	player.set_remote(true)
+	# No scene or controls: these checks are about which frame all consumers receive.
+	var click := InputFrame.new()
+	click.move = Vector2.UP
+	click.aim_point = Vector3(3, 0, 4)
+	click.set_pressed(InputFrame.Action.ATTACK, true)
+	player.drive(click)
+	var latest := InputFrame.new()
+	latest.move = Vector2.RIGHT
+	player.drive(latest)
+	var first := player.input()
+	_check("idle packet cannot overwrite pending click", first.is_pressed(InputFrame.Action.ATTACK))
+	_check("click retains its aim", first.aim_point == click.aim_point)
+	_check("all consumers in a tick see the same frame", player.input() == first)
+	player.drive(click)
+	_check("packet arriving during a tick cannot change its frame", player.input() == first)
+	await physics_frame
+	await process_frame
+	_check("second click is consumed on the next tick", player.input().is_pressed(InputFrame.Action.ATTACK))
+	await physics_frame
+	await process_frame
+	_check("a consumed click cannot repeat", not player.input().is_pressed(InputFrame.Action.ATTACK))
+	_check("continuous movement survives without new packets", player.input().move == click.move)
+	player._remote_received_at = Time.get_ticks_msec() - Player.REMOTE_TIMEOUT_MS - 1
+	await physics_frame
+	await process_frame
+	_check("silence releases movement", player.input().move == Vector2.ZERO)
+	player.free()
 
 
 func _check(what: String, ok: bool) -> void:

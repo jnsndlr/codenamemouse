@@ -89,6 +89,7 @@ enum Kind {
 	SONAR_MARKS,
 	SONAR_ECHO,
 	START,
+	DUST,
 }
 
 

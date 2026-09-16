@@ -94,11 +94,8 @@ func kick() -> bool:
 	# stronger ability than the one being built.
 	var at := _player.global_position
 
-	# THE CLOUD GOES UP ON EVERY MACHINE, above the puppet check, which is the placement [Slam],
-	# [Sonar] and [Fade] all argue for -- and it carries further here than in any of them. This is
-	# the panic button: a client whose screen appeared a third of a second late, after a pose came
-	# back over the wire, would be a player who pressed X, watched nothing happen, and got scruffed.
-	# The dust is a thing that happened to the world and the world is on every machine.
+	# Predict the cloud immediately for the caster. The server also creates it here,
+	# then NetMatch replicates it to other clients and reconciles this prediction.
 	_raise_screen(at)
 	_cooldown_left = cooldown
 
@@ -118,4 +115,6 @@ func _raise_screen(at: Vector3) -> void:
 	# last bit between two machines that agree about everything a player could see. The same line
 	# [Slam] uses, for the same reason.
 	var seed_value := int(at.x * 100.0) * 73856093 ^ int(at.z * 100.0)
-	DustScreen.raise(parent, at, seed_value, _player.get_plane(), radius)
+	var screen := DustScreen.raise(parent, at, seed_value, _player.get_plane(), radius)
+	if screen != null:
+		screen.owner_mouse = _player

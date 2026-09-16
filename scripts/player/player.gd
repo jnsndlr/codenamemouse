@@ -51,6 +51,16 @@ var _captured_on: int = -1
 ## permanent for a mouse that must never read this machine's input at all.
 var _remote: bool = false
 
+# Continuous intent takes the newest packet. Edges keep their order and their aim until a
+# physics tick consumes them; later idle packets must not erase a click. Bound both backlog
+# and silence so a stalled or flooding peer cannot retain control indefinitely.
+const REMOTE_EDGE_LIMIT: int = 32
+const REMOTE_TIMEOUT_MS: int = 500
+var _remote_latest: InputFrame = InputFrame.new()
+var _remote_edges: Array[InputFrame] = []
+var _remote_received_at: int = -1
+var _remote_captured_on: int = -1
+
 
 func _ready() -> void:
 	super()
@@ -84,10 +94,21 @@ func get_aim_point() -> Vector3:
 ## Never capture; only ever be driven. For a seat whose human is somewhere else.
 func set_remote(on: bool) -> void:
 	_remote = on
+	_remote_edges.clear()
+	_remote_latest = InputFrame.new()
+	_remote_received_at = -1
+	_remote_captured_on = -1
 
 
 func input() -> InputFrame:
 	if _remote:
+		var tick := Engine.get_physics_frames()
+		if tick != _remote_captured_on:
+			_remote_captured_on = tick
+			if _remote_received_at < 0 or Time.get_ticks_msec() - _remote_received_at > REMOTE_TIMEOUT_MS:
+				_remote_edges.clear()
+				_remote_latest.clear()
+			_input = _remote_latest.duplicate_frame() if _remote_edges.is_empty() else _remote_edges.pop_front()
 		return _input
 	var now := Engine.get_physics_frames()
 	if now != _captured_on:
@@ -107,6 +128,13 @@ func input() -> InputFrame:
 ## the shape a listen-server host needs the day it drives a seat whose player has dropped. The
 ## capture resumes by itself next tick, because `_captured_on` stops matching.
 func drive(frame: InputFrame) -> void:
+	if _remote:
+		_remote_received_at = Time.get_ticks_msec()
+		_remote_latest = frame.duplicate_frame() if frame != null else InputFrame.new()
+		if _remote_latest._pressed != 0 and _remote_edges.size() < REMOTE_EDGE_LIMIT:
+			_remote_edges.append(_remote_latest.duplicate_frame())
+		_remote_latest._pressed = 0
+		return
 	super(frame)
 	_captured_on = Engine.get_physics_frames()
 	_aim_point = _input.aim_point

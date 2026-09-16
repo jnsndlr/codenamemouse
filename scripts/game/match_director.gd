@@ -471,6 +471,9 @@ func _local_is_server() -> bool:
 
 func _remember_seat(mouse: Mouse, side: int, seat: int) -> void:
 	_seated["%d:%d" % [side, seat]] = mouse
+	if mouse is Bot:
+		var crew := _seats().crew_size()
+		(mouse as Bot).phase_thinking(float(side * crew + seat) / float(crew * 2))
 
 
 func nest_of(side: int) -> Nest:

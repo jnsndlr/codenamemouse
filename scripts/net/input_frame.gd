@@ -173,6 +173,17 @@ static func from_bytes(bytes: PackedByteArray) -> InputFrame:
 	frame.look = Vector3(into.get_float(), into.get_float(), into.get_float())
 	frame._held = into.get_u16()
 	frame._pressed = into.get_u16()
+	# Length alone does not make client input safe for physics or grid-coordinate conversion.
+	if not frame.move.is_finite() or not frame.aim_point.is_finite() or not frame.look.is_finite():
+		return null
+	if maxf(absf(frame.aim_point.x), maxf(absf(frame.aim_point.y), absf(frame.aim_point.z))) > 100000.0:
+		return null
+	# Scale before measuring length so even the largest finite float cannot overflow the norm.
+	frame.move /= maxf(1.0, maxf(absf(frame.move.x), absf(frame.move.y)))
+	frame.move = frame.move.limit_length(1.0)
+	frame.look.y = 0.0
+	frame.look /= maxf(1.0, maxf(absf(frame.look.x), absf(frame.look.z)))
+	frame.look = frame.look.limit_length(1.0)
 	return frame
 
 

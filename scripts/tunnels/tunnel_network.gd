@@ -3349,11 +3349,8 @@ func is_cut_away(plane: int, cell: Vector2i) -> bool:
 
 ## Redraw a whole plane's cutaway from scratch, for when WHO IS LOOKING changes.
 ##
-## `[REVISED]` DONE BY DIRTYING EVERY OCCUPIED CHUNK rather than by walking cells, because the
-## cutaway is no longer a set of texels that can be flipped one at a time -- it is a distance
-## field, and the value at a texel depends on every stroke near it. Marking the chunks and letting
-## the ordinary rebuild run is the same code path a dig takes, which is the point: there is one
-## description of how the field is computed, so a fog change and a dig cannot disagree about it.
+## Recompute each occupied chunk with the same field rules used by digging, then repaint
+## its mask. Visibility changes leave the physical floor and collision geometry intact.
 ##
 ## `[REVISED]` **AND IT IS NO LONGER WHAT THE FOG CALLS.** A new crew to draw for genuinely changes
 ## every chunk on the layer, and that is what this is still for. A cell coming into or out of
@@ -3370,9 +3367,9 @@ func _rebuild_mask(plane: int) -> void:
 	# composition cannot notice for itself, because no earth moved. See [member _knowledge_age].
 	_knowledge_age[plane] += 1
 	for key: int in _chunk_cache[plane]:
-		_dirty_chunks[plane][key] = true
 		_committed_field[plane].erase(key)
-	_rebuild_walls(plane)
+		_rebuild_chunk(plane, key, true)
+	_relight(plane)
 
 
 ## The same repaint, for the cells whose visibility actually moved.
@@ -3397,6 +3394,7 @@ func _remask_cells(plane: int, cells: Array) -> void:
 	if plane < 0 or plane >= _mask_images.size() or cells.is_empty():
 		return
 	_knowledge_age[plane] += 1
+	var affected := {}
 	var reach := (
 		SEG_LENGTH * 0.5 + SEG_HALF_WIDTH + TunnelContour.TEXEL * 2.0
 		+ float(_cull_pad()) * TunnelContour.TEXEL
@@ -3409,8 +3407,9 @@ func _remask_cells(plane: int, cells: Array) -> void:
 			for cx in range(low.x, high.x + 1):
 				if cx < 0 or cy < 0 or cx >= FIELD_CHUNKS or cy >= FIELD_CHUNKS:
 					continue
-				_dirty_chunks[plane][cy * FIELD_CHUNKS + cx] = true
-	_rebuild_walls(plane)
+				affected[cy * FIELD_CHUNKS + cx] = true
+	for key: int in affected:
+		_rebuild_chunk(plane, key, true)
 
 
 ## What the viewing crew can currently make out of somebody else's network on this plane. Pushed
@@ -3954,7 +3953,7 @@ static func _face_normals(triangles: PackedVector3Array) -> PackedVector3Array:
 ## earth the size of a few texels that a player can neither use nor get rid of. Filtering the field
 ## between composing it and contouring it is the one place that can be done once and be true of the
 ## walls, the collision and the cutaway together.
-func _rebuild_chunk(plane: int, key: int) -> void:
+func _rebuild_chunk(plane: int, key: int, mask_only: bool = false) -> void:
 	var cx := key % FIELD_CHUNKS
 	var cy := key / FIELD_CHUNKS
 	var n := TunnelContour.CHUNK_TEXELS
@@ -4171,6 +4170,12 @@ func _rebuild_chunk(plane: int, key: int) -> void:
 		_cull_islands(plane, seen, stone_mask, wide, origin, pad, n)
 	else:
 		seen = shape
+
+	# Sight changes the lid, never the physical earth. Reuse the field rules but do not
+	# regenerate triangles, upload meshes, or invalidate physics shapes for a fog update.
+	if mask_only:
+		_blit(plane, _inner(seen, wide, pad, span), span, base_x, base_y, n)
+		return
 
 	var contour := TunnelContour.new()
 	var chunk_origin := Vector2(

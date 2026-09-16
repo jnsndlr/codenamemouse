@@ -129,6 +129,17 @@ var radius: float = 4.0
 var plane: int = 0
 var _age: float = 0.0
 var _puffs: Array[Dictionary] = []
+var owner_mouse: Mouse
+var replica: bool = false
+
+
+func age() -> float:
+	return _age
+
+
+func adopt_age(value: float) -> void:
+	_age = maxf(_age, value)
+	_process(0.0)
 
 
 ## Throw a screen at `at`. `seed_value` should be derived from the position so both ends of a wire
