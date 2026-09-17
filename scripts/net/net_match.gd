@@ -198,6 +198,7 @@ func _ready() -> void:
 
 	_transport = _net.transport()
 	_transport.packet_received.connect(_on_packet)
+	_transport.peer_left.connect(_on_peer_left)
 	_net.seating_changed.connect(_on_seating_changed)
 
 	# Found by group rather than wired, like everything else that has to be reachable from a node
@@ -1306,6 +1307,7 @@ func _apply_earth(bytes: PackedByteArray) -> void:
 	var count := into.get_u8()
 	if bytes.size() != 2 + count * TunnelView.ENTRY_SIZE:
 		return
+	var segments: Array[Dictionary] = []
 	for i: int in range(count):
 		var kind := into.get_u8()
 		var plane := into.get_u8()
@@ -1314,9 +1316,13 @@ func _apply_earth(bytes: PackedByteArray) -> void:
 		var at := Vector2i(into.get_16(), into.get_16())
 		var extra := into.get_u8()
 		var bits := into.get_u8()
+		if kind != TunnelView.Kind.SEGMENT and not segments.is_empty():
+			_tunnels.adopt_segments(segments)
+			segments.clear()
 		match kind:
 			TunnelView.Kind.SEGMENT:
-				_tunnels.adopt_segment(plane, TunnelNetwork.fixed_origin(at), extra, bits)
+				segments.append({"plane": plane, "origin": TunnelNetwork.fixed_origin(at),
+					"angle": extra, "bits": bits})
 			TunnelView.Kind.SHAFT:
 				_tunnels.adopt_shaft(plane, at, bits)
 			TunnelView.Kind.ROCK:
@@ -1342,6 +1348,8 @@ func _apply_earth(bytes: PackedByteArray) -> void:
 				_tunnels.forget_shoring(plane, at)
 		_earth_taken += 1
 
+	if not segments.is_empty():
+		_tunnels.adopt_segments(segments)
 
 ## Which chair a mouse is sitting in, as a snapshot key, or `NOBODY`.
 ##
@@ -1619,6 +1627,13 @@ func _puppet_for(key: int) -> Mouse:
 
 
 # ----------------------------------------------------------------------------------- the seating
+
+
+## Per-peer history belongs to a connection, not to the lifetime of this arena.
+func _on_peer_left(peer: int) -> void:
+	_started.erase(peer)
+	if _view != null:
+		_view.forget_peer(peer)
 
 
 func _on_seating_changed() -> void:

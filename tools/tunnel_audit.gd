@@ -1961,25 +1961,26 @@ func _check_index_exact() -> void:
 ## earth behind it, and a fin is buried well inside a stroke and reads strongly negative.
 func _check_no_interior_faces() -> void:
 	for plane in range(1, TunnelNetwork.PLANE_COUNT):
-		var walls := (_network._walls[plane] as MeshInstance3D).mesh as ArrayMesh
-		if walls == null:
-			continue
-		var faces: PackedVector3Array = walls.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
-		# ASKED OF THE FOOT OF EACH FACE. A face is a strip of rows (TunnelContour.WALL_RINGS) and
-		# every row above the first is deliberately set BACK from the outline, into the earth,
-		# which this check has no quarrel with -- it is hunting for faces standing on the wrong
-		# side of it. The bottom row is the one on the outline and the one worth measuring.
-		for t in range(0, faces.size(), TunnelContour.face_verts()):
-			var middle := (faces[t] + faces[t + 1]) * 0.5
-			var at := Vector2(middle.x, middle.z)
-			var distance := _distance_to_tunnel(plane, at)
-			# One texel of slack. The contour interpolates the crossing point along a texel edge,
-			# so a face can sit a fraction of a texel off the true surface and be perfectly correct.
-			if distance < -TunnelContour.TEXEL:
-				_fail("NO_INTERIOR_FACES",
-					"plane %d has a wall at %.2f,%.2f standing %.2fm inside the tunnel"
-					% [plane, middle.x, middle.z, -distance])
-				return
+		for instance in _network._walls[plane].get_children():
+			var walls := (instance as MeshInstance3D).mesh as ArrayMesh
+			if walls == null:
+				continue
+			var faces: PackedVector3Array = walls.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+			# ASKED OF THE FOOT OF EACH FACE. A face is a strip of rows (TunnelContour.WALL_RINGS) and
+			# every row above the first is deliberately set BACK from the outline, into the earth,
+			# which this check has no quarrel with -- it is hunting for faces standing on the wrong
+			# side of it. The bottom row is the one on the outline and the one worth measuring.
+			for t in range(0, faces.size(), TunnelContour.face_verts()):
+				var middle := (faces[t] + faces[t + 1]) * 0.5
+				var at := Vector2(middle.x, middle.z)
+				var distance := _distance_to_tunnel(plane, at)
+				# One texel of slack. The contour interpolates the crossing point along a texel edge,
+				# so a face can sit a fraction of a texel off the true surface and be perfectly correct.
+				if distance < -TunnelContour.TEXEL:
+					_fail("NO_INTERIOR_FACES",
+						"plane %d has a wall at %.2f,%.2f standing %.2fm inside the tunnel"
+						% [plane, middle.x, middle.z, -distance])
+					return
 
 
 ## Distance from a point to the nearest stroke surface: negative inside, zero on the wall.

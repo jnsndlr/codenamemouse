@@ -1,0 +1,55 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+Metal 4.0 - Forward+ - Using Device #0: Apple - Apple M5 Pro (Apple9)
+GROW cycle=0 strokes=40 segments=40 operation_mean=3.20/p95=5.75/p99=8.20/max=9.18ms frame_mean=7.56/p95=8.68/p99=10.10/max=13.06ms nodes=2144 resources=125 static_mb=132.6 lights=7
+STAGES cycle=0 strokes=40 total_usec={ "contour": 844807, "mask": 21597, "meshes": 95795, "collision": 16163, "lights": 8569 } draws=1478 primitives=71001
+GROW cycle=0 strokes=80 segments=80 operation_mean=5.33/p95=9.05/p99=11.57/max=12.20ms frame_mean=7.23/p95=10.21/p99=12.67/max=13.31ms nodes=2155 resources=125 static_mb=134.2 lights=10
+STAGES cycle=0 strokes=80 total_usec={ "contour": 1355463, "mask": 21029, "meshes": 218613, "collision": 29332, "lights": 23628 } draws=1478 primitives=80617
+GROW cycle=0 strokes=120 segments=120 operation_mean=5.12/p95=9.22/p99=12.03/max=13.31ms frame_mean=7.07/p95=10.28/p99=13.18/max=14.37ms nodes=2159 resources=125 static_mb=135.9 lights=14
+STAGES cycle=0 strokes=120 total_usec={ "contour": 1173777, "mask": 20901, "meshes": 322873, "collision": 32226, "lights": 37467 } draws=1478 primitives=89835
+GROW cycle=0 strokes=160 segments=159 operation_mean=6.72/p95=11.21/p99=14.80/max=15.22ms frame_mean=8.07/p95=12.38/p99=15.89/max=16.35ms nodes=2172 resources=125 static_mb=137.4 lights=19
+STAGES cycle=0 strokes=160 total_usec={ "contour": 1513518, "mask": 19943, "meshes": 475102, "collision": 35873, "lights": 52791 } draws=1478 primitives=98857
+GROW cycle=0 strokes=200 segments=198 operation_mean=6.90/p95=11.70/p99=14.24/max=17.01ms frame_mean=8.14/p95=12.80/p99=15.34/max=18.10ms nodes=2178 resources=125 static_mb=139.0 lights=21
+STAGES cycle=0 strokes=200 total_usec={ "contour": 1332527, "mask": 19724, "meshes": 696625, "collision": 35202, "lights": 71381 } draws=1478 primitives=108265
+GROW cycle=0 strokes=240 segments=238 operation_mean=7.12/p95=14.62/p99=18.33/max=19.28ms frame_mean=8.35/p95=15.66/p99=19.44/max=20.44ms nodes=2189 resources=125 static_mb=140.3 lights=28
+STAGES cycle=0 strokes=240 total_usec={ "contour": 1428715, "mask": 19168, "meshes": 636648, "collision": 35172, "lights": 94641 } draws=1478 primitives=117257
+GROW cycle=0 strokes=280 segments=277 operation_mean=7.48/p95=12.46/p99=15.38/max=16.77ms frame_mean=8.60/p95=13.58/p99=16.55/max=17.84ms nodes=2195 resources=125 static_mb=142.0 lights=28
+STAGES cycle=0 strokes=280 total_usec={ "contour": 1422587, "mask": 20138, "meshes": 740971, "collision": 34137, "lights": 116717 } draws=1478 primitives=126371
+GROW cycle=0 strokes=320 segments=313 operation_mean=7.57/p95=14.81/p99=18.54/max=20.02ms frame_mean=8.72/p95=15.93/p99=19.68/max=21.10ms nodes=2204 resources=125 static_mb=143.6 lights=35
+STAGES cycle=0 strokes=320 total_usec={ "contour": 1219516, "mask": 19764, "meshes": 944698, "collision": 29692, "lights": 146020 } draws=1478 primitives=135763
+GROW cycle=0 strokes=360 segments=353 operation_mean=9.77/p95=15.18/p99=18.26/max=19.56ms frame_mean=10.91/p95=16.32/p99=19.32/max=20.80ms nodes=2212 resources=125 static_mb=145.2 lights=35
+STAGES cycle=0 strokes=360 total_usec={ "contour": 1699099, "mask": 20687, "meshes": 1132348, "collision": 37794, "lights": 169035 } draws=1478 primitives=144765
+GROW cycle=0 strokes=400 segments=393 operation_mean=8.85/p95=16.93/p99=21.55/max=23.00ms frame_mean=10.00/p95=18.02/p99=22.77/max=24.10ms nodes=2218 resources=125 static_mb=146.7 lights=41
+STAGES cycle=0 strokes=400 total_usec={ "contour": 1143206, "mask": 20821, "meshes": 1348705, "collision": 31249, "lights": 211415 } draws=1478 primitives=154255
+GROW cycle=0 strokes=440 segments=432 operation_mean=10.10/p95=16.38/p99=21.39/max=24.08ms frame_mean=11.25/p95=17.66/p99=22.45/max=25.33ms nodes=2230 resources=125 static_mb=148.4 lights=45
+STAGES cycle=0 strokes=440 total_usec={ "contour": 1646667, "mask": 20374, "meshes": 1214052, "collision": 36596, "lights": 234291 } draws=1478 primitives=163585
+GROW cycle=0 strokes=480 segments=465 operation_mean=9.56/p95=16.45/p99=24.48/max=27.11ms frame_mean=10.78/p95=17.61/p99=25.69/max=28.35ms nodes=2234 resources=125 static_mb=149.9 lights=49
+STAGES cycle=0 strokes=480 total_usec={ "contour": 1400393, "mask": 19976, "meshes": 1264158, "collision": 28455, "lights": 269952 } draws=1478 primitives=172331
+RELIGHT unchanged_layout_replacements=0
+CLEAN cycle=0 nodes=6 orphans=0 resources=110 static_mb=83.1
+GROW cycle=1 strokes=40 segments=40 operation_mean=3.29/p95=5.55/p99=8.67/max=9.60ms frame_mean=6.90/p95=7.35/p99=9.73/max=11.20ms nodes=2144 resources=125 static_mb=132.6 lights=7
+STAGES cycle=1 strokes=40 total_usec={ "contour": 873899, "mask": 20391, "meshes": 95517, "collision": 15900, "lights": 8130 } draws=1478 primitives=71001
+GROW cycle=1 strokes=80 segments=80 operation_mean=5.25/p95=8.74/p99=11.49/max=12.05ms frame_mean=7.19/p95=9.90/p99=12.69/max=13.31ms nodes=2155 resources=125 static_mb=134.2 lights=10
+STAGES cycle=1 strokes=80 total_usec={ "contour": 1339985, "mask": 20530, "meshes": 212087, "collision": 28492, "lights": 23209 } draws=1478 primitives=80617
+GROW cycle=1 strokes=120 segments=120 operation_mean=5.03/p95=9.22/p99=11.91/max=12.33ms frame_mean=7.05/p95=10.48/p99=12.96/max=13.50ms nodes=2159 resources=125 static_mb=135.9 lights=14
+STAGES cycle=1 strokes=120 total_usec={ "contour": 1156835, "mask": 20204, "meshes": 316281, "collision": 30552, "lights": 36793 } draws=1478 primitives=89835
+GROW cycle=1 strokes=160 segments=159 operation_mean=6.67/p95=11.33/p99=15.08/max=15.29ms frame_mean=8.14/p95=12.45/p99=16.19/max=16.46ms nodes=2172 resources=125 static_mb=137.4 lights=19
+STAGES cycle=1 strokes=160 total_usec={ "contour": 1539473, "mask": 20342, "meshes": 430204, "collision": 35404, "lights": 54256 } draws=1478 primitives=98857
+GROW cycle=1 strokes=200 segments=198 operation_mean=6.51/p95=11.21/p99=13.54/max=16.94ms frame_mean=7.89/p95=12.37/p99=14.60/max=18.10ms nodes=2178 resources=125 static_mb=139.0 lights=21
+STAGES cycle=1 strokes=200 total_usec={ "contour": 1367320, "mask": 20009, "meshes": 531943, "collision": 34001, "lights": 73287 } draws=1478 primitives=108265
+GROW cycle=1 strokes=240 segments=238 operation_mean=7.32/p95=15.19/p99=18.93/max=19.84ms frame_mean=8.59/p95=16.28/p99=20.00/max=21.00ms nodes=2189 resources=125 static_mb=140.3 lights=28
+STAGES cycle=1 strokes=240 total_usec={ "contour": 1468579, "mask": 20493, "meshes": 651925, "collision": 35661, "lights": 98336 } draws=1478 primitives=117257
+GROW cycle=1 strokes=280 segments=277 operation_mean=7.54/p95=12.64/p99=15.45/max=17.04ms frame_mean=8.67/p95=13.72/p99=16.61/max=18.20ms nodes=2195 resources=125 static_mb=142.0 lights=28
+STAGES cycle=1 strokes=280 total_usec={ "contour": 1435378, "mask": 19797, "meshes": 748768, "collision": 33093, "lights": 118667 } draws=1478 primitives=126371
+GROW cycle=1 strokes=320 segments=313 operation_mean=7.52/p95=15.18/p99=18.98/max=20.05ms frame_mean=8.73/p95=16.34/p99=20.14/max=21.40ms nodes=2204 resources=125 static_mb=143.6 lights=35
+STAGES cycle=1 strokes=320 total_usec={ "contour": 1254765, "mask": 21113, "meshes": 884069, "collision": 29366, "lights": 150433 } draws=1478 primitives=135763
+GROW cycle=1 strokes=360 segments=353 operation_mean=9.37/p95=14.96/p99=17.61/max=18.55ms frame_mean=10.56/p95=16.16/p99=18.86/max=19.75ms nodes=2212 resources=125 static_mb=145.2 lights=35
+STAGES cycle=1 strokes=360 total_usec={ "contour": 1711347, "mask": 20968, "meshes": 987940, "collision": 36344, "lights": 172767 } draws=1478 primitives=144765
+GROW cycle=1 strokes=400 segments=393 operation_mean=8.02/p95=15.92/p99=20.25/max=21.63ms frame_mean=9.17/p95=17.11/p99=21.33/max=22.76ms nodes=2218 resources=125 static_mb=146.7 lights=41
+STAGES cycle=1 strokes=400 total_usec={ "contour": 1140609, "mask": 20468, "meshes": 1087548, "collision": 29361, "lights": 210645 } draws=1478 primitives=154255
+GROW cycle=1 strokes=440 segments=432 operation_mean=10.17/p95=16.75/p99=21.88/max=23.34ms frame_mean=11.38/p95=17.89/p99=23.11/max=24.51ms nodes=2230 resources=125 static_mb=148.4 lights=45
+STAGES cycle=1 strokes=440 total_usec={ "contour": 1676616, "mask": 21268, "meshes": 1203201, "collision": 36003, "lights": 237090 } draws=1478 primitives=163585
+GROW cycle=1 strokes=480 segments=465 operation_mean=9.58/p95=16.65/p99=24.65/max=25.97ms frame_mean=10.84/p95=17.85/p99=25.86/max=27.15ms nodes=2234 resources=125 static_mb=149.9 lights=49
+STAGES cycle=1 strokes=480 total_usec={ "contour": 1407579, "mask": 20258, "meshes": 1261435, "collision": 27284, "lights": 271406 } draws=1478 primitives=172331
+RELIGHT unchanged_layout_replacements=0
+CLEAN cycle=1 nodes=6 orphans=0 resources=110 static_mb=83.1
+LONG SESSION failures=0 renderer=macOS

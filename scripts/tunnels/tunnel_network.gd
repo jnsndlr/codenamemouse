@@ -574,14 +574,17 @@ var _shored: Array[Dictionary] = []
 ## plane -> {chunk key: {"floors":..., "walls":..., "stone":..., "collision":...}}. The contoured
 ## geometry of each 4m square, cached so a dig re-contours only what it touched.
 ##
-## A CACHE RATHER THAN A SCENE NODE PER CHUNK, which is the cheap half of this design. The
-## expensive part of a rebuild is marching squares, and that is what the chunking makes local; the
-## concatenation of a few dozen cached triangle arrays into one mesh per plane is a native memcpy
-## and costs nothing measurable. Keeping one mesh instance per plane means the node graph, the
-## per-plane materials, the focus visibility rules and the collision body are all exactly as they
-## were -- so a bug in this work cannot express itself as a scene that no longer matches the
-## twenty other files that walk it.
+## Contouring stays chunk-local; drawing batches nearby chunks into bounded render regions.
 var _chunk_cache: Array[Dictionary] = []
+## Opt-in timings for tools/long_session_probe.gd; no clock reads during normal play.
+var profile_rebuilds: bool = false
+var rebuild_profile: Dictionary = {}
+
+## Two 4m chunks per axis: at most four cached chunks are assembled for one region.
+## Keep separate material roots per plane so focus and depth transforms apply to every region.
+const RENDER_REGION_CHUNKS: int = 2
+const RENDER_REGIONS_ACROSS: int = FIELD_CHUNKS / RENDER_REGION_CHUNKS
+var _render_regions: Array[Dictionary] = []
 
 ## Strokes part-way cut, per plane, keyed by the stroke: `{id: {"along": float, "team": int}}`.
 ## See [method carve].
@@ -597,6 +600,12 @@ var _chunk_cache: Array[Dictionary] = []
 ## survives re-aiming, and pointing back at it resumes rather than restarts -- which is what makes
 ## digging continuous rather than a series of half-second commitments you can lose.
 var _carving: Array[Dictionary] = []
+## Index the full stroke once; growing a tip never needs to move its bucket membership.
+const CARVE_BUCKET_METRES: float = 4.0
+var _carve_buckets: Array[Dictionary] = []
+## Last raw fields which produced a chunk's physical geometry and mask. Bounded by chunk count.
+var _chunk_inputs: Array[Dictionary] = []
+var _rock_revision: Array[int] = []
 
 ## The disc [method _thin_earth] searches, flattened for one window width, each offset's length in
 ## metres, and the width and radius the pair was built for.
@@ -627,22 +636,19 @@ var _dirty_chunks: Array[Dictionary] = []
 ## because a rock moving is a rare, large event and a cell-accurate drop there would be a second
 ## description of which cells a lump reaches.
 var _standing_at: Array[Dictionary] = []
-## The contoured floor of each plane. This is what the GridMap used to draw, one tile at a time.
-var _floors: Array[MeshInstance3D] = []
+## Per-plane material roots; their children own the bounded regional meshes.
+var _floors: Array[Node3D] = []
 ## Shaft and entrance marks, one small mesh instance each, parented per plane.
 var _marks: Array[Node3D] = []
 var _mark_nodes: Array[Dictionary] = []
 var _shaft_mesh: ArrayMesh
 var _entrance_mesh: ArrayMesh
-var _walls: Array[MeshInstance3D] = []
+var _walls: Array[Node3D] = []
 ## The faces of the wall that turned out to be stone. Drawn separately from the earth walls only
 ## so they can carry a different material -- geometrically they are the same quads.
-var _rock_faces: Array[MeshInstance3D] = []
-## The same, for the faces standing on bedrock. A third mesh rather than a second material on the
-## same one, because a mesh carries exactly one material per surface and the split is already being
-## made a triangle at a time in [method _split_stone] -- so this costs one more draw call per plane
-## and no new machinery at all.
-var _bedrock_faces: Array[MeshInstance3D] = []
+var _rock_faces: Array[Node3D] = []
+## The same material root for bedrock faces.
+var _bedrock_faces: Array[Node3D] = []
 ## The stone standing above a plane's dirt, one batched surface per plane. Only the rocks tall
 ## enough to break the ground are in it, and only the part of them above the ground is drawn: the
 ## rest is already the wall face the contour wrapped round the stone. Built once, when the layout
@@ -732,6 +738,9 @@ var _mask_images: Array[Image] = []
 var _mask_textures: Array[ImageTexture] = []
 var _lids: Array[MeshInstance3D] = []
 var _lamp_roots: Array[Node3D] = []
+## One current layout per plane; growing carve geometry does not move committed-cell lamps.
+## Include appearance settings so runtime tuning still invalidates the cached layout.
+var _lamp_layouts: Dictionary = {}
 var _focus: int = 0
 var _graph: TunnelGraph
 ## A network this machine does not decide anything about (M7 step 5).
@@ -762,7 +771,11 @@ func _init() -> void:
 		_segments.append({})
 		_cell_segments.append({})
 		_carving.append({})
+		_carve_buckets.append({})
+		_chunk_inputs.append({})
+		_rock_revision.append(0)
 		_chunk_cache.append({})
+		_render_regions.append({})
 		_dirty_chunks.append({})
 		_standing_at.append({})
 		_chunk_shapes.append({})
@@ -806,20 +819,9 @@ func _ready() -> void:
 		_mask_images.append(mask)
 		_mask_textures.append(ImageTexture.create_from_image(mask))
 
-		var floor_mesh := MeshInstance3D.new()
+		var floor_mesh := Node3D.new()
 		floor_mesh.name = "Floor%d" % plane
 		floor_mesh.position = Vector3(0.0, plane_y(plane), 0.0)
-		floor_mesh.material_override = floor_material
-		# NO SHADOW FROM THE EARTH ITSELF. A plane's geometry is only ever drawn while you are
-		# standing in it, and down there the sun does not reach and the lamps cast none by
-		# deliberate choice (see [method _rebuild_lamps]) -- so every triangle of floor, wall,
-		# stone and lump was being drawn into the directional light's shadow cascades to change
-		# nothing whatever. Photographed with and without: the two frames are the same picture.
-		#
-		# AND IT IS FOUR FIFTHS OF THE UNDERGROUND FRAME. The cascades redraw this geometry four
-		# more times, so a hundred thousand triangles of corridor came to half a million primitives
-		# -- on a mesh that also grows for every metre anybody digs, all match.
-		floor_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(floor_mesh)
 		_floors.append(floor_mesh)
 
@@ -829,24 +831,21 @@ func _ready() -> void:
 		add_child(marks)
 		_marks.append(marks)
 
-		var wall := MeshInstance3D.new()
+		var wall := Node3D.new()
 		wall.name = "Walls%d" % plane
 		wall.position = Vector3(0.0, plane_y(plane), 0.0)
-		wall.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(wall)
 		_walls.append(wall)
 
-		var stone := MeshInstance3D.new()
+		var stone := Node3D.new()
 		stone.name = "Rock%d" % plane
 		stone.position = Vector3(0.0, plane_y(plane), 0.0)
-		stone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(stone)
 		_rock_faces.append(stone)
 
-		var hard := MeshInstance3D.new()
+		var hard := Node3D.new()
 		hard.name = "Bedrock%d" % plane
 		hard.position = Vector3(0.0, plane_y(plane), 0.0)
-		hard.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(hard)
 		_bedrock_faces.append(hard)
 
@@ -1725,6 +1724,7 @@ func _rock_fits(rock: RockBody) -> bool:
 ## dozen cells against a class of bug where a broken rock keeps blocking a shaft.
 func _register_rock(rock: RockBody) -> void:
 	var plane := rock.plane
+	_rock_revision[plane] += 1
 	# A sample inside stone is not somewhere to stand (see [method _probe_cell]), so a rock arriving
 	# moves the answer for every cell it reaches. Dropped a plane at a time -- see [member
 	# _standing_at] for why this one is not cell-accurate.
@@ -1748,6 +1748,7 @@ func _register_rock(rock: RockBody) -> void:
 ## And take it out again, before it is put back changed or dropped entirely.
 func _unregister_rock(rock: RockBody) -> void:
 	var plane := rock.plane
+	_rock_revision[plane] += 1
 	# The other half of the pair in [method _register_rock]: stone leaving frees ground to stand on
 	# just as surely as stone arriving takes it away.
 	_standing_at[plane].clear()
@@ -2043,6 +2044,7 @@ func add_rock(plane: int, cell: Vector2i) -> bool:
 	if _cells[plane].has(cell) or _rock[plane].has(cell):
 		return false
 	_rock[plane][cell] = true
+	_rock_revision[plane] += 1
 	rock_changed.emit(plane)
 	return true
 
@@ -2060,6 +2062,7 @@ func remove_rock(plane: int, cell: Vector2i) -> bool:
 	if int(_rock_owner[plane].get(cell, -1)) >= 0:
 		return false
 	_rock[plane].erase(cell)
+	_rock_revision[plane] += 1
 	# The face of the seam was drawn in stone by whichever corridors had run up against it, and it
 	# is ordinary earth now. Cheap, and only ever on a Brute's last swing.
 	_rebuild_walls(plane)
@@ -2547,6 +2550,8 @@ func carve(plane: int, id: int, along: float, team: int = -1) -> void:
 	var before := carved_along(plane, id)
 	if stop <= before:
 		return
+	if not _carving[plane].has(id):
+		_index_carve(plane, id, true)
 	_carving[plane][id] = {"along": stop, "team": team}
 	# ONLY THE STRETCH JUST CUT, which is the difference between carving being affordable and not.
 	# The field behind the tip has not moved, so re-contouring the whole stroke is eight rebuilds of
@@ -2589,7 +2594,39 @@ static func _carve_end(id: int, along: float) -> Vector2:
 ## Forget the part-cut record of a stroke, because the stroke itself now exists. The geometry does
 ## not change -- a finished stroke covers everything its carve did -- so nothing has to be touched.
 func _drop_carve(plane: int, id: int) -> void:
-	_carving[plane].erase(id)
+	if _carving[plane].erase(id):
+		_index_carve(plane, id, false)
+
+
+func _index_carve(plane: int, id: int, add: bool) -> void:
+	var box := Rect2(segment_origin(id), Vector2.ZERO).expand(segment_end(id))
+	var low := Vector2i(floori(box.position.x / CARVE_BUCKET_METRES), floori(box.position.y / CARVE_BUCKET_METRES))
+	var high := Vector2i(floori(box.end.x / CARVE_BUCKET_METRES), floori(box.end.y / CARVE_BUCKET_METRES))
+	for y in range(low.y, high.y + 1):
+		for x in range(low.x, high.x + 1):
+			var key := Vector2i(x, y)
+			if add:
+				if not _carve_buckets[plane].has(key):
+					_carve_buckets[plane][key] = {}
+				_carve_buckets[plane][key][id] = true
+			elif _carve_buckets[plane].has(key):
+				var bucket: Dictionary = _carve_buckets[plane][key]
+				bucket.erase(id)
+				if bucket.is_empty():
+					_carve_buckets[plane].erase(key)
+
+
+## Conservative candidates; the caller keeps the original exact partial-capsule box test.
+func _carves_in_box(plane: int, box: Rect2) -> Dictionary:
+	var found := {}
+	var low := Vector2i(floori(box.position.x / CARVE_BUCKET_METRES), floori(box.position.y / CARVE_BUCKET_METRES))
+	var high := Vector2i(floori(box.end.x / CARVE_BUCKET_METRES), floori(box.end.y / CARVE_BUCKET_METRES))
+	for y in range(low.y, high.y + 1):
+		for x in range(low.x, high.x + 1):
+			var bucket: Dictionary = _carve_buckets[plane].get(Vector2i(x, y), {})
+			for id: int in bucket:
+				found[id] = true
+	return found
 
 
 ## Forget part-cut strokes that floor a cell being brought down, so a cave-in does not leave a stub
@@ -2599,7 +2636,7 @@ func _drop_carves_in(plane: int, cell: Vector2i) -> void:
 		var along := carved_along(plane, id)
 		if _probe_cell(plane, cell, segment_origin(id), _carve_end(id, along))[1] > -STANDING_CLEARANCE:
 			continue
-		_carving[plane].erase(id)
+		_drop_carve(plane, id)
 		_touch_span(plane, segment_origin(id), _carve_end(id, along))
 
 
@@ -2859,30 +2896,51 @@ func is_puppet() -> bool:
 ## of the world would reach a different answer from the server's for the same cell. There is one
 ## place that decides who knows what, and it is not this end.
 func adopt_segment(plane: int, origin: Vector2, angle: int, bits: int) -> bool:
-	if plane <= 0 or plane >= PLANE_COUNT:
-		return false
-	var id := segment_id(origin, angle)
-	var fresh := not _segments[plane].has(id)
-	if fresh:
-		_segments[plane][id] = true
-		# The prediction this client cut for itself has arrived as the real thing. Same reasoning as
-		# [method dig_segment]: the stroke covers everything its carve did, so the record goes and
-		# the picture does not change.
-		_drop_carve(plane, id)
-		_occupy(plane, id)
-		_rebuild_walls(plane)
-		_relight(plane)
-	for cell: Vector2i in _segment_cells(id):
-		if not _cells[plane].has(cell):
+	return adopt_segments([{"plane": plane, "origin": origin, "angle": angle, "bits": bits}]) > 0
+
+
+## Apply a consecutive run from one terrain packet before publishing geometry/signals.
+## This call is synchronous: collision and graph updates finish before the next packet entry or
+## gameplay callback. Live digging keeps its immediate collision ordering.
+func adopt_segments(entries: Array) -> int:
+	var changed := {}
+	var announcements: Array[Dictionary] = []
+	var fresh_count := 0
+	for entry: Dictionary in entries:
+		var plane := int(entry["plane"])
+		if plane <= 0 or plane >= PLANE_COUNT:
 			continue
-		if int(_tunnel_known[plane].get(cell, 0)) != bits:
-			_tunnel_known[plane][cell] = bits
-			tunnel_revealed.emit(plane, bits)
+		var id := segment_id(entry["origin"], int(entry["angle"]))
+		var bits := int(entry["bits"])
+		var fresh := not _segments[plane].has(id)
 		if fresh:
-			cell_opened.emit(plane, cell)
-	if fresh:
-		segment_opened.emit(plane, id)
-	return fresh
+			_segments[plane][id] = true
+			_drop_carve(plane, id)
+			_occupy(plane, id)
+			changed[plane] = true
+			fresh_count += 1
+		var cells: Array[Vector2i] = []
+		var revealed := 0
+		for cell: Vector2i in _segment_cells(id):
+			if not _cells[plane].has(cell):
+				continue
+			cells.append(cell)
+			if int(_tunnel_known[plane].get(cell, 0)) != bits:
+				_tunnel_known[plane][cell] = bits
+				revealed += 1
+		announcements.append({"plane": plane, "id": id, "bits": bits,
+			"fresh": fresh, "cells": cells, "revealed": revealed})
+	for plane: int in changed:
+		_rebuild_walls(plane)
+	for entry: Dictionary in announcements:
+		var plane := int(entry["plane"])
+		for count in range(int(entry["revealed"])):
+			tunnel_revealed.emit(plane, int(entry["bits"]))
+		if entry["fresh"]:
+			for cell: Vector2i in entry["cells"]:
+				cell_opened.emit(plane, cell)
+			segment_opened.emit(plane, int(entry["id"]))
+	return fresh_count
 
 
 func adopt_shaft(plane: int, cell: Vector2i, bits: int) -> bool:
@@ -3368,7 +3426,8 @@ func _rebuild_mask(plane: int) -> void:
 	_knowledge_age[plane] += 1
 	for key: int in _chunk_cache[plane]:
 		_committed_field[plane].erase(key)
-		_rebuild_chunk(plane, key, true)
+		_rebuild_chunk(plane, key, true, false)
+	_mask_textures[plane].update(_mask_images[plane])
 	_relight(plane)
 
 
@@ -3409,7 +3468,9 @@ func _remask_cells(plane: int, cells: Array) -> void:
 					continue
 				affected[cy * FIELD_CHUNKS + cx] = true
 	for key: int in affected:
-		_rebuild_chunk(plane, key, true)
+		_rebuild_chunk(plane, key, true, false)
+	if not affected.is_empty():
+		_mask_textures[plane].update(_mask_images[plane])
 
 
 ## What the viewing crew can currently make out of somebody else's network on this plane. Pushed
@@ -3474,8 +3535,6 @@ func show_glimpsed(team: int, plane: int, cells: Array) -> void:
 ## way out of a corridor you cannot read is to head for the light.
 func _rebuild_lamps(plane: int) -> void:
 	var root := _lamp_roots[plane]
-	for child in root.get_children():
-		child.free()
 	if plane <= 0:
 		return
 
@@ -3505,6 +3564,20 @@ func _rebuild_lamps(plane: int) -> void:
 			continue
 		lit.append(cell)
 
+	var shafts: Array[Vector2i] = []
+	for cell: Vector2i in _shafts[plane - 1]:
+		if _cells[plane].has(cell):
+			shafts.append(cell)
+	shafts.sort()
+	var layout: Array = [lit, shafts, lamp_color, lamp_energy, lamp_range, wall_height,
+		ray_color, ray_strength, ray_top_radius, ray_floor_radius, ray_light_energy]
+	if _lamp_layouts.get(plane) == layout:
+		return
+	_lamp_layouts[plane] = layout
+	for child in root.get_children():
+		child.free()
+
+	for cell: Vector2i in lit:
 		var lamp := OmniLight3D.new()
 		lamp.light_color = lamp_color
 		lamp.light_energy = lamp_energy
@@ -3757,87 +3830,96 @@ func _commit_lumps(surface: SurfaceTool, count: int, material: Material) -> Arra
 	return mesh
 
 
-## Rebuild everything derived from a plane's cell set: the wall mesh and the collision trimesh.
-##
-## Walls run the FULL plane spacing, from the floor up to the underside of the lid, so the
-## result is a trench cut through solid earth rather than a kerb standing on open ground. The
-## lid caps them, which is why there is no separate top face: the cap is real geometry one
-## layer up, and a lip drawn at the same height would only z-fight with it.
-##
-## Wonderfully dull now that every cell is flat. A neighbour is either dug or it isn't; there
-## is no half-height edge to work out, no orientation to read back, and no cross-plane opening
-## to remember. All of that existed to serve ramps.
-## Bring a plane's drawn and collided geometry back in step with its segments.
-##
-## `[REVISED]` TWO STEPS NOW, AND ONLY THE FIRST IS EXPENSIVE. Re-contouring is done per 4m chunk
-## and only for chunks a dig actually touched; assembling the plane's meshes is a concatenation of
-## cached triangle arrays, which is native and costs nothing worth measuring. The old version
-## walked every dug cell on every dig, which was affordable at a metre per cell and would not be
-## at 12.5cm -- a plane's field is a million texels, and marching all of them to learn that one
-## stroke moved is the version of this that drops a frame every time you dig.
-##
-## `[REVISED]` AND THE SECOND STEP IS NOW ACTUALLY NATIVE, which the paragraph above claimed before
-## it was true. The concatenation always was; handing the result to a SurfaceTool a vertex at a time
-## was not, and that loop ran over the WHOLE PLANE on every dig -- tens of thousands of GDScript
-## iterations to redraw a mesh that changed in one corner, growing with the map, and by a good
-## margin the most expensive thing a dig did. Normals are worked out per chunk while a chunk is
-## being contoured anyway (there are a few hundred triangles in one, against a plane's tens of
-## thousands) and cached with the triangles, which leaves nothing per-vertex to do out here at all.
-##
-## It did not matter much while a dig happened twice a second. Carving moved the same work to
-## sixteen times a second, which is how it came to light.
-##
-## THE WHOLE PLANE IS STILL ONE MESH, deliberately. The chunk is a unit of WORK, not a unit of
-## scene: one mesh instance per plane keeps the focus rules, the per-plane materials, the dimming
-## and the single collision body exactly as the rest of the file already expects them -- and keeps
-## a big network three draw calls rather than three hundred.
-## `collide` is whether to hand the result to the physics engine as well as to the renderer. See
-## [method _recollide] -- collision is per chunk now, so this no longer costs the whole map.
-##
-## `[REVISED]` A CARVE PAYS IT EVERY QUARTER METRE RATHER THAN NEVER. The old rule was that a
-## growing carve declined collision entirely and the earth you were cutting stayed solid to walk
-## into until the stroke landed -- justified on the grounds that the only mouse in a position to
-## walk into it was the one standing still cutting it. That stopped being true when carving became
-## digging rather than a preview of it: you are meant to press dig and walk forward, and a trench
-## you can see through and cannot enter is the same complaint as ground that will not open. See
-## [constant CARVE_COLLIDE_STEP].
+## Re-contour dirty chunks, then rebuild only the render regions containing those chunks.
+## Region children inherit their material root's depth and focus visibility. Collision remains
+## per chunk and keeps its existing shape resources; drawing does not change physics geometry.
+## A growing carve updates collision at CARVE_COLLIDE_STEP rather than on every visual step.
 func _rebuild_walls(plane: int, collide: bool = true) -> void:
+	var stage_start := Time.get_ticks_usec() if profile_rebuilds else 0
+	var repaint := not _dirty_chunks[plane].is_empty()
+	var regions := {}
 	for key: int in _dirty_chunks[plane]:
-		_rebuild_chunk(plane, key)
-		# Owed to the physics engine whether or not this call is the one that pays -- see
-		# [member _stale_collision].
-		_stale_collision[plane][key] = true
+		if _rebuild_chunk(plane, key, false, false):
+			regions[_render_region_key(key)] = true
+			# Preserve any older unpaid collision; a cache hit must not discard it.
+			_stale_collision[plane][key] = true
 	_dirty_chunks[plane].clear()
+	stage_start = _record_rebuild_stage("contour", stage_start)
+	# ImageTexture.update uploads the whole plane, even though _blit edits one chunk.
+	# Publish once after the batch so a nine-chunk dig does not upload nine full masks.
+	if repaint:
+		_mask_textures[plane].update(_mask_images[plane])
 
-	var floors := PackedVector3Array()
-	var walls := PackedVector3Array()
-	var stone := PackedVector3Array()
-	var bedrock := PackedVector3Array()
-	var floor_normals := PackedVector3Array()
-	var wall_normals := PackedVector3Array()
-	var stone_normals := PackedVector3Array()
-	var bedrock_normals := PackedVector3Array()
-	for key: int in _chunk_cache[plane]:
-		var chunk: Dictionary = _chunk_cache[plane][key]
-		floors.append_array(chunk["floors"])
-		walls.append_array(chunk["walls"])
-		stone.append_array(chunk["stone"])
-		bedrock.append_array(chunk["bedrock"])
-		floor_normals.append_array(chunk["floor_normals"])
-		wall_normals.append_array(chunk["wall_normals"])
-		stone_normals.append_array(chunk["stone_normals"])
-		bedrock_normals.append_array(chunk["bedrock_normals"])
+	stage_start = _record_rebuild_stage("mask", stage_start)
+	for region: int in regions:
+		_rebuild_render_region(plane, region)
 
-	_floors[plane].mesh = _commit(floors, floor_normals, _floor_materials[plane])
-	_walls[plane].mesh = _commit(walls, wall_normals, _wall_materials[plane])
-	_rock_faces[plane].mesh = _commit(stone, stone_normals, _rock_materials[plane])
-	_bedrock_faces[plane].mesh = _commit(bedrock, bedrock_normals, _bedrock_materials[plane])
-
+	stage_start = _record_rebuild_stage("meshes", stage_start)
 	if collide:
 		_recollide(plane)
-
+	stage_start = _record_rebuild_stage("collision", stage_start)
 	_relight(plane)
+	_record_rebuild_stage("lights", stage_start)
 
+
+func _render_region_key(chunk: int) -> int:
+	return (chunk / FIELD_CHUNKS / RENDER_REGION_CHUNKS) * RENDER_REGIONS_ACROSS \
+		+ (chunk % FIELD_CHUNKS) / RENDER_REGION_CHUNKS
+
+
+## Assemble a fixed spatial neighborhood, never scan all of a plane's cached chunks.
+func _rebuild_render_region(plane: int, region: int) -> void:
+	var vertices: Array[PackedVector3Array] = [PackedVector3Array(), PackedVector3Array(),
+		PackedVector3Array(), PackedVector3Array()]
+	var normals: Array[PackedVector3Array] = [PackedVector3Array(), PackedVector3Array(),
+		PackedVector3Array(), PackedVector3Array()]
+	var fields := ["floors", "walls", "stone", "bedrock"]
+	var normal_fields := ["floor_normals", "wall_normals", "stone_normals", "bedrock_normals"]
+	var x := (region % RENDER_REGIONS_ACROSS) * RENDER_REGION_CHUNKS
+	var y := (region / RENDER_REGIONS_ACROSS) * RENDER_REGION_CHUNKS
+	for cy in range(y, y + RENDER_REGION_CHUNKS):
+		for cx in range(x, x + RENDER_REGION_CHUNKS):
+			var key := cy * FIELD_CHUNKS + cx
+			if not _chunk_cache[plane].has(key):
+				continue
+			var chunk: Dictionary = _chunk_cache[plane][key]
+			for kind in range(4):
+				vertices[kind].append_array(chunk[fields[kind]])
+				normals[kind].append_array(chunk[normal_fields[kind]])
+
+	var roots := [_floors[plane], _walls[plane], _rock_faces[plane], _bedrock_faces[plane]]
+	var materials := [_floor_materials[plane], _wall_materials[plane],
+		_rock_materials[plane], _bedrock_materials[plane]]
+	var nodes: Array = _render_regions[plane].get(region, [null, null, null, null])
+	var occupied := false
+	for kind in range(4):
+		var instance: MeshInstance3D = nodes[kind]
+		if vertices[kind].is_empty():
+			if instance != null:
+				instance.mesh = null
+				instance.queue_free()
+				nodes[kind] = null
+			continue
+		occupied = true
+		if instance == null:
+			instance = MeshInstance3D.new()
+			instance.name = "Region%d" % region
+			instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			roots[kind].add_child(instance)
+			nodes[kind] = instance
+		instance.mesh = _commit(vertices[kind], normals[kind], materials[kind])
+	if occupied:
+		_render_regions[plane][region] = nodes
+	else:
+		_render_regions[plane].erase(region)
+
+
+func _record_rebuild_stage(stage: String, began: int) -> int:
+	if not profile_rebuilds:
+		return 0
+	var now := Time.get_ticks_usec()
+	rebuild_profile[stage] = int(rebuild_profile.get(stage, 0)) + now - began
+	return now
 
 ## Bring the physics engine back in step with the chunks that have moved, and only those.
 ##
@@ -3889,7 +3971,7 @@ func _new_chunk_shape(plane: int, key: int) -> CollisionShape3D:
 ## than an empty mesh because an empty ArrayMesh still costs a draw call and still asks the renderer
 ## questions.
 ##
-## ONE CALL RATHER THAN ONE PER VERTEX. `add_surface_from_arrays` hands the whole plane over as two
+## ONE CALL RATHER THAN ONE PER VERTEX. `add_surface_from_arrays` hands a region over as two
 ## packed arrays; the SurfaceTool this replaced took the same data a vertex at a time through
 ## GDScript, which is the same picture for a loop that grows with the map and runs on every dig.
 func _commit(
@@ -3953,7 +4035,9 @@ static func _face_normals(triangles: PackedVector3Array) -> PackedVector3Array:
 ## earth the size of a few texels that a player can neither use nor get rid of. Filtering the field
 ## between composing it and contouring it is the one place that can be done once and be true of the
 ## walls, the collision and the cutaway together.
-func _rebuild_chunk(plane: int, key: int, mask_only: bool = false) -> void:
+## Batch callers pass upload=false and publish the completed mask once after their loop.
+func _rebuild_chunk(plane: int, key: int, mask_only: bool = false, upload: bool = true) -> bool:
+	var stage_start := Time.get_ticks_usec() if profile_rebuilds else 0
 	var cx := key % FIELD_CHUNKS
 	var cy := key / FIELD_CHUNKS
 	var n := TunnelContour.CHUNK_TEXELS
@@ -4086,24 +4170,18 @@ func _rebuild_chunk(plane: int, key: int, mask_only: bool = false) -> void:
 		# the same question of the same strokes and gets the same answer.
 		book["knowledge"] = _knowledge_age[plane]
 
+	stage_start = _record_rebuild_stage("chunk_committed", stage_start)
 	# Ends the strokes have been cut to, so a carve unions in exactly like a finished stroke and the
 	# corridor has no idea which of the two it grew from.
 	var strokes: Array[Vector2] = []
 	var reaches: Array[Vector2] = []
 	var shown := PackedByteArray()
-	# CARVES ARE NOT IN THE CELL INDEX and are walked whole instead, rejected on their bounding box
-	# rather than gathered by square. Registering them would mean maintaining an index entry for a
-	# thing that grows every twelfth of a second, and un-registering it on the commit that turns it
-	# into a real stroke -- against which a box test on a list that only grows when somebody walks
-	# away from a half-dug alcove is nothing.
-	#
-	# AND THEY ARE SHOWN BY CREW RATHER THAN BY CELL, which is the one place a carve is not simply a
-	# short stroke. See [method carve].
+	# Gather only nearby partial strokes. Ownership still determines carve visibility.
 	# Grown by the furthest either sampling pass below reaches from a stroke's spine, so a carve
 	# rejected here could not have written a texel of this window even at the widest of them.
 	var box := Rect2(origin, Vector2(extent, extent))
 	var carve_reach := SEG_HALF_WIDTH + maxf(TunnelContour.SDF_RANGE, _thin_reach())
-	for id: int in _carving[plane]:
+	for id: int in _carves_in_box(plane, box.grow(carve_reach)):
 		var carve: Dictionary = _carving[plane][id]
 		var from := segment_origin(id)
 		var to := _carve_end(id, carve["along"] as float)
@@ -4122,6 +4200,24 @@ func _rebuild_chunk(plane: int, key: int, mask_only: bool = false) -> void:
 		)
 		shape = cut[0]
 		seen = cut[1]
+	stage_start = _record_rebuild_stage("chunk_carves", stage_start)
+	var parameters: Array = [wide, earth_min_thickness, island_max_span, island_max_area,
+		_wall_top(plane), _barrier_top(plane), _rock_revision[plane], hidden]
+	var previous: Dictionary = _chunk_inputs[plane].get(key, {})
+	if (not previous.is_empty() and _chunk_cache[plane].has(key) and previous["parameters"] == parameters
+		and previous["shape"] == shape and previous["seen"] == seen):
+		# A full mask rebuild clears the image first, so even a hit must restore its texels.
+		_blit(plane, previous["mask"], span, base_x, base_y, n)
+		if upload:
+			_mask_textures[plane].update(_mask_images[plane])
+		_record_rebuild_stage("chunk_reuse", stage_start)
+		return false
+	# Only a physical rebuild may replace this record: a fog-only pass leaves geometry intact.
+	var inputs := {}
+	if not mask_only:
+		inputs = {"parameters": parameters, "shape": shape.duplicate(), "seen": seen.duplicate()}
+	stage_start = _record_rebuild_stage("chunk_cache", stage_start)
+
 	# THE STONE IS TAKEN OUT OF THE FIELD LAST, AFTER EVERY STROKE AND BEFORE EVERY RULE, and both
 	# halves of that placement are load-bearing.
 	#
@@ -4155,12 +4251,15 @@ func _rebuild_chunk(plane: int, key: int, mask_only: bool = false) -> void:
 		# cheaper than carrying a flag to suppress it and impossible to get out of step.
 		_subtract_rock(plane, seen, wide, origin, stone_mask)
 
+	stage_start = _record_rebuild_stage("chunk_rock", stage_start)
 	# THINNED BEFORE THE ISLANDS ARE WALKED, and the order is not arbitrary. Shaving the teeth off a
 	# lump changes how big it measures, and shaving a neck through can part one lump into two -- so
 	# the island rule has to be looking at the earth that will actually be drawn, not at the earth
 	# before this ran.
 	_thin_earth(shape, stone_mask, wide)
+	stage_start = _record_rebuild_stage("chunk_thin", stage_start)
 	var islands := _cull_islands(plane, shape, stone_mask, wide, origin, pad, n)
+	stage_start = _record_rebuild_stage("chunk_islands", stage_start)
 	# The cutaway gets its own pass rather than the shape's answer: the crew's field is built out of
 	# fewer strokes, so its earth is a different shape, thin in different places and pinched off in
 	# different places. Sharing the verdict would cut a hole in the lid over ground that, as far as
@@ -4171,11 +4270,14 @@ func _rebuild_chunk(plane: int, key: int, mask_only: bool = false) -> void:
 	else:
 		seen = shape
 
+	stage_start = _record_rebuild_stage("chunk_visibility", stage_start)
 	# Sight changes the lid, never the physical earth. Reuse the field rules but do not
 	# regenerate triangles, upload meshes, or invalidate physics shapes for a fog update.
 	if mask_only:
 		_blit(plane, _inner(seen, wide, pad, span), span, base_x, base_y, n)
-		return
+		if upload:
+			_mask_textures[plane].update(_mask_images[plane])
+		return false
 
 	var contour := TunnelContour.new()
 	var chunk_origin := Vector2(
@@ -4197,6 +4299,7 @@ func _rebuild_chunk(plane: int, key: int, mask_only: bool = false) -> void:
 		_inner(shape, wide, pad - 1, span + 2) if pad >= 1 else PackedFloat32Array()
 	)
 
+	stage_start = _record_rebuild_stage("chunk_triangles", stage_start)
 	var walls := PackedVector3Array()
 	var stone := PackedVector3Array()
 	var bedrock := PackedVector3Array()
@@ -4230,7 +4333,15 @@ func _rebuild_chunk(plane: int, key: int, mask_only: bool = false) -> void:
 		"stone_normals": _face_normals(stone),
 		"bedrock_normals": _face_normals(bedrock),
 	}
+	inputs["mask"] = _inner(seen, wide, pad, span)
+	_chunk_inputs[plane][key] = inputs
+	stage_start = _record_rebuild_stage("chunk_normals", stage_start)
 	_blit(plane, _inner(seen, wide, pad, span), span, base_x, base_y, n)
+	if upload:
+		_mask_textures[plane].update(_mask_images[plane])
+
+	_record_rebuild_stage("chunk_blit", stage_start)
+	return true
 
 
 ## Union a set of strokes into the two fields, and hand them back.
@@ -5017,7 +5128,6 @@ func _blit(
 				continue
 			var v := values[j * span + i]
 			image.set_pixel(x, y, Color(v, 0.0, 0.0, 1.0))
-	_mask_textures[plane].update(image)
 
 
 ## Rebuild a plane's lamps and beams, if it is the one being looked at. Off-focus planes are

@@ -632,6 +632,11 @@ func _seen_within(of: Vector3, reach: float, fresh: bool, reachable: bool = fals
 	var best: Dictionary = {}
 	var closest := reach
 	var book := _spotting.contacts_for(team)
+	# Spotting may already have removed an expired/freed contact before this bot thinks.
+	# Walking only its book would never visit those keys in our own history again.
+	for key: Variant in _cleared.keys():
+		if not is_instance_valid(key) or not book.has(key):
+			_cleared.erase(key)
 	for key: Variant in book.keys():
 		# VALIDITY BEFORE THE CAST, for the reason spotting.gd's `_forget` spells out at length:
 		# `key as Mouse` performs the cast on assignment and throws outright on a freed object, and

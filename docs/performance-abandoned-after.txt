@@ -1,0 +1,4 @@
+ABANDONED distant=0 mean=0.727 p99=0.810 ms stages={ "chunk_committed": 4142, "chunk_carves": 28089, "chunk_reuse": 13989, "contour": 46415, "mask": 28, "meshes": 11, "collision": 11, "lights": 18 }
+ABANDONED distant=128 mean=0.755 p99=0.799 ms stages={ "chunk_committed": 4131, "chunk_carves": 29108, "chunk_reuse": 14787, "contour": 48204, "mask": 27, "meshes": 12, "collision": 11, "lights": 14 }
+ABANDONED distant=512 mean=0.759 p99=0.818 ms stages={ "chunk_committed": 4253, "chunk_carves": 29324, "chunk_reuse": 14684, "contour": 48470, "mask": 20, "meshes": 19, "collision": 11, "lights": 21 }
+ABANDONED distant=1024 mean=0.744 p99=0.807 ms stages={ "chunk_committed": 4170, "chunk_carves": 28741, "chunk_reuse": 14424, "contour": 47523, "mask": 23, "meshes": 14, "collision": 9, "lights": 23 }

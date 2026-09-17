@@ -1,0 +1,19 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+Metal 4.0 - Forward+ - Using Device #0: Apple - Apple M5 Pro (Apple9)
+GROW cycle=0 strokes=40 segments=40 operation_mean=3.31/p95=5.97/p99=8.54/max=8.80ms frame_mean=7.72/p95=8.76/p99=9.80/max=13.16ms nodes=2144 resources=125 static_mb=132.5 lights=7
+GROW cycle=0 strokes=80 segments=80 operation_mean=4.95/p95=8.22/p99=11.03/max=11.35ms frame_mean=7.03/p95=9.12/p99=11.83/max=12.44ms nodes=2155 resources=125 static_mb=134.2 lights=10
+GROW cycle=0 strokes=120 segments=120 operation_mean=4.63/p95=8.60/p99=11.15/max=11.90ms frame_mean=6.90/p95=9.41/p99=12.06/max=12.89ms nodes=2159 resources=125 static_mb=135.8 lights=14
+GROW cycle=0 strokes=160 segments=159 operation_mean=6.34/p95=10.39/p99=13.85/max=16.49ms frame_mean=7.61/p95=11.20/p99=14.72/max=17.44ms nodes=2172 resources=125 static_mb=137.3 lights=19
+GROW cycle=0 strokes=200 segments=198 operation_mean=6.81/p95=11.52/p99=13.72/max=16.80ms frame_mean=7.93/p95=12.33/p99=14.76/max=17.66ms nodes=2178 resources=125 static_mb=139.0 lights=21
+GROW cycle=0 strokes=240 segments=238 operation_mean=6.82/p95=14.02/p99=18.09/max=18.71ms frame_mean=8.02/p95=14.85/p99=19.04/max=19.61ms nodes=2189 resources=125 static_mb=140.3 lights=28
+RELIGHT unchanged_layout_replacements=0
+CLEAN cycle=0 nodes=6 orphans=0 resources=110 static_mb=83.1
+GROW cycle=1 strokes=40 segments=40 operation_mean=3.19/p95=5.38/p99=8.15/max=8.70ms frame_mean=6.90/p95=7.27/p99=9.05/max=9.65ms nodes=2144 resources=125 static_mb=132.5 lights=7
+GROW cycle=1 strokes=80 segments=80 operation_mean=4.89/p95=8.30/p99=11.28/max=11.75ms frame_mean=7.03/p95=9.20/p99=12.31/max=12.75ms nodes=2155 resources=125 static_mb=134.2 lights=10
+GROW cycle=1 strokes=120 segments=120 operation_mean=4.80/p95=8.70/p99=11.63/max=12.10ms frame_mean=6.97/p95=9.66/p99=12.47/max=13.17ms nodes=2159 resources=125 static_mb=135.8 lights=14
+GROW cycle=1 strokes=160 segments=159 operation_mean=6.44/p95=10.97/p99=14.54/max=15.36ms frame_mean=7.85/p95=12.04/p99=15.51/max=16.46ms nodes=2172 resources=125 static_mb=137.3 lights=19
+GROW cycle=1 strokes=200 segments=198 operation_mean=6.25/p95=10.88/p99=13.55/max=16.82ms frame_mean=7.70/p95=11.97/p99=14.64/max=18.00ms nodes=2178 resources=125 static_mb=139.0 lights=21
+GROW cycle=1 strokes=240 segments=238 operation_mean=6.90/p95=14.25/p99=18.32/max=18.84ms frame_mean=8.12/p95=15.11/p99=19.25/max=19.76ms nodes=2189 resources=125 static_mb=140.3 lights=28
+RELIGHT unchanged_layout_replacements=0
+CLEAN cycle=1 nodes=6 orphans=0 resources=110 static_mb=83.1
+LONG SESSION failures=0 renderer=macOS
